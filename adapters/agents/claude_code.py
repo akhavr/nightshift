@@ -1,9 +1,12 @@
-"""Claude Code adapter — PTY-based, pure Python."""
+"""Claude Code adapter.
+
+OQ-1 RESOLVED: -p mode is fire-and-forget (exits after responding).
+stdin follow-up does NOT work. Multi-turn Q&A uses --resume <session_id>
+to restart with full conversation context preserved.
+"""
 
 import json
 import logging
-import os
-import pty
 import select
 import subprocess
 import time
@@ -29,23 +32,26 @@ class ClaudeCodeAgent:
         self.stall_timeout_s = stall_timeout_s
         self.extra_args = extra_args or []
         self._pid: int | None = None
-        self._master_fd: int | None = None
         self._process: subprocess.Popen | None = None
         self._last_event: float = 0
+        self._session_id: str | None = None
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
-        master_fd, slave_fd = pty.openpty()
-        self._master_fd = master_fd
+        cmd = [
+            self.command, "--dangerously-skip-permissions",
+            "--verbose", "--output-format", "stream-json",
+            "--max-turns", str(max_turns),
+        ]
+        # Resume previous session to preserve conversation context (OQ-1)
+        if self._session_id:
+            cmd += ["--resume", self._session_id]
+        cmd += [*self.extra_args, "-p", prompt]
+
         self._process = subprocess.Popen(
-            [self.command, "--dangerously-skip-permissions",
-             "--output-format", "stream-json",
-             "--max-turns", str(max_turns),
-             *self.extra_args, "-p", prompt],
-            stdin=slave_fd, stdout=subprocess.PIPE,
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True,
             cwd=str(workspace), bufsize=1,
         )
-        os.close(slave_fd)
         self._pid = self._process.pid
         self._last_event = time.monotonic()
 
@@ -77,9 +83,12 @@ class ClaudeCodeAgent:
                     return
 
     def send_input(self, text: str) -> None:
-        if self._master_fd is None:
-            raise RuntimeError("No live process")
-        os.write(self._master_fd, (text + "\n").encode())
+        # OQ-1: -p mode does not read stdin. Callers should terminate()
+        # then start() again — --resume preserves conversation context.
+        raise RuntimeError(
+            "send_input() not supported in -p mode. "
+            "Use terminate() + start() with the answer as prompt."
+        )
 
     def is_alive(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -89,11 +98,8 @@ class ClaudeCodeAgent:
             self._process.terminate()
             try: self._process.wait(timeout=10)
             except Exception: self._process.kill(); self._process.wait()
-        if self._master_fd is not None:
-            try: os.close(self._master_fd)
-            except OSError: pass
-            self._master_fd = None
         self._process = None; self._pid = None
+        # Note: _session_id is preserved so next start() can --resume
 
     @property
     def pid(self) -> int | None:
@@ -104,15 +110,36 @@ class ClaudeCodeAgent:
         try: ev = json.loads(raw)
         except json.JSONDecodeError: return None
         t = ev.get("type", "")
+        # Extract session_id from init event (OQ-1: needed for --resume)
+        if t == "system" and ev.get("subtype") == "init":
+            sid = ev.get("session_id")
+            if sid:
+                self._session_id = sid
+                log.info(f"Session ID: {sid}")
+            return AgentEvent(type=AgentEventType.SYSTEM,
+                              content=ev.get("message", "init"), raw=raw)
         # OQ-2: These field names are assumed. Verify against real output.
         if t == "assistant":
-            return AgentEvent(type=AgentEventType.TEXT, content=ev.get("content",""), raw=raw)
+            # stream-json nests content in message.content array
+            msg = ev.get("message", {})
+            content_parts = msg.get("content", []) if isinstance(msg, dict) else []
+            text = ""
+            for part in content_parts:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text += part.get("text", "")
+            if not text:
+                text = ev.get("content", "")
+            return AgentEvent(type=AgentEventType.TEXT, content=text, raw=raw)
         elif t == "tool_use":
             return AgentEvent(type=AgentEventType.TOOL_CALL,
                               content=f"{ev.get('tool','?')}: {str(ev.get('input',''))[:300]}", raw=raw)
         elif t == "tool_result":
             return AgentEvent(type=AgentEventType.TOOL_RESULT,
                               content=str(ev.get("content",""))[:200], raw=raw)
+        elif t == "result":
+            return AgentEvent(type=AgentEventType.SYSTEM,
+                              content=ev.get("result", ""), raw=raw)
         elif t == "system":
-            return AgentEvent(type=AgentEventType.SYSTEM, content=ev.get("message",""), raw=raw)
+            return AgentEvent(type=AgentEventType.SYSTEM,
+                              content=ev.get("message", ""), raw=raw)
         return AgentEvent(type=AgentEventType.UNKNOWN, raw=raw)

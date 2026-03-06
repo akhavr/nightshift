@@ -179,6 +179,13 @@ class SessionRunner:
                     self.state_mgr.update_status("cancelled:external")
                     break
 
+        # OQ-1: In -p mode, the agent exits after responding. If a question
+        # was asked but @@WAITING@@ was never seen (or process exited before
+        # the OQ-4 timer), handle pending questions now.
+        if self._pending_questions:
+            log.info("Agent exited with pending question(s). Collecting answer...")
+            self._on_waiting()
+
     def _handle_text(self, text: str) -> str | None:
         for line in text.splitlines():
             marker = parse_marker(line)
@@ -241,16 +248,18 @@ class SessionRunner:
         self.tracker.remove_label(self.issue.id, "needs-human-input")
         self.tracker.add_comment(self.issue.id, f"💬 Answer: {answer[:200]}")
 
-        # Check agent is still alive before piping to stdin.
-        # If it died while we were waiting, the answer is saved in state
-        # and will be available via resume prompt on next run.
+        # OQ-1: In -p mode, the agent exits after responding. It will not
+        # be alive by the time we collect the answer. The answer is saved
+        # in state; _post_run() will restart with --resume and the answer
+        # as the new prompt.
         if not self.agent.is_alive():
-            log.warning("Agent died while waiting for answer. Answer saved in state.")
+            log.info("Agent exited (expected in -p mode). Will restart with answer.")
+            self.state_mgr.update_status("suspended:answer-ready")
             return
 
         self.agent.send_input(answer)
         self.state_mgr.update_status("working")
-        log.info("Answer sent to agent stdin. Same thread continues.")
+        log.info("Answer sent to agent stdin.")
 
     def _on_done(self):
         """Mark as done. Review/merge happens in _post_run after agent exits."""
@@ -359,6 +368,16 @@ class SessionRunner:
         Called after agent is terminated — safe to do blocking I/O.
         """
         st = self.state_mgr.load_state()
+
+        # OQ-1: Agent exited in -p mode, answer was collected. Restart
+        # with the answer as the prompt. The agent uses --resume to
+        # preserve the full conversation context.
+        if st.status == "suspended:answer-ready":
+            answer = st.human_answers[-1].answer if st.human_answers else ""
+            self.state_mgr.update_status("working")
+            self.state_mgr.append_conversation("human_answer_sent", answer)
+            log.info("Restarting agent with answer via --resume")
+            return answer
 
         if st.status == "done:pending-review":
             # Agent completed. Now handle review gate (agent is terminated,

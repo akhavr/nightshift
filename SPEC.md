@@ -8,28 +8,23 @@ questions first, then design decisions, then gaps.
 
 ### Coder Prerequisites — Verify Before Writing Code
 
-**OQ-1: CODER PREREQUISITE — Does Claude Code read stdin in `-p` mode?**
+**OQ-1: RESOLVED — `-p` mode is fire-and-forget. Use `--resume` for multi-turn.**
 
-The PTY continuation model assumes Claude Code will block on stdin after
-outputting `@@WAITING@@`, then read our piped answer and continue. If `-p`
-mode is fire-and-forget (ignores stdin), the entire live-continuation design
-collapses to kill-and-restart.
+Tested with Claude Code 2.1.70 (2026-03-06). Results:
 
-Test:
-```bash
-# Terminal 1: does Claude sit and wait?
-mkfifo /tmp/ccpipe
-claude --dangerously-skip-permissions -p "Say hi, then read my next message" < /tmp/ccpipe
+- `-p` mode exits (code 0) after responding. Does NOT read stdin.
+- `--input-format stream-json` does not enable multi-turn with `-p`.
+- `--continue -p "follow-up"` and `--resume <session_id> -p "follow-up"`
+  WORK: full conversation context is preserved across invocations.
+- `--output-format stream-json` requires `--verbose` with `-p`.
+- The stream-json `init` event contains `session_id` for `--resume`.
 
-# Terminal 2: does this arrive?
-echo "this is my follow-up" > /tmp/ccpipe
-```
+Implementation: `ClaudeCodeAgent` extracts `session_id` from the init event.
+Subsequent `start()` calls use `--resume <session_id>`. For Q&A:
+`SessionRunner` collects the answer after the agent exits, then restarts
+with the answer as the prompt. No PTY or stdin piping needed.
 
-If it doesn't work, fallback: drop `-p` entirely and feed the initial
-prompt via stdin too (fully interactive mode). Or revert to kill-and-restart
-with serialized resume prompts for questions.
-
-**Do this first. 30 min. Determines core architecture.**
+See `tests/oq1_results.txt` and `tests/oq1_stdin_test.py` for test details.
 
 ---
 

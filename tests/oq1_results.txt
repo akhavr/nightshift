@@ -1,0 +1,34 @@
+OQ-1: Claude Code stdin behavior — RESOLVED
+============================================
+Claude version: 2.1.70 (Claude Code)
+Date: 2026-03-06
+
+FINDINGS:
+
+1. `-p` mode is fire-and-forget: exits after responding (code 0).
+   stdin follow-up does NOT work.
+
+2. `--input-format stream-json` did not achieve multi-turn either.
+   `-p -` treated `-` as a literal prompt string.
+
+3. `--continue -p "follow-up"` WORKS: preserves full conversation
+   context across separate invocations. Also works with --resume <session_id>.
+
+4. `--output-format stream-json` requires `--verbose` flag with `-p`.
+
+5. stream-json init event contains session_id for use with --resume.
+
+VERIFIED:
+  $ claude -p "Remember: the secret word is BANANA. Say HELLO."
+  → HELLO
+  $ claude --continue -p "What was the secret word?"
+  → BANANA
+
+IMPLEMENTATION:
+  - ClaudeCodeAgent uses --verbose --output-format stream-json -p
+  - Session ID extracted from stream-json init event
+  - Subsequent start() calls use --resume <session_id> for context
+  - send_input() is not supported; Q&A uses terminate + restart
+  - SessionRunner._on_waiting() collects answer, sets status to
+    "suspended:answer-ready", and _post_run() restarts the agent
+    with the answer as the prompt
