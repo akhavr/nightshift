@@ -96,6 +96,52 @@ CAUTION: macOS Claude Code may delete `.credentials.json` (known bug
 anthropics/claude-code#1414). If sharing `~/.claude` between macOS host
 and Linux container, copy `.credentials.json` to a separate location.
 
+### Telegram Setup
+
+Telegram is the primary Q&A channel. Two independent components use it:
+
+1. **Container notifier** (`adapters/notifiers/telegram.py`) — runs inside the
+   container, sends notifications and questions, polls for replies via a
+   background thread. Active while the agent is running.
+2. **Host watcher** (`host/watcher.py`) — runs on the host, forwards questions
+   from paused containers to Telegram, writes answers back to `answer.txt`.
+   Active while containers are paused (zero CPU).
+
+Both are optional. Without Telegram, answers come only via CLI
+(`agent-worker answer <id> "text"`).
+
+**Setup steps:**
+
+1. Create a Telegram bot via [@BotFather](https://t.me/BotFather).
+   Save the token (e.g. `123456:ABC-DEF...`).
+2. Get your chat ID: send any message to the bot, then visit
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` — the `chat.id` field
+   in the response is your chat ID.
+3. Set environment variables on the host:
+   ```bash
+   export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
+   export TELEGRAM_CHAT_ID="987654321"
+   ```
+4. Add to `WORKFLOW.md` notifications:
+   ```yaml
+   notifications:
+     - kind: telegram
+       token: $TELEGRAM_BOT_TOKEN
+       chat_id: $TELEGRAM_CHAT_ID
+   ```
+5. Pass the env vars to the container (done automatically by `host/launch.py`).
+6. Start the host watcher in a separate terminal:
+   ```bash
+   python host/watcher.py --sessions-dir .agent-worker/sessions
+   ```
+
+**How it works at runtime:**
+- Agent hits `@@QUESTION@@` → container notifier sends question to Telegram
+  with `force_reply` → agent exits (-p mode) → container writes
+  `waiting.json` → host watcher pauses container (zero CPU) → user replies
+  in Telegram → host watcher writes `answer.txt` + unpauses → container
+  reads answer → agent restarts with `--resume` and the answer as prompt.
+
 ### Host Watcher Decoupling
 
 `host/watcher.py` has zero tracker imports. It communicates with containers
@@ -178,8 +224,7 @@ adapters/
   │   └── codex.py                 ← (future) OpenAI Codex adapter
   ├── trackers/
   │   ├── git_bug.py               ← git-bug adapter
-  │   ├── github_issues.py         ← (future) GitHub Issues adapter
-  │   └── linear.py                ← (future) Linear adapter
+  │   └── github_issues.py         ← (future) GitHub Issues adapter
   ├── notifiers/
   │   ├── telegram.py              ← Telegram with force_reply round-trip
   │   ├── slack.py                 ← (future) Slack adapter
@@ -276,10 +321,9 @@ agent:
   extra_args: []
 
 tracker:
-  kind: git-bug                # or: github, linear
+  kind: git-bug                # or: github
   # kind-specific options
   # github: {repo: "owner/repo", token: "$GITHUB_TOKEN"}
-  # linear: {project_slug: "my-project", api_key: "$LINEAR_API_KEY"}
 
 workspace:
   kind: worktree
@@ -347,7 +391,7 @@ agent:
   # Additional keys passed as kwargs to the adapter constructor
 
 tracker:
-  kind: string           # required: "git-bug", "github", "linear"
+  kind: string           # required: "git-bug", "github"
   # Additional keys are kind-specific, passed to adapter constructor
   # Values starting with $ are resolved from environment variables
 
@@ -1634,7 +1678,6 @@ AGENT_REGISTRY: dict[str, tuple[str, str]] = {
 TRACKER_REGISTRY: dict[str, tuple[str, str]] = {
     "git-bug": ("adapters.trackers.git_bug", "GitBugTracker"),
     "github": ("adapters.trackers.github_issues", "GitHubIssuesTracker"),
-    "linear": ("adapters.trackers.linear", "LinearTracker"),
 }
 
 WORKSPACE_REGISTRY: dict[str, tuple[str, str]] = {
@@ -2249,7 +2292,7 @@ interacts via:
 
 The watcher never calls `git-bug`, `git`, or any tracker CLI. The container
 handles all tracker interaction. This means:
-- Same watcher works with git-bug, GitHub Issues, Linear, or any future tracker.
+- Same watcher works with git-bug, GitHub Issues, or any future tracker.
 - The watcher has zero knowledge of what's inside the container.
 
 ```python
@@ -2704,7 +2747,7 @@ def main():
     notify_env = []
     for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
                 "NOTIFY_WEBHOOK_URL", "SLACK_WEBHOOK",
-                "ANTHROPIC_API_KEY", "LINEAR_API_KEY", "GITHUB_TOKEN"):
+                "ANTHROPIC_API_KEY", "GITHUB_TOKEN"):
         val = os.environ.get(var, "")
         if val:
             notify_env += ["-e", f"{var}={val}"]
@@ -3032,7 +3075,7 @@ Continue. Same marker rules apply."""
 | Component | Provided | Planned |
 |---|---|---|
 | **Agent** | Claude Code (-p mode, stream-json, --resume) | Codex (JSON-RPC), Aider, custom |
-| **Tracker** | git-bug (CLI) | GitHub Issues, Linear, Jira, plain files |
+| **Tracker** | git-bug (CLI) | GitHub Issues, Jira |
 | **Notifier** | Telegram (force_reply), Webhook | Slack, Discord, ntfy.sh, email |
 | **Workspace** | Git worktree | Docker volume, SSH |
 

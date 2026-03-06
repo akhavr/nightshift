@@ -195,7 +195,6 @@ AGENT_REGISTRY: dict[str, tuple[str, str]] = {
 TRACKER_REGISTRY: dict[str, tuple[str, str]] = {
     "git-bug": ("adapters.trackers.git_bug", "GitBugTracker"),
     "github": ("adapters.trackers.github_issues", "GitHubIssuesTracker"),
-    "linear": ("adapters.trackers.linear", "LinearTracker"),
 }
 
 WORKSPACE_REGISTRY: dict[str, tuple[str, str]] = {
