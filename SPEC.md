@@ -1,37 +1,26 @@
 # Autonomous Coding Agent Worker — Implementation Spec
 
-## Open Questions (Resolve Before or During Phase 1)
+## Design Decisions
 
-These are unresolved design and technical questions. Each must be answered
-before the affected code is written. They are ordered by severity — blocking
-questions first, then design decisions, then gaps.
+### Claude Code CLI Integration
 
-### Coder Prerequisites — Verify Before Writing Code
+Claude Code's `-p` (print) mode is **fire-and-forget**: it exits (code 0)
+after responding and does not read stdin. Multi-turn conversation uses
+`--resume <session_id>` to restart with full context preserved.
 
-**OQ-1: RESOLVED — `-p` mode is fire-and-forget. Use `--resume` for multi-turn.**
-
-Tested with Claude Code 2.1.70 (2026-03-06). Results:
-
-- `-p` mode exits (code 0) after responding. Does NOT read stdin.
-- `--input-format stream-json` does not enable multi-turn with `-p`.
-- `--continue -p "follow-up"` and `--resume <session_id> -p "follow-up"`
-  WORK: full conversation context is preserved across invocations.
-- `--output-format stream-json` requires `--verbose` with `-p`.
+- `--output-format stream-json` requires `--verbose` when used with `-p`.
 - The stream-json `init` event contains `session_id` for `--resume`.
+- `ClaudeCodeAgent` extracts `session_id` from the init event. Subsequent
+  `start()` calls use `--resume <session_id>`.
+- For Q&A: `SessionRunner` collects the answer after the agent exits, then
+  restarts with the answer as the prompt. No PTY or stdin piping needed.
 
-Implementation: `ClaudeCodeAgent` extracts `session_id` from the init event.
-Subsequent `start()` calls use `--resume <session_id>`. For Q&A:
-`SessionRunner` collects the answer after the agent exits, then restarts
-with the answer as the prompt. No PTY or stdin piping needed.
+Verified with Claude Code 2.1.70. See `tests/oq1_results.txt`.
 
-See `tests/oq1_results.txt` and `tests/oq1_stdin_test.py` for test details.
+### Stream-JSON Schema
 
----
-
-**OQ-2: RESOLVED — stream-json schema verified against Claude Code 2.1.70.**
-
-Captured with `claude --dangerously-skip-permissions --verbose --output-format stream-json -p`.
-One JSON object per line. Event types:
+One JSON object per line. Captured from `claude --dangerously-skip-permissions
+--verbose --output-format stream-json -p`:
 
 | `type` | Structure | Maps to |
 |--------|-----------|---------|
@@ -41,22 +30,21 @@ One JSON object per line. Event types:
 | `result` | `{subtype: "success"/"error", result: str, session_id}` | `SYSTEM` |
 | `rate_limit_event` | `{rate_limit_info: ...}` | ignored |
 
-Key differences from original assumptions:
-- `assistant` events carry a `message.content` array with mixed types (text + tool_use + thinking in one event)
-- There is no separate `tool_use` or `tool_result` top-level type — tool calls are inside `assistant`, results inside `user`
-- `thinking` blocks appear in the content array (ignored by parser)
-- `--verbose` flag is required for stream-json output with `-p`
+Key schema details:
+- `assistant` events carry a `message.content` array with mixed types
+  (text + tool_use + thinking in one event).
+- There is no separate `tool_use` or `tool_result` top-level type — tool
+  calls are inside `assistant`, results inside `user`.
+- `thinking` blocks appear in the content array (ignored by parser).
 
 Fixture: `tests/fixtures_stream_json.jsonl`. Tests: `tests/test_stream_parser.py`.
 
----
+### Marker Reliability
 
-**OQ-3: RESOLVED — Marker reliability verified with tests.**
-
-All mitigations verified against code and covered by `tests/test_marker_reliability.py`:
+All mitigations covered by `tests/test_marker_reliability.py`:
 
 - **Agent exit without `@@DONE@@`:** `_post_run()` treats status `working` as
-  max-turns → auto-resume. Never auto-merges without explicit `@@DONE@@`,
+  max-turns and auto-resumes. Never auto-merges without explicit `@@DONE@@`,
   even when `auto-merge` label is present.
 - **`@@DONE@@` goes through review gate:** Sets `done:pending-review`, then
   `_request_review()` blocks until human approves (unless `auto-merge`).
@@ -64,21 +52,22 @@ All mitigations verified against code and covered by `tests/test_marker_reliabil
   messages) are scanned. `TOOL_RESULT`, `TOOL_CALL`, and `SYSTEM` events
   containing marker strings are not processed.
 - **Question without `@@WAITING@@`:** Post-event-loop handler catches pending
-  questions when agent exits before `@@WAITING@@` arrives.
-- **Checkpoint frequency:** Remaining empirical risk. Git diff stat always
-  captures actual changes regardless of checkpoint frequency.
+  questions when agent exits before `@@WAITING@@` arrives. Additionally,
+  `QUESTION_WAIT_TIMEOUT_S = 30` auto-triggers `_on_waiting()` if
+  `@@WAITING@@` never arrives during the event loop.
 
----
+### Question Handling
 
-**OQ-4: RESOLVED — Two-step with 30s timeout fallback.**
+`_pending_questions` is a `list[str]`. Each `@@QUESTION@@` appends, each
+`@@WAITING@@` pops the oldest. This queues multiple questions correctly.
 
-`@@QUESTION@@` + `@@WAITING@@` kept as protocol. `QUESTION_WAIT_TIMEOUT_S = 30`
-in event loop auto-triggers `_on_waiting()` if `@@WAITING@@` never arrives.
-See `_event_loop()` in `core/session.py`.
+### Review Gate
 
----
+`_on_done()` posts proof-of-work and adds `needs-review` label. Merge only
+happens after human adds `reviewed` label. Auto-merge is opt-in via
+`auto-merge` label on the issue.
 
-**OQ-5: RESOLVED — Auth paths verified.**
+### Authentication (Docker)
 
 Claude Code on Linux (including Docker containers):
 ```
@@ -89,145 +78,68 @@ Claude Code on Linux (including Docker containers):
 ~/.claude.json             # MCP server config (optional)
 ```
 
-Docker mounts needed:
+Docker mounts:
 ```
 -v "$HOME/.claude:/root/.claude:ro"         # credentials + settings
 -v "$HOME/.claude.json:/root/.claude.json:ro"  # MCP config (optional)
 ```
 
-No `~/.config/claude-code` path exists — removed from `launch.py`.
 macOS uses Keychain, but Linux containers always use `.credentials.json`.
 Alternative: set `ANTHROPIC_API_KEY` env var instead of mounting.
 
 CAUTION: macOS Claude Code may delete `.credentials.json` (known bug
 anthropics/claude-code#1414). If sharing `~/.claude` between macOS host
-and Linux container via volume mount, copy `.credentials.json` to a
-separate location and mount that instead.
+and Linux container, copy `.credentials.json` to a separate location.
 
----
-
-### Design Decisions — Resolved
-
-**OQ-6: RESOLVED — Review gate by default.**
-
-`_on_done()` posts proof-of-work and adds `needs-review` label. Merge only
-happens after human adds `reviewed` label. Auto-merge is opt-in via
-`auto-merge` label on the issue. See `_on_done()`, `_request_review()`,
-`_wait_for_review()`, `_do_merge()` in `core/session.py`.
-
----
-
-**OQ-7: RESOLVED — Queue multiple questions.**
-
-`_pending_questions` is a `list[str]`. Each `@@QUESTION@@` appends. Each
-`@@WAITING@@` pops the oldest. See `_on_question()` and `_on_waiting()` in
-`core/session.py`.
-
----
-
-**OQ-8: RESOLVED — Host watcher is fully decoupled from tracker.**
+### Host Watcher Decoupling
 
 `host/watcher.py` has zero tracker imports. It communicates with containers
-ONLY via files (`waiting.json` / `answer.txt`) and Docker pause/unpause.
-Telegram polling is self-contained in the watcher. Same watcher works with
-any tracker adapter.
+only via files (`waiting.json` / `answer.txt`) and Docker pause/unpause.
+Telegram polling is self-contained. Same watcher works with any tracker.
 
 Answer sources while container is paused:
 1. Telegram reply (watcher polls, writes `answer.txt`)
 2. CLI: `agent-worker answer <id> "text"` writes `answer.txt` directly
 
-Tracker-based answers (git-bug comment, GitHub comment) are collected by the
-container itself before being paused. If the answer arrives after pause via
-tracker only (no Telegram, no CLI), the container stays paused until the user
-uses CLI or Telegram. This is documented behavior.
+If an answer arrives via tracker only (no Telegram, no CLI) after pause,
+the container stays paused until the user uses CLI or Telegram.
 
----
-
-**OQ-9: RESOLVED — Worktree merge runs from repo_root.**
+### Workspace Merging
 
 `finalize()` commits in the worktree, then runs `git merge --no-ff` from
-`repo_root` (the main working tree), not the worktree. Ensures the target
-branch is checked out in the main tree first. See
-`adapters/workspaces/git_worktree.py`.
+`repo_root` (the main working tree), not the worktree.
 
----
+### Error Handling Policy
 
-**OQ-10: RESOLVED — Error handling: best-effort for non-critical, raise for critical.**
-
-Policy:
-- **Critical (must succeed, raise on failure):** `get_issue()`,
-  `create()` workspace, `agent.start()`, `agent.send_input()`
+- **Critical (raise on failure):** `get_issue()`, `create()` workspace,
+  `agent.start()`
 - **Best-effort (log and swallow):** `add_comment()`, `add_label()`,
   `remove_label()`, `set_status()`, `sync()`, `notify()`
 
-Implementation: adapters log and swallow in best-effort methods (already
-the case in `GitBugTracker._run()`). Core `SessionRunner` wraps critical
-calls only. Notifier methods already catch `RequestException`.
+### Checkpoint Summarization
 
-The `IssueTracker` Protocol docstring should document which methods are
-critical vs best-effort so future adapter authors know.
+`_maybe_summarize_checkpoints()` fires when `len(checkpoints) > 10`.
+Uses one short Claude call (~500 tokens). If it fails, raw checkpoints
+are used — no data loss.
 
----
-
-### Gaps — Address During Development
-
-**OQ-11: RESOLVED — Test structure defined.**
+### Test Structure
 
 ```
 tests/
   ├── conftest.py           # Protocol mocks (MockAgent, MockTracker, etc.)
-  ├── test_session.py       # SessionRunner against mocks: markers, Q&A, stall, review
+  ├── test_session.py       # SessionRunner against mocks
   ├── test_state.py         # Atomic writes, checkpoint/QA, signal files
-  ├── test_stream.py        # Stream processor: marker parsing, event routing
+  ├── test_stream_parser.py # Claude Code stream-json parsing
+  ├── test_marker_reliability.py  # Marker failure modes
   ├── test_prompts.py       # Prompt construction, resume prompt building
-  ├── test_search.py        # Keyword extraction, scoring, context truncation
+  ├── test_search.py        # Keyword extraction, scoring
   ├── adapters/
-  │   ├── test_claude_code.py   # Real Claude Code output parsing (recorded fixtures)
+  │   ├── test_claude_code.py   # Real output parsing (recorded fixtures)
   │   ├── test_git_bug.py       # Git-bug CLI wrapper (mock subprocess)
-  │   └── test_git_worktree.py  # Worktree create/commit/finalize (temp git repos)
+  │   └── test_git_worktree.py  # Worktree create/commit/finalize
   └── integration/
-      └── test_end_to_end.py    # Full flow with real adapters (skip in CI without creds)
+      └── test_end_to_end.py    # Full flow (skip in CI without creds)
 ```
-
-Start by writing `conftest.py` with protocol mocks. Test `SessionRunner` in
-isolation before touching real adapters.
-
-**OQ-12: RESOLVED — launch.py and cli.py read WORKFLOW.md.**
-
-`launch.py` reads `WORKFLOW.md` from the repo root to determine workspace
-kind, Docker image, and environment. `cli.py` delegates to `launch.py`.
-Both use `core/config.py` to parse the file. See those modules below.
-
-**OQ-13: RESOLVED — WORKFLOW.md parsing implemented.**
-
-`core/config.py` parses WORKFLOW.md (YAML front matter + prompt body),
-validates required fields, and provides typed access. `entrypoint.py`
-uses it to instantiate the correct adapters. `launch.py` uses it on
-the host side for workspace and Docker config. See `core/config.py`,
-updated `entrypoint.py`, and `host/launch.py` below.
-
-**OQ-14: RESOLVED — Summarization is already conditional.**
-
-`_maybe_summarize_checkpoints()` only fires when `len(checkpoints) > 10`.
-Cost is one short Claude call (~500 tokens). Acceptable for sessions that
-have done 10+ checkpoints. If the summarization call fails (timeout, error),
-it's caught and the raw checkpoints are used — no data loss.
-
----
-
-## Phase 1 Checklist
-
-1. Resolve OQ-1 and OQ-2 (terminal experiments, 30 min each).
-2. Implement `core/protocols.py` and `core/state.py` (pure data, no deps).
-3. Implement `core/config.py` (WORKFLOW.md parser).
-4. Write protocol mocks and test `SessionRunner` event loop in isolation.
-5. Implement `adapters/agents/claude_code.py` against real stream format.
-6. Implement `adapters/trackers/git_bug.py`.
-7. Implement `adapters/workspaces/git_worktree.py`.
-8. Wire in `entrypoint.py` (config-driven adapter instantiation).
-9. Add Telegram notifier, host watcher, pause/unpause.
-10. Implement `host/launch.py` (reads WORKFLOW.md, creates workspace, runs Docker).
-11. Implement `host/cli.py` (delegates to launch.py, reads WORKFLOW.md).
 
 ---
 
@@ -248,7 +160,7 @@ provided as reference adapters.
 core/                              ← Agent/tracker-agnostic
   ├── protocols.py                 ← Protocol (interface) definitions
   ├── config.py                    ← WORKFLOW.md parser + typed config
-  ├── session.py                   ← Session runner (PTY, pause, stall detection)
+  ├── session.py                   ← Session runner (pause, stall detection)
   ├── stream.py                    ← Output stream processor
   ├── state.py                     ← Atomic session state
   ├── prompts.py                   ← Prompt construction
@@ -288,18 +200,18 @@ needs an `__init__.py` (can be empty) for Python imports to work.
 ### Design Principles
 
 - **Protocol-first**: Every external boundary (agent, tracker, notifier, workspace) is a Python `Protocol`. Core code never imports concrete adapters.
-- **Pure Python**: No shell scripts. PTY via `pty` module. Git via `subprocess` in typed adapters. No `unbuffer`, no `bash -lc`.
-- **Live continuation**: Questions answered via PTY stdin — no restart, no context loss.
+- **Pure Python**: No shell scripts. Git via `subprocess` in typed adapters. No `unbuffer`, no `bash -lc`.
+- **Fire-and-forget agent**: Agent runs in `-p` mode, exits after responding. Multi-turn uses `--resume` to restart with full context. Q&A collects answer after exit, restarts with answer as prompt.
 - **Container pause**: Host watcher freezes idle containers (zero CPU), collects answers externally, unfreezes.
-- **Serialization as fallback**: Checkpoint/resume exists only for hard restarts (max-turns, context limit, stalls). Questions don't need it.
+- **Checkpoint/resume**: For hard restarts (max-turns, context limit, stalls). Also used for Q&A flow (agent exits, answer collected, agent restarted).
 
 ### Two Kinds of Interruption
 
 | Interruption | Process alive? | How handled |
 |---|---|---|
-| **Question** | Yes — agent waiting on stdin | Write answer via PTY. Same thread, full context. |
-| **Review gate** | No — agent exited after @@DONE@@ | Container paused. Waits for `reviewed` label or CLI approval. |
-| **Max turns / context limit / stall** | No — must restart | Serialize state. Build resume prompt. New process. |
+| **Question** | No — agent exited after `@@QUESTION@@` | Collect answer, restart with `--resume` and answer as prompt. |
+| **Review gate** | No — agent exited after `@@DONE@@` | Container paused. Waits for `reviewed` label or CLI approval. |
+| **Max turns / context limit / stall** | No — must restart | Serialize state. Build resume prompt. New process with `--resume`. |
 
 ### Container Pause/Unpause Flow
 
@@ -326,7 +238,7 @@ Enter poll loop (sleep 1s)
   │ ◄── UNFROZEN ─────────────       docker unpause <container>
   │
   poll finds answer.txt
-  For questions: pipe to agent stdin
+  For questions: restart agent with --resume and answer as prompt
   For reviews: proceed to merge
 ```
 
@@ -337,7 +249,7 @@ Enter poll loop (sleep 1s)
 | `@@LOG@@ <thought>` | Log a decision | Tracker comment, conversation log |
 | `@@CHECKPOINT@@ <desc>` | Save progress | Commit, update state, build resume prompt |
 | `@@QUESTION@@ <question>` | Needs human input | Post to tracker, send via notifier |
-| `@@WAITING@@` | Idle, waiting for stdin | Signal host watcher, enter poll loop |
+| `@@WAITING@@` | Idle, waiting for answer | Signal host watcher, collect answer, restart agent |
 | `@@DONE@@` | Work complete | Post proof-of-work, wait for review (or auto-merge if labeled) |
 
 ---
@@ -639,12 +551,15 @@ def parse_marker(
 ### adapters/agents/claude_code.py
 
 ```python
-"""Claude Code adapter — PTY-based, pure Python."""
+"""Claude Code adapter.
+
+-p mode is fire-and-forget (exits after responding). stdin follow-up does
+NOT work. Multi-turn Q&A uses --resume <session_id> to restart with full
+conversation context preserved.
+"""
 
 import json
 import logging
-import os
-import pty
 import select
 import subprocess
 import time
@@ -670,35 +585,46 @@ class ClaudeCodeAgent:
         self.stall_timeout_s = stall_timeout_s
         self.extra_args = extra_args or []
         self._pid: int | None = None
-        self._master_fd: int | None = None
         self._process: subprocess.Popen | None = None
         self._last_event: float = 0
+        self._session_id: str | None = None
+        self._extra_events: list[AgentEvent] = []
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
-        master_fd, slave_fd = pty.openpty()
-        self._master_fd = master_fd
+        cmd = [
+            self.command, "--dangerously-skip-permissions",
+            "--verbose", "--output-format", "stream-json",
+            "--max-turns", str(max_turns),
+        ]
+        # Resume previous session to preserve conversation context
+        if self._session_id:
+            cmd += ["--resume", self._session_id]
+        cmd += [*self.extra_args, "-p", prompt]
+
         self._process = subprocess.Popen(
-            [self.command, "--dangerously-skip-permissions",
-             "--output-format", "stream-json",
-             "--max-turns", str(max_turns),
-             *self.extra_args, "-p", prompt],
-            stdin=slave_fd, stdout=subprocess.PIPE,
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True,
             cwd=str(workspace), bufsize=1,
         )
-        os.close(slave_fd)
         self._pid = self._process.pid
         self._last_event = time.monotonic()
 
     def stream_events(self) -> Iterator[AgentEvent]:
         if not self._process:
             return
+        self._extra_events.clear()
         stdout = self._process.stdout
         while True:
+            # Drain any extra events from multi-part assistant messages
+            while self._extra_events:
+                yield self._extra_events.pop(0)
+
             if self._process.poll() is not None:
                 for line in stdout:
                     ev = self._parse(line.rstrip("\n"))
                     if ev: yield ev
+                    while self._extra_events:
+                        yield self._extra_events.pop(0)
                 yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
                 return
 
@@ -718,9 +644,12 @@ class ClaudeCodeAgent:
                     return
 
     def send_input(self, text: str) -> None:
-        if self._master_fd is None:
-            raise RuntimeError("No live process")
-        os.write(self._master_fd, (text + "\n").encode())
+        # -p mode does not read stdin. Callers should terminate()
+        # then start() again — --resume preserves conversation context.
+        raise RuntimeError(
+            "send_input() not supported in -p mode. "
+            "Use terminate() + start() with the answer as prompt."
+        )
 
     def is_alive(self) -> bool:
         return self._process is not None and self._process.poll() is None
@@ -730,33 +659,107 @@ class ClaudeCodeAgent:
             self._process.terminate()
             try: self._process.wait(timeout=10)
             except Exception: self._process.kill(); self._process.wait()
-        if self._master_fd is not None:
-            try: os.close(self._master_fd)
-            except OSError: pass
-            self._master_fd = None
         self._process = None; self._pid = None
+        # Note: _session_id is preserved so next start() can --resume
 
     @property
     def pid(self) -> int | None:
         return self._pid
 
     def _parse(self, raw: str) -> Optional[AgentEvent]:
+        """Parse a stream-json line into an AgentEvent.
+
+        Real event types (one JSON object per line):
+          system (subtype=init)  -> {session_id, tools, model, ...}
+          assistant              -> {message: {content: [{type, ...}]}}
+                                   content items: "text", "tool_use", "thinking"
+          user                   -> {message: {content: [{type: "tool_result", ...}]}}
+          result                 -> {subtype: "success"/"error", result: str}
+          rate_limit_event       -> {rate_limit_info: ...} (ignored)
+        """
         if not raw.strip(): return None
         try: ev = json.loads(raw)
         except json.JSONDecodeError: return None
         t = ev.get("type", "")
-        # OQ-2: These field names are assumed. Verify against real output.
+
+        # --- system (subtype=init) ---
+        if t == "system" and ev.get("subtype") == "init":
+            sid = ev.get("session_id")
+            if sid:
+                self._session_id = sid
+                log.info(f"Session ID: {sid}")
+            return AgentEvent(type=AgentEventType.SYSTEM,
+                              content="init", raw=raw)
+
+        # --- assistant: contains text, tool_use, and/or thinking ---
         if t == "assistant":
-            return AgentEvent(type=AgentEventType.TEXT, content=ev.get("content",""), raw=raw)
-        elif t == "tool_use":
-            return AgentEvent(type=AgentEventType.TOOL_CALL,
-                              content=f"{ev.get('tool','?')}: {str(ev.get('input',''))[:300]}", raw=raw)
-        elif t == "tool_result":
-            return AgentEvent(type=AgentEventType.TOOL_RESULT,
-                              content=str(ev.get("content",""))[:200], raw=raw)
-        elif t == "system":
-            return AgentEvent(type=AgentEventType.SYSTEM, content=ev.get("message",""), raw=raw)
+            msg = ev.get("message", {})
+            content_parts = msg.get("content", []) if isinstance(msg, dict) else []
+            events = list(self._parse_assistant_content(content_parts, raw))
+            if events:
+                self._extra_events.extend(events[1:])
+                return events[0]
+            return None
+
+        # --- user: tool results ---
+        if t == "user":
+            msg = ev.get("message", {})
+            content_parts = msg.get("content", []) if isinstance(msg, dict) else []
+            for part in content_parts:
+                if isinstance(part, dict) and part.get("type") == "tool_result":
+                    result_content = part.get("content", "")
+                    if isinstance(result_content, list):
+                        result_content = " ".join(
+                            p.get("text", "") for p in result_content
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        )
+                    return AgentEvent(
+                        type=AgentEventType.TOOL_RESULT,
+                        content=str(result_content)[:500], raw=raw)
+            return None
+
+        # --- result: session complete ---
+        if t == "result":
+            return AgentEvent(type=AgentEventType.SYSTEM,
+                              content=ev.get("result", ""), raw=raw)
+
+        # --- rate_limit_event: skip ---
+        if t == "rate_limit_event":
+            return None
+
+        # --- system (other subtypes) ---
+        if t == "system":
+            return AgentEvent(type=AgentEventType.SYSTEM,
+                              content=ev.get("message", ""), raw=raw)
+
         return AgentEvent(type=AgentEventType.UNKNOWN, raw=raw)
+
+    def _parse_assistant_content(
+        self, content_parts: list, raw: str,
+    ) -> Iterator[AgentEvent]:
+        """Parse the content array from an assistant message.
+
+        A single assistant event can contain multiple content items:
+        text, tool_use, and thinking blocks. We yield separate AgentEvents
+        for each so the session runner can handle them independently.
+        """
+        for part in content_parts:
+            if not isinstance(part, dict):
+                continue
+            pt = part.get("type", "")
+            if pt == "text":
+                text = part.get("text", "")
+                if text:
+                    yield AgentEvent(
+                        type=AgentEventType.TEXT, content=text, raw=raw)
+            elif pt == "tool_use":
+                name = part.get("name", "?")
+                inp = str(part.get("input", ""))[:300]
+                yield AgentEvent(
+                    type=AgentEventType.TOOL_CALL,
+                    content=f"{name}: {inp}", raw=raw)
+            elif pt == "thinking":
+                pass  # internal reasoning, not surfaced
 ```
 
 ### adapters/agents/codex.py (sketch)
@@ -1691,7 +1694,7 @@ log = logging.getLogger(__name__)
 BOT_PREFIXES = ("💭", "🤖", "❓", "📌", "⚠️", "✅", "⏸️", "🔄", "👤", "💬", "🛑")
 RECONCILE_S = 60
 ANSWER_POLL_S = 1
-QUESTION_WAIT_TIMEOUT_S = 30  # OQ-4: fallback if @@WAITING@@ never arrives
+QUESTION_WAIT_TIMEOUT_S = 30  # fallback if @@WAITING@@ never arrives
 MAX_RESUMES = 10  # prevent infinite context-limit loops
 
 
@@ -1715,7 +1718,7 @@ class SessionRunner:
         self.max_turns = max_turns
         self.terminal_statuses = terminal_statuses
         self._workspace: Workspace | None = None
-        self._pending_questions: list[str] = []  # OQ-7: queue, not overwrite
+        self._pending_questions: list[str] = []  # queue, not overwrite
         self._question_sent_via_notifier = False
 
         # Merge policy from WORKFLOW.md (defaults if not provided)
@@ -1745,9 +1748,6 @@ class SessionRunner:
                 self.notifier.notify(
                     f"⚠️ {self.issue.identifier} hit {MAX_RESUMES} resumes. Manual --resume needed.")
                 break
-
-        prompt = self.prompt
-        while True:
             # Run before_run hook
             if self.hooks_config:
                 if not self._run_hook(self.hooks_config.before_run, "before_run", fatal=True):
@@ -1803,7 +1803,7 @@ class SessionRunner:
 
     def _event_loop(self):
         last_reconcile = time.monotonic()
-        question_time: float | None = None  # OQ-4: track when question was asked
+        question_time: float | None = None  # track when question was asked
 
         for event in self.agent.stream_events():
             self.state_mgr.append_raw(event.raw)
@@ -1838,7 +1838,7 @@ class SessionRunner:
             elif event.type == AgentEventType.PROCESS_EXIT:
                 break
 
-            # OQ-4: if @@QUESTION@@ was seen but @@WAITING@@ hasn't arrived
+            # if @@QUESTION@@ was seen but @@WAITING@@ hasn't arrived
             if (question_time and self._pending_questions
                     and time.monotonic() - question_time > QUESTION_WAIT_TIMEOUT_S):
                 log.warning("@@WAITING@@ not received — forcing wait")
@@ -1896,14 +1896,14 @@ class SessionRunner:
         if not self._question_sent_via_notifier:
             self.notifier.notify(f"❓ [{self.issue.identifier}]: {question}")
 
-        self._pending_questions.append(question)  # OQ-7: queue
+        self._pending_questions.append(question)
 
     def _on_waiting(self):
         if not self._pending_questions:
             log.warning("@@WAITING@@ without pending question — ignoring")
             return
 
-        question = self._pending_questions.pop(0)  # OQ-7: pop oldest
+        question = self._pending_questions.pop(0)  # pop oldest
         self.state_mgr.signal_waiting(question)
         log.info("Waiting for answer. Container may be paused.")
 
@@ -1914,16 +1914,10 @@ class SessionRunner:
         self.tracker.remove_label(self.issue.id, "needs-human-input")
         self.tracker.add_comment(self.issue.id, f"💬 Answer: {answer[:200]}")
 
-        # Check agent is still alive before piping to stdin.
-        # If it died while we were waiting, the answer is saved in state
-        # and will be available via resume prompt on next run.
-        if not self.agent.is_alive():
-            log.warning("Agent died while waiting for answer. Answer saved in state.")
-            return
-
-        self.agent.send_input(answer)
-        self.state_mgr.update_status("working")
-        log.info("Answer sent to agent stdin. Same thread continues.")
+        # Agent has exited (-p mode is fire-and-forget).
+        # Answer is saved in state. _post_run() will detect
+        # suspended:answer-ready and restart with the answer as prompt.
+        self.state_mgr.update_status("suspended:answer-ready")
 
     def _on_done(self):
         """Mark as done. Review/merge happens in _post_run after agent exits."""
@@ -2046,6 +2040,12 @@ class SessionRunner:
             else:
                 self._request_review(state)
             return None
+
+        if st.status == "suspended:answer-ready":
+            answer = st.human_answers[-1].answer if st.human_answers else ""
+            self.state_mgr.update_status("working")
+            self.state_mgr.append_conversation("human_answer_sent", answer)
+            return answer
 
         if st.status in ("completed", "cancelled:review-rejected"):
             return None
@@ -2635,7 +2635,7 @@ def main():
                 "checkpoints": [], "human_answers": [],
             }, indent=2))
 
-    # Auth mounts (OQ-5: verified paths)
+    # Auth mounts
     home = Path.home()
     auth_mounts = []
     if (home / ".claude").is_dir():
@@ -2979,7 +2979,7 @@ Continue. Same marker rules apply."""
 
 | Component | Provided | Planned |
 |---|---|---|
-| **Agent** | Claude Code (PTY, stream-json) | Codex (JSON-RPC), Aider, custom |
+| **Agent** | Claude Code (-p mode, stream-json, --resume) | Codex (JSON-RPC), Aider, custom |
 | **Tracker** | git-bug (CLI) | GitHub Issues, Linear, Jira, plain files |
 | **Notifier** | Telegram (force_reply), Webhook | Slack, Discord, ntfy.sh, email |
 | **Workspace** | Git worktree | Plain directory, Docker volume, SSH |
