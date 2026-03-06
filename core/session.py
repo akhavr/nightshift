@@ -54,9 +54,17 @@ class SessionRunner:
         # Hooks from WORKFLOW.md
         self.hooks_config = hooks_config
 
-    def run(self):
-        """Main entry. Loops on auto-resume (no recursion → no stack overflow)."""
-        self._workspace = self.workspace_mgr.create(self.issue)
+    def run(self, workspace: Workspace | None = None):
+        """Main entry. Loops on auto-resume (no recursion → no stack overflow).
+
+        If *workspace* is provided, use it directly (e.g. container mode where
+        the host already mounted the worktree). Otherwise delegate to
+        workspace_mgr.create().
+        """
+        if workspace is not None:
+            self._workspace = workspace
+        else:
+            self._workspace = self.workspace_mgr.create(self.issue)
 
         # Run after_create hook on new workspaces
         if self._workspace.is_new and self.hooks_config:

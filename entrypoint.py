@@ -13,6 +13,7 @@ from core.config import (
     load_workflow, create_agent, create_tracker,
     create_workspace_mgr, create_notifiers,
 )
+from core.protocols import Workspace
 from core.state import StateManager
 from core.session import SessionRunner
 from core.search import search_related_issues
@@ -20,6 +21,17 @@ from core.search import search_related_issues
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 log = logging.getLogger("entrypoint")
+
+
+def _current_branch(repo_dir: str) -> str:
+    import subprocess
+    try:
+        return subprocess.check_output(
+            ["git", "branch", "--show-current"],
+            cwd=repo_dir, stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
 
 
 def main():
@@ -38,11 +50,12 @@ def main():
     agent = create_agent(config)
 
     # Inside the container, /workspace is already set up by the host
-    # (worktree created and mounted). Use DirectoryManager to work in-place.
-    from adapters.workspaces.directory import DirectoryManager
-    workspace_mgr = DirectoryManager(
-        repo_root=Path("/workspace"),
-        base_branch=config.workspace.base_branch,
+    # (worktree created and mounted). Build a Workspace directly.
+    workspace_mgr = create_workspace_mgr(config)
+    workspace = Workspace(
+        path=Path("/workspace"),
+        branch=_current_branch("/workspace"),
+        is_new=False,
     )
     state_mgr = StateManager("/session")
 
@@ -92,7 +105,7 @@ def main():
     )
 
     try:
-        runner.run()
+        runner.run(workspace=workspace)
     finally:
         notifier.stop()
 
