@@ -51,18 +51,22 @@ Fixture: `tests/fixtures_stream_json.jsonl`. Tests: `tests/test_stream_parser.py
 
 ---
 
-**OQ-3: PARTIALLY RESOLVED — Marker reliability mitigations are in code.**
+**OQ-3: RESOLVED — Marker reliability verified with tests.**
 
-Mitigations already implemented:
-- Agent exit without `@@DONE@@`: `_post_run()` treats status `working` as
-  max-turns → auto-resume with review gate. Never auto-merges without
-  explicit `@@DONE@@`.
-- `@@DONE@@` itself goes through review gate (OQ-6) — double safety net.
-- Markers in tool results: stream processor only scans `assistant` events.
+All mitigations verified against code and covered by `tests/test_marker_reliability.py`:
 
-Remaining empirical risk: Claude may not output `@@CHECKPOINT@@` often
-enough, making resume prompts stale. Acceptable — git diff stat always
-captures actual changes. Prompt tuning after real-world testing.
+- **Agent exit without `@@DONE@@`:** `_post_run()` treats status `working` as
+  max-turns → auto-resume. Never auto-merges without explicit `@@DONE@@`,
+  even when `auto-merge` label is present.
+- **`@@DONE@@` goes through review gate:** Sets `done:pending-review`, then
+  `_request_review()` blocks until human approves (unless `auto-merge`).
+- **Markers in tool results ignored:** Only `TEXT` events (from `assistant`
+  messages) are scanned. `TOOL_RESULT`, `TOOL_CALL`, and `SYSTEM` events
+  containing marker strings are not processed.
+- **Question without `@@WAITING@@`:** Post-event-loop handler catches pending
+  questions when agent exits before `@@WAITING@@` arrives.
+- **Checkpoint frequency:** Remaining empirical risk. Git diff stat always
+  captures actual changes regardless of checkpoint frequency.
 
 ---
 

@@ -73,8 +73,6 @@ class SessionRunner:
                     f"⚠️ {self.issue.identifier} hit {MAX_RESUMES} resumes. Manual --resume needed.")
                 break
 
-        prompt = self.prompt
-        while True:
             # Run before_run hook
             if self.hooks_config:
                 if not self._run_hook(self.hooks_config.before_run, "before_run", fatal=True):
