@@ -200,7 +200,6 @@ TRACKER_REGISTRY: dict[str, tuple[str, str]] = {
 
 WORKSPACE_REGISTRY: dict[str, tuple[str, str]] = {
     "worktree": ("adapters.workspaces.git_worktree", "GitWorktreeManager"),
-    "directory": ("adapters.workspaces.directory", "DirectoryManager"),
 }
 
 NOTIFIER_REGISTRY: dict[str, tuple[str, str]] = {

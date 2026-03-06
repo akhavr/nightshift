@@ -78,14 +78,19 @@ Claude Code on Linux (including Docker containers):
 ~/.claude.json             # MCP server config (optional)
 ```
 
-Docker mounts:
+Docker mounts (host side):
 ```
--v "$HOME/.claude:/root/.claude:ro"         # credentials + settings
--v "$HOME/.claude.json:/root/.claude.json:ro"  # MCP config (optional)
+-v "$HOME/.claude:/claude-auth:ro"             # credentials + settings (read-only)
+-v "$HOME/.claude.json:/home/agent/.claude.json:ro"  # MCP config (optional)
+--user "$(id -u):$(id -g)"                     # UID match for 600-permission files
 ```
 
+The container runs as a non-root `agent` user. `docker-entrypoint.sh` copies
+credentials from the read-only `/claude-auth` mount to the agent's writable
+`$HOME/.claude/` before starting the entrypoint. This avoids permission issues
+with Claude Code needing writable access to its config directory.
+
 macOS uses Keychain, but Linux containers always use `.credentials.json`.
-Alternative: set `ANTHROPIC_API_KEY` env var instead of mounting.
 
 CAUTION: macOS Claude Code may delete `.credentials.json` (known bug
 anthropics/claude-code#1414). If sharing `~/.claude` between macOS host
@@ -180,8 +185,7 @@ adapters/
   │   ├── slack.py                 ← (future) Slack adapter
   │   └── webhook.py               ← Generic webhook
   └── workspaces/
-      ├── git_worktree.py          ← Git worktree workspace
-      └── directory.py             ← (future) Plain directory copy
+      └── git_worktree.py          ← Git worktree workspace
 
 host/
   ├── watcher.py                   ← Pause/unpause containers, collect answers
@@ -278,7 +282,7 @@ tracker:
   # linear: {project_slug: "my-project", api_key: "$LINEAR_API_KEY"}
 
 workspace:
-  kind: worktree               # or: directory
+  kind: worktree
   base_branch: master
 
 notifications:
@@ -348,7 +352,7 @@ tracker:
   # Values starting with $ are resolved from environment variables
 
 workspace:
-  kind: string           # default: "worktree" (or: "directory")
+  kind: string           # default: "worktree"
   base_branch: string    # default: "master"
   root: string           # default: ".worktrees" (relative to repo root)
 
@@ -832,7 +836,7 @@ class GitBugTracker:
             return ""
 
     def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
-        raw = self._run("show", issue_id, "--format", "json")
+        raw = self._run("bug", "show", issue_id, "-f", "json")
         if not raw: return None
         try:
             d = json.loads(raw)
@@ -842,14 +846,14 @@ class GitBugTracker:
                 title=d.get("title", "Unknown"),
                 body=comments[0].get("message", "") if comments else "",
                 status=d.get("status", "unknown"),
-                labels=[l.lower() for l in d.get("labels", [])],
+                labels=[l.lower() for l in (d.get("labels") or [])],
                 created_at=d.get("created_at"),
             )
         except json.JSONDecodeError:
             return None
 
     def list_issues(self, status=None) -> list[TrackerIssue]:
-        args = ["ls", "--format", "json"]
+        args = ["bug", "-f", "json"]
         if isinstance(status, str):
             args.extend(["--status", status])
         raw = self._run(*args)
@@ -861,7 +865,7 @@ class GitBugTracker:
             return []
 
     def get_comments(self, issue_id: str) -> list[TrackerComment]:
-        raw = self._run("show", issue_id, "--format", "json")
+        raw = self._run("bug", "show", issue_id, "-f", "json")
         if not raw: return []
         try:
             return [
@@ -875,17 +879,17 @@ class GitBugTracker:
             return []
 
     def add_comment(self, issue_id: str, body: str) -> None:
-        self._run("comment", "add", issue_id, "-m", body)
+        self._run("bug", "comment", "new", issue_id, "-m", body)
 
     def set_status(self, issue_id: str, status: str) -> None:
         cmd = "close" if status == "closed" else "open"
-        self._run("status", cmd, issue_id)
+        self._run("bug", "status", cmd, issue_id)
 
     def add_label(self, issue_id: str, label: str) -> None:
-        self._run("label", "add", issue_id, label)
+        self._run("bug", "label", "new", issue_id, label)
 
     def remove_label(self, issue_id: str, label: str) -> None:
-        self._run("label", "remove", issue_id, label)
+        self._run("bug", "label", "rm", issue_id, label)
 
     def sync(self) -> None:
         self._run("pull")
@@ -1262,11 +1266,38 @@ RUN pip install --break-system-packages -r /opt/agent-worker/requirements.txt
 COPY core/ /opt/agent-worker/core/
 COPY adapters/ /opt/agent-worker/adapters/
 COPY entrypoint.py /opt/agent-worker/
+COPY docker-entrypoint.sh /opt/agent-worker/
+
+RUN useradd -m -s /bin/bash agent && \
+    chmod +x /opt/agent-worker/docker-entrypoint.sh
 
 ENV PYTHONPATH=/opt/agent-worker
+USER agent
+
+RUN git config --global --add safe.directory /workspace
+
 WORKDIR /workspace
 
-ENTRYPOINT ["python3", "/opt/agent-worker/entrypoint.py"]
+ENTRYPOINT ["/opt/agent-worker/docker-entrypoint.sh"]
+```
+
+### docker-entrypoint.sh
+
+Copies read-only credentials to the agent user's writable HOME before
+starting the Python entrypoint.
+
+```bash
+#!/bin/sh
+# Copy read-only credentials to writable HOME so Claude Code can function.
+# The host mounts ~/.claude at /claude-auth:ro for security.
+if [ -d /claude-auth ]; then
+    mkdir -p "$HOME/.claude"
+    cp /claude-auth/.credentials.json "$HOME/.claude/" 2>/dev/null || true
+    cp /claude-auth/settings.json "$HOME/.claude/" 2>/dev/null || true
+    cp /claude-auth/settings.local.json "$HOME/.claude/" 2>/dev/null || true
+fi
+
+exec python3 /opt/agent-worker/entrypoint.py "$@"
 ```
 
 ### requirements.txt
@@ -1608,7 +1639,6 @@ TRACKER_REGISTRY: dict[str, tuple[str, str]] = {
 
 WORKSPACE_REGISTRY: dict[str, tuple[str, str]] = {
     "worktree": ("adapters.workspaces.git_worktree", "GitWorktreeManager"),
-    "directory": ("adapters.workspaces.directory", "DirectoryManager"),
 }
 
 NOTIFIER_REGISTRY: dict[str, tuple[str, str]] = {
@@ -1730,9 +1760,17 @@ class SessionRunner:
         # Hooks from WORKFLOW.md
         self.hooks_config = hooks_config
 
-    def run(self):
-        """Main entry. Loops on auto-resume (no recursion → no stack overflow)."""
-        self._workspace = self.workspace_mgr.create(self.issue)
+    def run(self, workspace: Workspace | None = None):
+        """Main entry. Loops on auto-resume (no recursion → no stack overflow).
+
+        If *workspace* is provided, use it directly (e.g. container mode where
+        the host already mounted the worktree). Otherwise delegate to
+        workspace_mgr.create().
+        """
+        if workspace is not None:
+            self._workspace = workspace
+        else:
+            self._workspace = self.workspace_mgr.create(self.issue)
 
         # Run after_create hook on new workspaces
         if self._workspace.is_new and self.hooks_config:
@@ -1914,10 +1952,18 @@ class SessionRunner:
         self.tracker.remove_label(self.issue.id, "needs-human-input")
         self.tracker.add_comment(self.issue.id, f"💬 Answer: {answer[:200]}")
 
-        # Agent has exited (-p mode is fire-and-forget).
-        # Answer is saved in state. _post_run() will detect
-        # suspended:answer-ready and restart with the answer as prompt.
-        self.state_mgr.update_status("suspended:answer-ready")
+        # In -p mode, the agent exits after responding. It will not
+        # be alive by the time we collect the answer. The answer is saved
+        # in state; _post_run() will restart with --resume and the answer
+        # as the new prompt.
+        if not self.agent.is_alive():
+            log.info("Agent exited (expected in -p mode). Will restart with answer.")
+            self.state_mgr.update_status("suspended:answer-ready")
+            return
+
+        self.agent.send_input(answer)
+        self.state_mgr.update_status("working")
+        log.info("Answer sent to agent stdin.")
 
     def _on_done(self):
         """Mark as done. Review/merge happens in _post_run after agent exits."""
@@ -2026,6 +2072,15 @@ class SessionRunner:
         """
         st = self.state_mgr.load_state()
 
+        # Agent exited in -p mode, answer was collected. Restart
+        # with the answer as the prompt via --resume.
+        if st.status == "suspended:answer-ready":
+            answer = st.human_answers[-1].answer if st.human_answers else ""
+            self.state_mgr.update_status("working")
+            self.state_mgr.append_conversation("human_answer_sent", answer)
+            log.info("Restarting agent with answer via --resume")
+            return answer
+
         if st.status == "done:pending-review":
             # Agent completed. Now handle review gate (agent is terminated,
             # so blocking here is safe — no stdout buffer deadlock).
@@ -2040,12 +2095,6 @@ class SessionRunner:
             else:
                 self._request_review(state)
             return None
-
-        if st.status == "suspended:answer-ready":
-            answer = st.human_answers[-1].answer if st.human_answers else ""
-            self.state_mgr.update_status("working")
-            self.state_mgr.append_conversation("human_answer_sent", answer)
-            return answer
 
         if st.status in ("completed", "cancelled:review-rejected"):
             return None
@@ -2462,6 +2511,7 @@ from core.config import (
     load_workflow, create_agent, create_tracker,
     create_workspace_mgr, create_notifiers,
 )
+from core.protocols import Workspace
 from core.state import StateManager
 from core.session import SessionRunner
 from core.search import search_related_issues
@@ -2469,6 +2519,17 @@ from core.search import search_related_issues
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 log = logging.getLogger("entrypoint")
+
+
+def _current_branch(repo_dir: str) -> str:
+    import subprocess
+    try:
+        return subprocess.check_output(
+            ["git", "branch", "--show-current"],
+            cwd=repo_dir, stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
 
 
 def main():
@@ -2485,7 +2546,15 @@ def main():
     # Instantiate adapters from config
     tracker = create_tracker(config, repo_dir="/workspace")
     agent = create_agent(config)
+
+    # Inside the container, /workspace is already set up by the host
+    # (worktree created and mounted). Build a Workspace directly.
     workspace_mgr = create_workspace_mgr(config, repo_root=Path("/workspace"))
+    workspace = Workspace(
+        path=Path("/workspace"),
+        branch=_current_branch("/workspace"),
+        is_new=False,
+    )
     state_mgr = StateManager("/session")
 
     # Notifiers (may include Telegram, webhook, etc.)
@@ -2534,7 +2603,7 @@ def main():
     )
 
     try:
-        runner.run()
+        runner.run(workspace=workspace)
     finally:
         notifier.stop()
 
@@ -2622,26 +2691,14 @@ def main():
             print(f"Resuming session for {short_id}")
 
         workspace_mount = str(wt_path)
-    else:
-        # directory mode — just use a subdirectory
-        workspace_mount = str(repo / config.workspace.root / f"agent-{short_id}")
-        if not args.resume:
-            session_dir.mkdir(parents=True, exist_ok=True)
-            Path(workspace_mount).mkdir(parents=True, exist_ok=True)
-            (session_dir / "state.json").write_text(json.dumps({
-                "issue_id": issue_id, "branch": "",
-                "status": "starting", "step": 0,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "checkpoints": [], "human_answers": [],
-            }, indent=2))
 
-    # Auth mounts
+    # Auth mounts — read-only, copied to writable HOME by docker-entrypoint.sh
     home = Path.home()
     auth_mounts = []
     if (home / ".claude").is_dir():
-        auth_mounts += ["-v", f"{home / '.claude'}:/root/.claude:ro"]
+        auth_mounts += ["-v", f"{home / '.claude'}:/claude-auth:ro"]
     if (home / ".claude.json").exists():
-        auth_mounts += ["-v", f"{home / '.claude.json'}:/root/.claude.json:ro"]
+        auth_mounts += ["-v", f"{home / '.claude.json'}:/home/agent/.claude.json:ro"]
 
     # Build env vars for notifications (pass through from host)
     notify_env = []
@@ -2655,13 +2712,14 @@ def main():
     docker_cmd = [
         "docker", "run", "--rm", "-it",
         "--name", f"agent-worker-{short_id}",
+        "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
         "-v", f"{repo / '.git'}:/repo-git:ro",
         # Mount WORKFLOW.md so container can read it
         "-v", f"{repo / 'WORKFLOW.md'}:/workspace/WORKFLOW.md:ro",
         *auth_mounts,
-        "-v", f"{home / '.gitconfig'}:/root/.gitconfig:ro",
+        "-v", f"{home / '.gitconfig'}:/home/agent/.gitconfig:ro",
         "-e", f"ISSUE_ID={issue_id}",
         "-e", f"RESUME={'--resume' if args.resume else ''}",
         "-e", f"MAX_TURNS={max_turns}",
@@ -2792,16 +2850,10 @@ def cmd_cleanup(a):
     # Read config to know workspace kind
     config = load_workflow(r / "WORKFLOW.md")
 
-    if config.workspace.kind == "worktree":
-        wt = r / config.workspace.root / f"agent-{sid}"
-        if wt.exists():
-            subprocess.run(["git", "worktree", "remove", str(wt), "--force"])
-        subprocess.run(["git", "branch", "-D", f"agent/{sid}"], capture_output=True)
-    else:
-        import shutil
-        ws = r / config.workspace.root / f"agent-{sid}"
-        if ws.exists():
-            shutil.rmtree(ws)
+    wt = r / config.workspace.root / f"agent-{sid}"
+    if wt.exists():
+        subprocess.run(["git", "worktree", "remove", str(wt), "--force"])
+    subprocess.run(["git", "branch", "-D", f"agent/{sid}"], capture_output=True)
 
     ss = sessions_dir() / sid
     if ss.exists() and not a.keep_session:
@@ -2982,7 +3034,7 @@ Continue. Same marker rules apply."""
 | **Agent** | Claude Code (-p mode, stream-json, --resume) | Codex (JSON-RPC), Aider, custom |
 | **Tracker** | git-bug (CLI) | GitHub Issues, Linear, Jira, plain files |
 | **Notifier** | Telegram (force_reply), Webhook | Slack, Discord, ntfy.sh, email |
-| **Workspace** | Git worktree | Plain directory, Docker volume, SSH |
+| **Workspace** | Git worktree | Docker volume, SSH |
 
 ### Writing a New Adapter
 

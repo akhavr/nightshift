@@ -51,7 +51,7 @@ def main():
 
     # Inside the container, /workspace is already set up by the host
     # (worktree created and mounted). Build a Workspace directly.
-    workspace_mgr = create_workspace_mgr(config)
+    workspace_mgr = create_workspace_mgr(config, repo_root=Path("/workspace"))
     workspace = Workspace(
         path=Path("/workspace"),
         branch=_current_branch("/workspace"),
