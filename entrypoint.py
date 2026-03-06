@@ -36,7 +36,14 @@ def main():
     # Instantiate adapters from config
     tracker = create_tracker(config, repo_dir="/workspace")
     agent = create_agent(config)
-    workspace_mgr = create_workspace_mgr(config, repo_root=Path("/workspace"))
+
+    # Inside the container, /workspace is already set up by the host
+    # (worktree created and mounted). Use DirectoryManager to work in-place.
+    from adapters.workspaces.directory import DirectoryManager
+    workspace_mgr = DirectoryManager(
+        repo_root=Path("/workspace"),
+        base_branch=config.workspace.base_branch,
+    )
     state_mgr = StateManager("/session")
 
     # Notifiers (may include Telegram, webhook, etc.)

@@ -15,8 +15,16 @@ RUN pip install --break-system-packages -r /opt/agent-worker/requirements.txt
 COPY core/ /opt/agent-worker/core/
 COPY adapters/ /opt/agent-worker/adapters/
 COPY entrypoint.py /opt/agent-worker/
+COPY docker-entrypoint.sh /opt/agent-worker/
+
+RUN useradd -m -s /bin/bash agent && \
+    chmod +x /opt/agent-worker/docker-entrypoint.sh
 
 ENV PYTHONPATH=/opt/agent-worker
+USER agent
+
+RUN git config --global --add safe.directory /workspace
+
 WORKDIR /workspace
 
-ENTRYPOINT ["python3", "/opt/agent-worker/entrypoint.py"]
+ENTRYPOINT ["/opt/agent-worker/docker-entrypoint.sh"]

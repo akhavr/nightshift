@@ -27,7 +27,7 @@ class GitBugTracker:
             return ""
 
     def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
-        raw = self._run("show", issue_id, "--format", "json")
+        raw = self._run("bug", "show", issue_id, "-f", "json")
         if not raw: return None
         try:
             d = json.loads(raw)
@@ -37,14 +37,14 @@ class GitBugTracker:
                 title=d.get("title", "Unknown"),
                 body=comments[0].get("message", "") if comments else "",
                 status=d.get("status", "unknown"),
-                labels=[l.lower() for l in d.get("labels", [])],
+                labels=[l.lower() for l in (d.get("labels") or [])],
                 created_at=d.get("created_at"),
             )
         except json.JSONDecodeError:
             return None
 
     def list_issues(self, status=None) -> list[TrackerIssue]:
-        args = ["ls", "--format", "json"]
+        args = ["bug", "-f", "json"]
         if isinstance(status, str):
             args.extend(["--status", status])
         raw = self._run(*args)
@@ -56,7 +56,7 @@ class GitBugTracker:
             return []
 
     def get_comments(self, issue_id: str) -> list[TrackerComment]:
-        raw = self._run("show", issue_id, "--format", "json")
+        raw = self._run("bug", "show", issue_id, "-f", "json")
         if not raw: return []
         try:
             return [
@@ -70,17 +70,17 @@ class GitBugTracker:
             return []
 
     def add_comment(self, issue_id: str, body: str) -> None:
-        self._run("comment", "add", issue_id, "-m", body)
+        self._run("bug", "comment", "new", issue_id, "-m", body)
 
     def set_status(self, issue_id: str, status: str) -> None:
         cmd = "close" if status == "closed" else "open"
-        self._run("status", cmd, issue_id)
+        self._run("bug", "status", cmd, issue_id)
 
     def add_label(self, issue_id: str, label: str) -> None:
-        self._run("label", "add", issue_id, label)
+        self._run("bug", "label", "new", issue_id, label)
 
     def remove_label(self, issue_id: str, label: str) -> None:
-        self._run("label", "remove", issue_id, label)
+        self._run("bug", "label", "rm", issue_id, label)
 
     def sync(self) -> None:
         self._run("pull")

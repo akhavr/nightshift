@@ -1,0 +1,11 @@
+#!/bin/sh
+# Copy read-only credentials to writable HOME so Claude Code can function.
+# The host mounts ~/.claude at /claude-auth:ro for security.
+if [ -d /claude-auth ]; then
+    mkdir -p "$HOME/.claude"
+    cp /claude-auth/.credentials.json "$HOME/.claude/" 2>/dev/null || true
+    cp /claude-auth/settings.json "$HOME/.claude/" 2>/dev/null || true
+    cp /claude-auth/settings.local.json "$HOME/.claude/" 2>/dev/null || true
+fi
+
+exec python3 /opt/agent-worker/entrypoint.py "$@"
