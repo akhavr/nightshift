@@ -35,6 +35,7 @@ class ClaudeCodeAgent:
         self._process: subprocess.Popen | None = None
         self._last_event: float = 0
         self._session_id: str | None = None
+        self._extra_events: list[AgentEvent] = []
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         cmd = [
@@ -58,12 +59,19 @@ class ClaudeCodeAgent:
     def stream_events(self) -> Iterator[AgentEvent]:
         if not self._process:
             return
+        self._extra_events.clear()
         stdout = self._process.stdout
         while True:
+            # Drain any extra events from multi-part assistant messages
+            while self._extra_events:
+                yield self._extra_events.pop(0)
+
             if self._process.poll() is not None:
                 for line in stdout:
                     ev = self._parse(line.rstrip("\n"))
                     if ev: yield ev
+                    while self._extra_events:
+                        yield self._extra_events.pop(0)
                 yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
                 return
 
@@ -106,40 +114,100 @@ class ClaudeCodeAgent:
         return self._pid
 
     def _parse(self, raw: str) -> Optional[AgentEvent]:
+        """Parse a stream-json line into an AgentEvent.
+
+        OQ-2 RESOLVED: Verified schema against Claude Code 2.1.70.
+
+        Real event types (one JSON object per line):
+          system (subtype=init)  → {session_id, tools, model, ...}
+          assistant              → {message: {content: [{type, ...}]}}
+                                   content items: "text", "tool_use", "thinking"
+          user                   → {message: {content: [{type: "tool_result", ...}]}}
+          result                 → {subtype: "success"/"error", result: str}
+          rate_limit_event       → {rate_limit_info: ...} (ignored)
+        """
         if not raw.strip(): return None
         try: ev = json.loads(raw)
         except json.JSONDecodeError: return None
         t = ev.get("type", "")
-        # Extract session_id from init event (OQ-1: needed for --resume)
+
+        # --- system (subtype=init) ---
         if t == "system" and ev.get("subtype") == "init":
             sid = ev.get("session_id")
             if sid:
                 self._session_id = sid
                 log.info(f"Session ID: {sid}")
             return AgentEvent(type=AgentEventType.SYSTEM,
-                              content=ev.get("message", "init"), raw=raw)
-        # OQ-2: These field names are assumed. Verify against real output.
+                              content="init", raw=raw)
+
+        # --- assistant: contains text, tool_use, and/or thinking ---
         if t == "assistant":
-            # stream-json nests content in message.content array
             msg = ev.get("message", {})
             content_parts = msg.get("content", []) if isinstance(msg, dict) else []
-            text = ""
+            events = list(self._parse_assistant_content(content_parts, raw))
+            # Yield the first event; caller gets the rest via _extra_events
+            if events:
+                self._extra_events.extend(events[1:])
+                return events[0]
+            return None
+
+        # --- user: tool results ---
+        if t == "user":
+            msg = ev.get("message", {})
+            content_parts = msg.get("content", []) if isinstance(msg, dict) else []
             for part in content_parts:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text += part.get("text", "")
-            if not text:
-                text = ev.get("content", "")
-            return AgentEvent(type=AgentEventType.TEXT, content=text, raw=raw)
-        elif t == "tool_use":
-            return AgentEvent(type=AgentEventType.TOOL_CALL,
-                              content=f"{ev.get('tool','?')}: {str(ev.get('input',''))[:300]}", raw=raw)
-        elif t == "tool_result":
-            return AgentEvent(type=AgentEventType.TOOL_RESULT,
-                              content=str(ev.get("content",""))[:200], raw=raw)
-        elif t == "result":
+                if isinstance(part, dict) and part.get("type") == "tool_result":
+                    result_content = part.get("content", "")
+                    if isinstance(result_content, list):
+                        # Content can be a list of {type: "text", text: ...}
+                        result_content = " ".join(
+                            p.get("text", "") for p in result_content
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        )
+                    return AgentEvent(
+                        type=AgentEventType.TOOL_RESULT,
+                        content=str(result_content)[:500], raw=raw)
+            return None
+
+        # --- result: session complete ---
+        if t == "result":
             return AgentEvent(type=AgentEventType.SYSTEM,
                               content=ev.get("result", ""), raw=raw)
-        elif t == "system":
+
+        # --- rate_limit_event: skip ---
+        if t == "rate_limit_event":
+            return None
+
+        # --- system (other subtypes) ---
+        if t == "system":
             return AgentEvent(type=AgentEventType.SYSTEM,
                               content=ev.get("message", ""), raw=raw)
+
         return AgentEvent(type=AgentEventType.UNKNOWN, raw=raw)
+
+    def _parse_assistant_content(
+        self, content_parts: list, raw: str,
+    ) -> Iterator[AgentEvent]:
+        """Parse the content array from an assistant message.
+
+        A single assistant event can contain multiple content items:
+        text, tool_use, and thinking blocks. We yield separate AgentEvents
+        for each so the session runner can handle them independently.
+        """
+        for part in content_parts:
+            if not isinstance(part, dict):
+                continue
+            pt = part.get("type", "")
+            if pt == "text":
+                text = part.get("text", "")
+                if text:
+                    yield AgentEvent(
+                        type=AgentEventType.TEXT, content=text, raw=raw)
+            elif pt == "tool_use":
+                name = part.get("name", "?")
+                inp = str(part.get("input", ""))[:300]
+                yield AgentEvent(
+                    type=AgentEventType.TOOL_CALL,
+                    content=f"{name}: {inp}", raw=raw)
+            elif pt == "thinking":
+                pass  # internal reasoning, not surfaced

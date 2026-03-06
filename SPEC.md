@@ -28,21 +28,26 @@ See `tests/oq1_results.txt` and `tests/oq1_stdin_test.py` for test details.
 
 ---
 
-**OQ-2: CODER PREREQUISITE — What is the actual `--output-format stream-json` schema?**
+**OQ-2: RESOLVED — stream-json schema verified against Claude Code 2.1.70.**
 
-The stream processor assumes events like `{"type": "assistant", "content": "..."}`.
-The real field names, nesting, and event types are unverified. A schema mismatch
-will cause silent data loss or parse crashes.
+Captured with `claude --dangerously-skip-permissions --verbose --output-format stream-json -p`.
+One JSON object per line. Event types:
 
-Test:
-```bash
-claude --dangerously-skip-permissions --output-format stream-json \
-  -p "List 3 files in the current directory" 2>/dev/null | head -50
-```
+| `type` | Structure | Maps to |
+|--------|-----------|---------|
+| `system` (subtype=`init`) | `{session_id, tools, model, ...}` | `SYSTEM` |
+| `assistant` | `{message: {content: [{type: "text"/"tool_use"/"thinking", ...}]}}` | `TEXT`, `TOOL_CALL` |
+| `user` | `{message: {content: [{type: "tool_result", content: str/list}]}}` | `TOOL_RESULT` |
+| `result` | `{subtype: "success"/"error", result: str, session_id}` | `SYSTEM` |
+| `rate_limit_event` | `{rate_limit_info: ...}` | ignored |
 
-Capture the output. Update `adapters/agents/claude_code.py._parse_line()`.
+Key differences from original assumptions:
+- `assistant` events carry a `message.content` array with mixed types (text + tool_use + thinking in one event)
+- There is no separate `tool_use` or `tool_result` top-level type — tool calls are inside `assistant`, results inside `user`
+- `thinking` blocks appear in the content array (ignored by parser)
+- `--verbose` flag is required for stream-json output with `-p`
 
-**Do this second. 30 min. Needed before stream processor works.**
+Fixture: `tests/fixtures_stream_json.jsonl`. Tests: `tests/test_stream_parser.py`.
 
 ---
 
