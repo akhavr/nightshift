@@ -67,32 +67,20 @@ def main():
             print(f"Resuming session for {short_id}")
 
         workspace_mount = str(wt_path)
-    else:
-        # directory mode — just use a subdirectory
-        workspace_mount = str(repo / config.workspace.root / f"agent-{short_id}")
-        if not args.resume:
-            session_dir.mkdir(parents=True, exist_ok=True)
-            Path(workspace_mount).mkdir(parents=True, exist_ok=True)
-            (session_dir / "state.json").write_text(json.dumps({
-                "issue_id": issue_id, "branch": "",
-                "status": "starting", "step": 0,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "checkpoints": [], "human_answers": [],
-            }, indent=2))
 
-    # Auth mounts (OQ-5: verified paths)
+    # Auth mounts — read-only, copied to writable HOME by docker-entrypoint.sh
     home = Path.home()
     auth_mounts = []
     if (home / ".claude").is_dir():
-        auth_mounts += ["-v", f"{home / '.claude'}:/root/.claude:ro"]
+        auth_mounts += ["-v", f"{home / '.claude'}:/claude-auth:ro"]
     if (home / ".claude.json").exists():
-        auth_mounts += ["-v", f"{home / '.claude.json'}:/root/.claude.json:ro"]
+        auth_mounts += ["-v", f"{home / '.claude.json'}:/home/agent/.claude.json:ro"]
 
     # Build env vars for notifications (pass through from host)
     notify_env = []
     for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
                 "NOTIFY_WEBHOOK_URL", "SLACK_WEBHOOK",
-                "ANTHROPIC_API_KEY", "LINEAR_API_KEY", "GITHUB_TOKEN"):
+                "ANTHROPIC_API_KEY", "GITHUB_TOKEN"):
         val = os.environ.get(var, "")
         if val:
             notify_env += ["-e", f"{var}={val}"]
@@ -100,13 +88,13 @@ def main():
     docker_cmd = [
         "docker", "run", "--rm", "-it",
         "--name", f"agent-worker-{short_id}",
+        "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
         "-v", f"{repo / '.git'}:/repo-git:ro",
         # Mount WORKFLOW.md so container can read it
         "-v", f"{repo / 'WORKFLOW.md'}:/workspace/WORKFLOW.md:ro",
         *auth_mounts,
-        "-v", f"{home / '.gitconfig'}:/root/.gitconfig:ro",
         "-e", f"ISSUE_ID={issue_id}",
         "-e", f"RESUME={'--resume' if args.resume else ''}",
         "-e", f"MAX_TURNS={max_turns}",
