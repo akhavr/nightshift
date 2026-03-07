@@ -193,6 +193,10 @@ class SessionRunner:
             self._on_waiting()
 
     def _handle_text(self, text: str) -> str | None:
+        # Extract multiline question content: everything between
+        # @@QUESTION@@ and the next marker (@@WAITING@@, @@DONE@@, etc.)
+        question_content = self._extract_question(text)
+
         for line in text.splitlines():
             marker = parse_marker(line)
             if not marker:
@@ -211,7 +215,7 @@ class SessionRunner:
                     self.issue.id, f"📌 Checkpoint {step}: {marker.content}")
 
             elif marker.type == MarkerType.QUESTION:
-                self._on_question(marker.content)
+                self._on_question(question_content or marker.content)
                 return "QUESTION_ASKED"
 
             elif marker.type == MarkerType.WAITING:
@@ -222,6 +226,23 @@ class SessionRunner:
                 return "STOP"
 
         return None
+
+    @staticmethod
+    def _extract_question(text: str) -> str | None:
+        """Extract multiline content between @@QUESTION@@ and the next marker."""
+        q_token = "@@QUESTION@@"
+        idx = text.find(q_token)
+        if idx == -1:
+            return None
+        after = text[idx + len(q_token):]
+        # Find next marker
+        markers = ("@@LOG@@", "@@CHECKPOINT@@", "@@WAITING@@", "@@DONE@@")
+        end = len(after)
+        for m in markers:
+            pos = after.find(m)
+            if pos != -1 and pos < end:
+                end = pos
+        return after[:end].strip()
 
     def _on_question(self, question: str):
         step = self.state_mgr.load_state().step
