@@ -61,6 +61,12 @@ All mitigations covered by `tests/test_marker_reliability.py`:
 `_pending_questions` is a `list[str]`. Each `@@QUESTION@@` appends, each
 `@@WAITING@@` pops the oldest. This queues multiple questions correctly.
 
+Question content is multiline: `_extract_question()` captures everything
+between `@@QUESTION@@` and the next marker (`@@WAITING@@`, `@@DONE@@`, etc.).
+This is necessary because the agent often includes code blocks, file paths,
+and context spanning multiple lines. The human only sees the question text
+(via Telegram), so it must be self-contained.
+
 ### Review Gate
 
 `_on_done()` posts proof-of-work and adds `needs-review` label. Merge only
@@ -1937,6 +1943,10 @@ class SessionRunner:
                     break
 
     def _handle_text(self, text: str) -> str | None:
+        # Extract multiline question content: everything between
+        # @@QUESTION@@ and the next marker (@@WAITING@@, @@DONE@@, etc.)
+        question_content = self._extract_question(text)
+
         for line in text.splitlines():
             marker = parse_marker(line)
             if not marker:
@@ -1955,7 +1965,7 @@ class SessionRunner:
                     self.issue.id, f"📌 Checkpoint {step}: {marker.content}")
 
             elif marker.type == MarkerType.QUESTION:
-                self._on_question(marker.content)
+                self._on_question(question_content or marker.content)
                 return "QUESTION_ASKED"
 
             elif marker.type == MarkerType.WAITING:
@@ -1966,6 +1976,23 @@ class SessionRunner:
                 return "STOP"
 
         return None
+
+    @staticmethod
+    def _extract_question(text: str) -> str | None:
+        """Extract multiline content between @@QUESTION@@ and the next marker."""
+        q_token = "@@QUESTION@@"
+        idx = text.find(q_token)
+        if idx == -1:
+            return None
+        after = text[idx + len(q_token):]
+        # Find next marker
+        markers = ("@@LOG@@", "@@CHECKPOINT@@", "@@WAITING@@", "@@DONE@@")
+        end = len(after)
+        for m in markers:
+            pos = after.find(m)
+            if pos != -1 and pos < end:
+                end = pos
+        return after[:end].strip()
 
     def _on_question(self, question: str):
         step = self.state_mgr.load_state().step
