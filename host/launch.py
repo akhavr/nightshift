@@ -11,7 +11,8 @@ from pathlib import Path
 
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.config import load_workflow
+from core.config import load_workflow, create_tracker
+from host.env import load_dotenv
 
 
 def get_repo_root() -> Path:
@@ -31,6 +32,10 @@ def main():
     args = parser.parse_args()
 
     repo = get_repo_root()
+
+    # Load .env BEFORE config so $VAR references in WORKFLOW.md resolve correctly
+    load_dotenv(repo / ".env")
+
     config = load_workflow(args.workflow or repo / "WORKFLOW.md")
 
     issue_id = args.issue_id
@@ -48,10 +53,32 @@ def main():
 
         if not args.resume:
             session_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create branch (may already exist — ignore error)
             subprocess.run(["git", "branch", branch, config.workspace.base_branch],
                            capture_output=True, cwd=str(repo))
-            subprocess.run(["git", "worktree", "add", str(wt_path), branch],
-                           capture_output=True, cwd=str(repo))
+
+            # Create worktree — must succeed
+            result = subprocess.run(
+                ["git", "worktree", "add", str(wt_path), branch],
+                capture_output=True, text=True, cwd=str(repo),
+            )
+            if result.returncode != 0:
+                print(f"Failed to create worktree:\n{result.stderr}", file=sys.stderr)
+                sys.exit(1)
+
+            # Copy .gitignore from repo root if not already in worktree
+            gitignore_src = repo / ".gitignore"
+            gitignore_dst = wt_path / ".gitignore"
+            if gitignore_src.exists() and not gitignore_dst.exists():
+                import shutil
+                shutil.copy2(str(gitignore_src), str(gitignore_dst))
+
+            # Verify worktree has files (not just .git)
+            files = [f for f in wt_path.iterdir() if f.name != ".git"]
+            if not files:
+                print(f"Worktree at {wt_path} is empty — check base_branch in WORKFLOW.md", file=sys.stderr)
+                sys.exit(1)
 
             (session_dir / "state.json").write_text(json.dumps({
                 "issue_id": issue_id, "branch": branch,
@@ -67,6 +94,22 @@ def main():
             print(f"Resuming session for {short_id}")
 
         workspace_mount = str(wt_path)
+
+    # Dump issue data to session dir for the static tracker inside the container
+    tracker = create_tracker(config, repo_dir=str(repo))
+    issue = tracker.get_issue(issue_id)
+    if not issue:
+        print(f"Issue {issue_id} not found", file=sys.stderr)
+        sys.exit(1)
+
+    from dataclasses import asdict
+    (session_dir / "issue.json").write_text(json.dumps(asdict(issue), indent=2))
+
+    all_issues = tracker.list_issues()
+    (session_dir / "issues.json").write_text(
+        json.dumps([asdict(i) for i in all_issues], indent=2)
+    )
+    print(f"Dumped issue + {len(all_issues)} issues to {session_dir}")
 
     # Auth mounts — read-only, copied to writable HOME by docker-entrypoint.sh
     home = Path.home()
@@ -91,11 +134,12 @@ def main():
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
-        "-v", f"{repo / '.git'}:/repo-git:ro",
+        "-v", f"{repo / '.git'}:/repo-git:rw",
         # Mount WORKFLOW.md so container can read it
         "-v", f"{repo / 'WORKFLOW.md'}:/workspace/WORKFLOW.md:ro",
         *auth_mounts,
         "-e", f"ISSUE_ID={issue_id}",
+        "-e", f"SHORT_ID={short_id}",
         "-e", f"RESUME={'--resume' if args.resume else ''}",
         "-e", f"MAX_TURNS={max_turns}",
         *notify_env,

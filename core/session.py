@@ -293,9 +293,8 @@ class SessionRunner:
         self._commit_wip(f"resolve {self.issue.identifier}")
         self.state_mgr.update_status("done:pending-review")
 
-    def _request_review(self, state):
-        """Post proof-of-work and wait for review."""
-        mc = self.merge_config
+    def _notify_done(self, state):
+        """Post proof-of-work summary and notify. Does NOT block."""
         self.state_mgr.update_status("waiting:review")
         diff = self.workspace_mgr.diff_stat(self._workspace.path) if self._workspace else "N/A"
         ticks = "```"
@@ -303,69 +302,14 @@ class SessionRunner:
             f"🏁 **Work complete — awaiting review**\n\n"
             f"**Checkpoints:** {len(state.checkpoints)}\n"
             f"**Q&A exchanges:** {len(state.human_answers)}\n"
-            f"**Changes:**\n{ticks}\n{diff}\n{ticks}\n\n"
-            f"To merge: add label `{mc.review_label}`, "
-            f"reply in Telegram, or run `agent-worker answer <id> approve`.\n"
-            f"To reject: close the issue."
+            f"**Changes:**\n{ticks}\n{diff}\n{ticks}"
         )
         self.tracker.add_comment(self.issue.id, proof)
         self.tracker.add_label(self.issue.id, "needs-review")
         self.tracker.remove_label(self.issue.id, "agent-in-progress")
         self.notifier.notify(
-            f"🏁 {self.issue.identifier} done. Reply to approve or close issue to reject."
+            f"🏁 {self.issue.identifier} done. Review with: cli.py accept/reject {self.issue.identifier}"
         )
-        self.state_mgr.signal_waiting(f"review:{self.issue.id}")
-        self._wait_for_review()
-
-    def _wait_for_review(self):
-        """Poll tracker until review label appears or issue is closed.
-
-        Approval sources:
-        - answer.txt: ANY non-empty content = approval (rejecting = close issue)
-        - Tracker: `review_label` label added to issue
-        - Tracker: issue closed = rejection
-        """
-        mc = self.merge_config
-        while True:
-            # Source 1: answer.txt — any content = approval
-            if a := self.state_mgr.check_answer():
-                if a.strip():  # any non-empty answer = approved
-                    break
-
-            # Source 2: tracker labels/status
-            self.tracker.sync()
-            issue = self.tracker.get_issue(self.issue.id)
-            if not issue:
-                break
-
-            if issue.status in self.terminal_statuses:
-                self.state_mgr.update_status("cancelled:review-rejected")
-                self.tracker.add_comment(self.issue.id, "🛑 Closed without merge.")
-                self.notifier.notify(f"🛑 {self.issue.identifier} closed without merge.")
-                return
-
-            if mc.review_label in issue.labels:
-                break
-
-            time.sleep(ANSWER_POLL_S)
-
-        self.state_mgr.clear_waiting()
-        state = self.state_mgr.load_state()
-        self._do_merge(state)
-
-    def _do_merge(self, state):
-        """Merge and close — after review or with auto-merge."""
-        self.state_mgr.update_status("completed")
-        self.workspace_mgr.finalize(self.issue)
-        self.tracker.set_status(self.issue.id, "closed")
-        self.tracker.add_comment(
-            self.issue.id,
-            f"✅ Merged ({len(state.checkpoints)} checkpoints, "
-            f"{len(state.human_answers)} Q&A).")
-        self.tracker.remove_label(self.issue.id, "agent-in-progress")
-        self.tracker.remove_label(self.issue.id, "needs-review")
-        self.tracker.sync()
-        self.notifier.notify(f"✅ {self.issue.identifier} merged.")
 
     def _collect_answer(self) -> str:
         last_count = len(self.tracker.get_comments(self.issue.id))
@@ -407,18 +351,9 @@ class SessionRunner:
             return answer
 
         if st.status == "done:pending-review":
-            # Agent completed. Now handle review gate (agent is terminated,
-            # so blocking here is safe — no stdout buffer deadlock).
-            state = st
-            mc = self.merge_config
-            skip_review = (
-                not mc.require_review
-                or mc.auto_merge_label in self.issue.labels
-            )
-            if skip_review:
-                self._do_merge(state)
-            else:
-                self._request_review(state)
+            # Post proof-of-work and notify, then exit.
+            # Review/merge is handled by the host (cli.py accept/reject).
+            self._notify_done(st)
             return None
 
         if st.status in ("completed", "cancelled:review-rejected"):

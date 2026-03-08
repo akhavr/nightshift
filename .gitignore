@@ -1,0 +1,7 @@
+# Agent Worker
+.env
+.worktrees/
+.agent-worker/
+__pycache__/
+*.pyc
+.venv/

@@ -140,8 +140,8 @@ def test_exit_without_done_never_auto_merges(tmp_path, tmp_session, issue):
 # --- @@DONE@@ goes through review gate ---
 
 def test_done_triggers_review(tmp_path, tmp_session, issue):
-    """@@DONE@@ sets status to done:pending-review. With require_review=True,
-    review must be approved before merge."""
+    """@@DONE@@ sets status to waiting:review and notifies. Container exits
+    without blocking — review/merge is handled by the host."""
     agent = MockAgent(events=[
         AgentEvent(type=AgentEventType.TEXT, content="@@DONE@@"),
         AgentEvent(type=AgentEventType.PROCESS_EXIT),
@@ -151,20 +151,18 @@ def test_done_triggers_review(tmp_path, tmp_session, issue):
         merge_config=MergeConfig(require_review=True),
     )
 
-    # Write an approval answer so review doesn't block forever
-    (tmp_session.session_dir / "answer.txt").write_text("approved")
-
     runner.run()
 
     st = tmp_session.load_state()
-    assert st.status == "completed"
+    assert st.status == "waiting:review"
     # Should have posted review comment
     comments = tracker.comments.get(issue.id, [])
     assert any("awaiting review" in c.body for c in comments)
 
 
-def test_done_with_auto_merge_skips_review(tmp_path, tmp_session, issue):
-    """With auto-merge label, @@DONE@@ merges without review."""
+def test_done_with_auto_merge_label_still_exits(tmp_path, tmp_session, issue):
+    """Even with auto-merge label, container exits with waiting:review.
+    Merge is always handled by the host."""
     issue.labels = ["auto-merge"]
     agent = MockAgent(events=[
         AgentEvent(type=AgentEventType.TEXT, content="@@DONE@@"),
@@ -177,7 +175,7 @@ def test_done_with_auto_merge_skips_review(tmp_path, tmp_session, issue):
     runner.run()
 
     st = tmp_session.load_state()
-    assert st.status == "completed"
+    assert st.status == "waiting:review"
 
 
 # --- Markers in tool results are ignored ---

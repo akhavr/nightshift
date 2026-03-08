@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
+from host.env import load_dotenv
 
 
 def repo_root() -> Path:
@@ -95,23 +96,249 @@ def cmd_history(a):
             continue
 
 
+DEFAULT_WORKFLOW_MD = """\
+---
+agent:
+  kind: claude-code
+  max_turns: 50
+  stall_timeout_s: 300
+  extra_args: []
+
+tracker:
+  kind: git-bug
+
+workspace:
+  kind: worktree
+  base_branch: main
+  root: .worktrees
+
+notifications:
+  - kind: telegram
+    token: $TELEGRAM_BOT_TOKEN
+    chat_id: $TELEGRAM_CHAT_ID
+
+merge:
+  require_review: true
+  review_label: reviewed
+  auto_merge_label: auto-merge
+
+hooks:
+  after_create: |
+    echo "Workspace created"
+  before_run: |
+    echo "Starting agent run"
+  after_run: |
+    echo "Agent run finished"
+  timeout_s: 60
+
+terminal_statuses:
+  - closed
+---
+
+You are working on the following issue:
+
+**Title:** {{ issue.title }}
+**Description:**
+{{ issue.body }}
+
+{% if attempt %}
+This is continuation attempt {{ attempt }}. Review previous work and continue.
+{% endif %}
+
+**Related previous issues:**
+{{ related_context }}
+
+RULES:
+1. Work on the current branch. The repo is already checked out.
+2. For every significant thought: @@LOG@@ <your thought>
+3. After meaningful work: @@CHECKPOINT@@ <description>
+4. If you have a blocking question:
+   a. Include all relevant context IN the question itself (code snippets,
+      file paths, what you did, options you see) — the human reads ONLY
+      the question text, they cannot see your other output.
+   b. Output: @@QUESTION@@ <your self-contained question>
+   c. Then output: @@WAITING@@
+   d. The answer will appear as your next input.
+5. When done: @@DONE@@
+6. Commit frequently. Write tests where appropriate.
+
+Begin by reading the codebase, then plan your approach.
+"""
+
+DEFAULT_ENV_EXAMPLE = """\
+# Agent Worker environment variables
+# Copy this file to .env and fill in your values.
+
+# Telegram notifications (optional)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+
+# Anthropic API key (if not using Claude Code OAuth)
+# ANTHROPIC_API_KEY=
+
+# GitHub token (for GitHub Issues tracker)
+# GITHUB_TOKEN=
+"""
+
+
+def cmd_init(a):
+    """Scaffold WORKFLOW.md and .env.example in the current repo."""
+    try:
+        root = repo_root()
+    except subprocess.CalledProcessError:
+        print("Not inside a git repository.", file=sys.stderr)
+        sys.exit(1)
+
+    # WORKFLOW.md
+    wf = root / "WORKFLOW.md"
+    if wf.exists() and not a.force:
+        print(f"WORKFLOW.md already exists at {wf}. Use --force to overwrite.")
+    else:
+        wf.write_text(DEFAULT_WORKFLOW_MD)
+        print(f"Created {wf}")
+
+    # .env.example
+    env_example = root / ".env.example"
+    if env_example.exists() and not a.force:
+        print(f".env.example already exists. Use --force to overwrite.")
+    else:
+        env_example.write_text(DEFAULT_ENV_EXAMPLE)
+        print(f"Created {env_example}")
+
+    # Create .agent-worker directory
+    aw_dir = root / ".agent-worker" / "sessions"
+    aw_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Created {aw_dir.parent}")
+
+    # Add .env to .gitignore if not already there
+    gitignore = root / ".gitignore"
+    lines = gitignore.read_text().splitlines() if gitignore.exists() else []
+    entries_to_add = []
+    for entry in [".env", ".worktrees/", ".agent-worker/"]:
+        if entry not in lines:
+            entries_to_add.append(entry)
+    if entries_to_add:
+        with gitignore.open("a") as f:
+            if lines and lines[-1] != "":
+                f.write("\n")
+            f.write("# Agent Worker\n")
+            for entry in entries_to_add:
+                f.write(entry + "\n")
+        print(f"Added {', '.join(entries_to_add)} to .gitignore")
+    else:
+        print(".gitignore already has agent-worker entries")
+
+    print("\nNext steps:")
+    print("  1. cp .env.example .env && edit .env with your credentials")
+    print("  2. Review and customize WORKFLOW.md")
+    print("  3. Run: agent-worker start <issue-id>")
+
+
+def cmd_accept(a):
+    """Merge agent branch into base branch, then clean up."""
+    r = repo_root()
+    sid = a.issue_id[:12]
+    config = load_workflow(r / "WORKFLOW.md")
+    branch = f"agent/{sid}"
+    base = config.workspace.base_branch
+
+    # Check branch exists
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", branch],
+        capture_output=True, cwd=str(r),
+    )
+    if result.returncode != 0:
+        print(f"Branch {branch} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Show what will be merged
+    subprocess.run(["git", "log", "--oneline", f"{base}..{branch}"], cwd=str(r))
+    subprocess.run(["git", "diff", "--stat", f"{base}..{branch}"], cwd=str(r))
+
+    # Merge
+    result = subprocess.run(
+        ["git", "merge", "--no-ff", branch, "-m", f"Merge {branch}: agent work on {a.issue_id}"],
+        capture_output=True, text=True, cwd=str(r),
+    )
+    if result.returncode != 0:
+        print(f"Merge failed:\n{result.stderr}", file=sys.stderr)
+        print("Resolve conflicts manually, then run cleanup.")
+        sys.exit(1)
+
+    print(f"Merged {branch} into {base}")
+
+    wt = r / config.workspace.root / f"agent-{sid}"
+    _remove_worktree(r, wt, branch)
+
+    print(f"Accepted and cleaned up {sid}")
+
+
+def _force_remove_dir(path: Path):
+    """Remove a directory, handling root-owned files from Docker."""
+    import shutil
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        # Docker may have created files as root
+        subprocess.run(["docker", "run", "--rm",
+                        "-v", f"{path}:/cleanup:rw",
+                        "ubuntu:24.04", "rm", "-rf", "/cleanup"],
+                       capture_output=True)
+        # Now try again — the mount point itself should be removable
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+
+
+def _remove_worktree(repo: Path, wt: Path, branch: str):
+    """Remove worktree and branch, handling broken .git and root-owned files."""
+    if wt.exists():
+        result = subprocess.run(
+            ["git", "worktree", "remove", str(wt), "--force"],
+            capture_output=True, cwd=str(repo),
+        )
+        if result.returncode != 0:
+            # Worktree remove failed (e.g. .git file missing) — force remove dir
+            _force_remove_dir(wt)
+    subprocess.run(["git", "worktree", "prune"], capture_output=True, cwd=str(repo))
+    subprocess.run(["git", "branch", "-D", branch], capture_output=True, cwd=str(repo))
+
+
+def cmd_reject(a):
+    """Discard agent work: remove worktree, branch, and session."""
+    r = repo_root()
+    sid = a.issue_id[:12]
+    config = load_workflow(r / "WORKFLOW.md")
+    branch = f"agent/{sid}"
+
+    # Show what will be discarded
+    result = subprocess.run(
+        ["git", "log", "--oneline", f"{config.workspace.base_branch}..{branch}"],
+        capture_output=True, text=True, cwd=str(r),
+    )
+    if result.stdout.strip():
+        print(f"Discarding commits:\n{result.stdout.strip()}")
+
+    wt = r / config.workspace.root / f"agent-{sid}"
+    _remove_worktree(r, wt, branch)
+
+    # Remove session
+    ss = sessions_dir() / sid
+    if ss.exists():
+        import shutil
+        shutil.rmtree(ss)
+
+    print(f"Rejected and cleaned up {sid}")
+
+
 def cmd_cleanup(a):
     r = repo_root()
     sid = a.issue_id[:12]
-
-    # Read config to know workspace kind
     config = load_workflow(r / "WORKFLOW.md")
 
-    if config.workspace.kind == "worktree":
-        wt = r / config.workspace.root / f"agent-{sid}"
-        if wt.exists():
-            subprocess.run(["git", "worktree", "remove", str(wt), "--force"])
-        subprocess.run(["git", "branch", "-D", f"agent/{sid}"], capture_output=True)
-    else:
-        import shutil
-        ws = r / config.workspace.root / f"agent-{sid}"
-        if ws.exists():
-            shutil.rmtree(ws)
+    wt = r / config.workspace.root / f"agent-{sid}"
+    _remove_worktree(r, wt, f"agent/{sid}")
 
     ss = sessions_dir() / sid
     if ss.exists() and not a.keep_session:
@@ -121,6 +348,12 @@ def cmd_cleanup(a):
 
 
 def main():
+    # Load .env early so all commands see credentials
+    try:
+        load_dotenv(repo_root() / ".env")
+    except subprocess.CalledProcessError:
+        pass  # Not in a git repo (e.g. --help)
+
     p = argparse.ArgumentParser(prog="agent-worker")
     p.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
     s = p.add_subparsers(dest="cmd", required=True)
@@ -152,6 +385,18 @@ def main():
     sp = s.add_parser("history")
     sp.add_argument("issue_id")
     sp.set_defaults(func=cmd_history)
+
+    sp = s.add_parser("init", help="Scaffold WORKFLOW.md and .env.example")
+    sp.add_argument("--force", action="store_true", help="Overwrite existing files")
+    sp.set_defaults(func=cmd_init)
+
+    sp = s.add_parser("accept", help="Merge agent work into base branch")
+    sp.add_argument("issue_id")
+    sp.set_defaults(func=cmd_accept)
+
+    sp = s.add_parser("reject", help="Discard agent work and clean up")
+    sp.add_argument("issue_id")
+    sp.set_defaults(func=cmd_reject)
 
     sp = s.add_parser("cleanup")
     sp.add_argument("issue_id")

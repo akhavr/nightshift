@@ -13,9 +13,13 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from host.env import load_dotenv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [watcher] %(message)s")
 log = logging.getLogger("watcher")
@@ -227,6 +231,17 @@ def main():
     p = argparse.ArgumentParser(description="Host watcher — pause/unpause containers")
     p.add_argument("--sessions-dir", required=True, help=".agent-worker/sessions path")
     a = p.parse_args()
+
+    # Load .env from repo root (does not override existing env vars)
+    try:
+        repo = Path(subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip())
+        load_dotenv(repo / ".env")
+    except subprocess.CalledProcessError:
+        pass  # Not in a git repo — skip .env loading
+
     HostWatcher(Path(a.sessions_dir)).run()
 
 if __name__ == "__main__":

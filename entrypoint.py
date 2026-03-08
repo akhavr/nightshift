@@ -45,8 +45,9 @@ def main():
     # Override max_turns from env if set (CLI takes precedence over WORKFLOW.md)
     max_turns = int(os.environ.get("MAX_TURNS", config.agent.max_turns))
 
-    # Instantiate adapters from config
-    tracker = create_tracker(config, repo_dir="/workspace")
+    # Use static tracker inside container (issue data pre-dumped by host)
+    from adapters.trackers.static import StaticTracker
+    tracker = StaticTracker(session_dir="/session")
     agent = create_agent(config)
 
     # Inside the container, /workspace is already set up by the host
