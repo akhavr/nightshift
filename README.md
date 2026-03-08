@@ -1,6 +1,6 @@
 # Nightshift
 
-Autonomous coding agent runner — pluggable agent, tracker, notifier, and workspace adapters.
+Autonomous coding agent runner — pluggable agent, tracker, notifier, and workspace adapters. Inspired by [OpenAI Symphony](https://github.com/openai/symphony).
 
 See [SPEC.md](SPEC.md) for the full implementation specification with design decisions.
 
