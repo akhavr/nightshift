@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Agent Worker is an autonomous coding agent runner. It launches a coding agent (e.g. Claude Code) inside a Docker container against an issue from a tracker (e.g. git-bug), manages the session lifecycle (checkpoints, Q&A, resume on context limits), and merges results after human review.
+Nightshift (agent-worker) is an autonomous coding agent runner. It launches a coding agent (e.g. Claude Code) inside a Docker container against an issue from a tracker (e.g. git-bug), manages the session lifecycle (checkpoints, Q&A, resume on context limits), and handles review/merge via the host CLI.
 
 ## Commands
 
@@ -12,23 +12,22 @@ Agent Worker is an autonomous coding agent runner. It launches a coding agent (e
 # Build Docker image
 docker build -t agent-worker:latest .
 
-# Launch a worker on an issue (creates worktree on host, runs container)
-python host/launch.py <issue-id>
-
-# Resume a suspended session
-python host/launch.py <issue-id> --resume
-
-# CLI (wraps launch.py)
-python host/cli.py start <issue-id>
-python host/cli.py resume <issue-id>
+# CLI commands
+python host/cli.py init                          # scaffold WORKFLOW.md, .env.example, .agent-worker/
+python host/cli.py start <issue-id>              # create worktree + session, launch container
+python host/cli.py resume <issue-id>             # resume a suspended session
 python host/cli.py answer <issue-id> "your answer"
-python host/cli.py status
-python host/cli.py logs <issue-id>
-python host/cli.py history <issue-id>
-python host/cli.py cleanup <issue-id>
+python host/cli.py status                        # show all session statuses
+python host/cli.py logs <issue-id>               # tail raw agent output
+python host/cli.py history <issue-id>            # conversation timeline
+python host/cli.py accept <issue-id>             # merge agent branch into base, clean up
+python host/cli.py reject <issue-id>             # discard agent work, remove worktree + session
+python host/cli.py cleanup <issue-id>            # remove worktree (optionally keep session)
+python host/cli.py watcher                       # start host watcher (pause/unpause, Telegram)
 
-# Start host watcher (pauses idle containers, polls Telegram)
-python host/watcher.py --sessions-dir .agent-worker/sessions
+# Direct launch (cli.py start wraps this)
+python host/launch.py <issue-id>
+python host/launch.py <issue-id> --resume
 
 # Run tests
 .venv/bin/python -m pytest tests/
@@ -51,54 +50,58 @@ The system has a strict three-layer split:
 
 Key core modules:
 - `config.py` — Parses `WORKFLOW.md` YAML front matter into typed dataclasses. Contains adapter registries and factory functions (`create_agent`, `create_tracker`, etc.) that use `importlib` for dynamic instantiation.
-- `session.py` — `SessionRunner`: the main event loop. Streams agent events, handles markers (`@@LOG@@`, `@@CHECKPOINT@@`, `@@QUESTION@@`, `@@WAITING@@`, `@@DONE@@`), manages auto-resume on context limits/stalls, and orchestrates the review/merge gate.
+- `session.py` — `SessionRunner`: the main event loop. Streams agent events, handles markers (`@@LOG@@`, `@@CHECKPOINT@@`, `@@QUESTION@@`, `@@WAITING@@`, `@@DONE@@`), manages auto-resume on context limits/stalls. On `@@DONE@@`, posts proof-of-work summary and exits (review/merge handled by host CLI).
 - `state.py` — `StateManager`: atomic JSON state persistence in `/session/`. Files: `state.json`, `conversation.jsonl`, `raw-output.log`, `resume-prompt.md`, `waiting.json`, `answer.txt`.
 - `prompts.py` — Jinja2 template rendering for WORKFLOW.md prompt body, plus fallback prompt builder.
 - `search.py` — Keyword-based related issue search across any tracker.
 
 **`adapters/`** — Concrete implementations organized by concern:
 - `agents/` — `ClaudeCodeAgent` (fire-and-forget `-p` mode, `--resume` for multi-turn, parses `--output-format stream-json`), `CodexAgent` (stub)
-- `trackers/` — `GitBugTracker` (shells out to `git-bug` CLI, v0.10.1 syntax), `GitHubIssuesTracker` (stub)
+- `trackers/` — `GitBugTracker` (shells out to `git-bug` CLI, v0.10.1 syntax), `StaticTracker` (read-only, reads pre-dumped JSON from session dir — used inside containers)
 - `notifiers/` — `TelegramNotifier` (force_reply Q&A with polling thread), `WebhookNotifier`, `CompositeNotifier` (broadcasts to all, Q&A through primary)
-- `workspaces/` — `GitWorktreeManager` (creates git worktrees per issue, host-side), `DirectoryManager` (works in-place, used inside containers)
+- `workspaces/` — `GitWorktreeManager` (creates git worktrees per issue, host-side)
 
 **`host/`** — Host-side scripts (run outside Docker):
-- `launch.py` — Creates worktree + session dir, builds `docker run` command with volume mounts (workspace, session, auth, WORKFLOW.md), then `execvp` into Docker.
+- `cli.py` — User-facing CLI: init, start, resume, answer, status, logs, history, accept, reject, cleanup, watcher.
+- `launch.py` — Loads `.env`, creates worktree + session dir, dumps issue data to JSON (for StaticTracker), builds `docker run` command with volume mounts, then `execvp` into Docker.
 - `watcher.py` — Polls session dirs for `waiting.json`, pauses Docker containers, writes `answer.txt` on Telegram reply or CLI input, then unpauses. Zero tracker coupling.
-- `cli.py` — User-facing CLI that delegates to launch.py/watcher.py.
+- `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.py.
 
-**`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, instantiates adapters via config factories, runs `SessionRunner`.
+**`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, runs `SessionRunner`.
 
 ## Key Design Patterns
 
 - **Adapter registration**: `core/config.py` has `AGENT_REGISTRY`, `TRACKER_REGISTRY`, etc. mapping `kind` strings to `(module_path, class_name)` tuples. New adapters: add entry to registry + implement the Protocol.
-- **WORKFLOW.md**: YAML front matter configures adapters, merge policy, hooks. The markdown body after `---` is the Jinja2 prompt template. `$VAR` references in YAML are resolved from environment variables.
+- **WORKFLOW.md**: YAML front matter configures adapters, merge policy, hooks. The markdown body after `---` is the Jinja2 prompt template. `$VAR` references in YAML are resolved from environment variables. `.env` is loaded BEFORE WORKFLOW.md parsing.
+- **StaticTracker pattern**: Host dumps issue data to `issue.json` and `issues.json` in the session dir. Container reads them via `StaticTracker`. Write operations (comments, labels) are logged but no-op inside the container.
 - **Container-host communication**: Exclusively via shared files in the session directory (`/session/` inside container, `.agent-worker/sessions/<id>/` on host). No network calls between container and host.
 - **Q&A flow**: Agent outputs `@@QUESTION@@` then `@@WAITING@@` (or exits — 30s timeout auto-triggers waiting). Container writes `waiting.json`. Host watcher pauses the container. Answer arrives via Telegram reply, tracker comment, or `cli.py answer`. Written to `answer.txt`. Container unpaused. Agent restarted with `--resume` and answer as prompt (no stdin — `-p` mode is fire-and-forget).
 - **Auto-resume**: On context limit, stall, or max-turns, `SessionRunner` builds a resume prompt with checkpoint history and recent conversation, then restarts the agent in a loop (up to `MAX_RESUMES=10`).
+- **Review/merge lifecycle**: Container exits after `@@DONE@@` with status `waiting:review`. Host user runs `cli.py accept <id>` to merge or `cli.py reject <id>` to discard.
 
 ## Testing
 
 Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). Test directories exist for `tests/adapters/` and `tests/integration/` but have no test files yet.
 
-Current test files: `test_stream_parser.py` (11 tests, Claude Code stream-json parsing), `test_marker_reliability.py` (13 tests, marker failure modes), `oq1_stdin_test.py` (3 tests, CLI behavior verification).
+Current test files: `test_stream_parser.py` (Claude Code stream-json parsing), `test_marker_reliability.py` (marker failure modes), `oq1_stdin_test.py` (CLI behavior verification), `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`.
 
 ## Docker
 
-The container runs as non-root user `agent` (Claude Code refuses `--dangerously-skip-permissions` as root). Auth credentials are mounted read-only at `/claude-auth` and copied to a writable HOME by `docker-entrypoint.sh`.
+The container runs with `--user $(id -u):$(id -g)` matching the host UID so it can read `600`-permission credential files. Auth credentials are mounted read-only at `/claude-auth` and copied to a writable HOME by `docker-entrypoint.sh`.
 
 Key Docker run pattern:
 ```bash
 docker run --rm --user $(id -u):$(id -g) \
   -v <worktree>:/workspace:rw \
   -v <session-dir>:/session:rw \
+  -v <repo>/.git:/repo-git:rw \
   -v ~/.claude:/claude-auth:ro \
-  -e ISSUE_ID=<id> \
-  -e HOME=/tmp/agent-home \
+  -v <repo>/WORKFLOW.md:/workspace/WORKFLOW.md:ro \
+  -e ISSUE_ID=<id> -e SHORT_ID=<short-id> \
   agent-worker:latest
 ```
 
-The `--user` flag must match the host UID so the container can read the `600`-permission credentials file. The host creates the git worktree; the container uses `DirectoryManager` to work in-place (no worktree creation inside the container).
+`docker-entrypoint.sh` rewrites the worktree `.git` pointer to use container paths (`/repo-git/worktrees/agent-<short-id>`), enabling git operations inside the container.
 
 ## git-bug
 
@@ -106,4 +109,4 @@ The adapter targets git-bug v0.10.1. Commands are under the `bug` subcommand: `g
 
 ## Dependencies
 
-Python 3.12+. Runtime: `requests`, `pyyaml`, `jinja2`. The Docker image also installs `git-bug` v0.10.1 and `@anthropic-ai/claude-code` 2.1.70 (npm).
+Python 3.12+. Runtime: `requests`, `pyyaml`, `jinja2`. The Docker image also installs `git-bug` v0.10.1 and `@anthropic-ai/claude-code` (npm).
