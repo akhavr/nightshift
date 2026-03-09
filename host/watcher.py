@@ -409,7 +409,7 @@ class HostWatcher:
                             self._tg_ack(msg.get("message_id"), matched_sid)
 
         except Exception as e:
-            log.warning(f"Telegram poll: {e}")
+            log.debug(f"Telegram poll: {e}")
 
         return qa, reviews
 
