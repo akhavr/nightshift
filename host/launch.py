@@ -28,7 +28,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
-    parser.add_argument("--image", default="agent-worker:latest", help="Docker image")
+    parser.add_argument("--image", default="nightshift:latest", help="Docker image")
     args = parser.parse_args()
 
     repo = get_repo_root()
@@ -43,7 +43,7 @@ def main():
     max_turns = args.max_turns or config.agent.max_turns
 
     # Session dir (always under repo)
-    session_dir = repo / ".agent-worker" / "sessions" / short_id
+    session_dir = repo / ".nightshift" / "sessions" / short_id
     branch = f"agent/{short_id}"
 
     # Create workspace based on config
@@ -130,7 +130,7 @@ def main():
 
     docker_cmd = [
         "docker", "run", "--rm", "-it",
-        "--name", f"agent-worker-{short_id}",
+        "--name", f"nightshift-{short_id}",
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
@@ -154,7 +154,7 @@ def main():
         docker_cmd.insert(-1, "-e")
         docker_cmd.insert(-1, "SSH_AUTH_SOCK=/ssh-agent")
 
-    print(f"Launching container agent-worker-{short_id}...")
+    print(f"Launching container nightshift-{short_id}...")
     os.execvp("docker", docker_cmd)
 
 

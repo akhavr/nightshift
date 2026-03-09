@@ -13,7 +13,7 @@ python -m venv .venv
 
 # 2. Initialize your repo
 python host/cli.py init
-# Creates WORKFLOW.md, .env.example, .agent-worker/, updates .gitignore
+# Creates WORKFLOW.md, .env.example, .nightshift/, updates .gitignore
 
 # 3. Configure credentials
 cp .env.example .env
@@ -23,7 +23,7 @@ cp .env.example .env
 # YAML front matter configures adapters; markdown body is the prompt template
 
 # 5. Build the Docker image
-docker build -t agent-worker:latest .
+docker build -t nightshift:latest .
 
 # 6. Start the host watcher (monitors sessions, pauses idle containers, polls Telegram)
 python host/cli.py watcher &
@@ -48,7 +48,7 @@ python host/cli.py reject <issue-id>   # discard agent work and clean up
 
 | Command | Description |
 |---------|-------------|
-| `init` | Scaffold WORKFLOW.md, .env.example, .agent-worker/ |
+| `init` | Scaffold WORKFLOW.md, .env.example, .nightshift/ |
 | `start <id>` | Create worktree + session, launch Docker container |
 | `resume <id>` | Resume a suspended session |
 | `answer <id> "msg"` | Write answer for a waiting agent |

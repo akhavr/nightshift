@@ -4,16 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Nightshift (agent-worker) is an autonomous coding agent runner. It launches a coding agent (e.g. Claude Code) inside a Docker container against an issue from a tracker (e.g. git-bug), manages the session lifecycle (checkpoints, Q&A, resume on context limits), and handles review/merge via the host CLI.
+Nightshift is an autonomous coding agent runner. It launches a coding agent (e.g. Claude Code) inside a Docker container against an issue from a tracker (e.g. git-bug), manages the session lifecycle (checkpoints, Q&A, resume on context limits), and handles review/merge via the host CLI.
 
 ## Commands
 
 ```bash
 # Build Docker image
-docker build -t agent-worker:latest .
+docker build -t nightshift:latest .
 
 # CLI commands
-python host/cli.py init                          # scaffold WORKFLOW.md, .env.example, .agent-worker/
+python host/cli.py init                          # scaffold WORKFLOW.md, .env.example, .nightshift/
 python host/cli.py start <issue-id>              # create worktree + session, launch container
 python host/cli.py resume <issue-id>             # resume a suspended session
 python host/cli.py answer <issue-id> "your answer"
@@ -74,7 +74,7 @@ Key core modules:
 - **Adapter registration**: `core/config.py` has `AGENT_REGISTRY`, `TRACKER_REGISTRY`, etc. mapping `kind` strings to `(module_path, class_name)` tuples. New adapters: add entry to registry + implement the Protocol.
 - **WORKFLOW.md**: YAML front matter configures adapters, merge policy, hooks. The markdown body after `---` is the Jinja2 prompt template. `$VAR` references in YAML are resolved from environment variables. `.env` is loaded BEFORE WORKFLOW.md parsing.
 - **StaticTracker pattern**: Host dumps issue data to `issue.json` and `issues.json` in the session dir. Container reads them via `StaticTracker`. Write operations (comments, labels) are logged but no-op inside the container.
-- **Container-host communication**: Exclusively via shared files in the session directory (`/session/` inside container, `.agent-worker/sessions/<id>/` on host). No network calls between container and host.
+- **Container-host communication**: Exclusively via shared files in the session directory (`/session/` inside container, `.nightshift/sessions/<id>/` on host). No network calls between container and host.
 - **Q&A flow**: Agent outputs `@@QUESTION@@` then `@@WAITING@@` (or exits — 30s timeout auto-triggers waiting). Container writes `waiting.json`. Host watcher pauses the container. Answer arrives via Telegram reply, tracker comment, or `cli.py answer`. Written to `answer.txt`. Container unpaused. Agent restarted with `--resume` and answer as prompt (no stdin — `-p` mode is fire-and-forget).
 - **Auto-resume**: On context limit, stall, or max-turns, `SessionRunner` builds a resume prompt with checkpoint history and recent conversation, then restarts the agent in a loop (up to `MAX_RESUMES=10`).
 - **Review/merge lifecycle**: Container exits after `@@DONE@@` with status `waiting:review`. Host user runs `cli.py accept <id>` to merge or `cli.py reject <id>` to discard.
@@ -98,7 +98,7 @@ docker run --rm --user $(id -u):$(id -g) \
   -v ~/.claude:/claude-auth:ro \
   -v <repo>/WORKFLOW.md:/workspace/WORKFLOW.md:ro \
   -e ISSUE_ID=<id> -e SHORT_ID=<short-id> \
-  agent-worker:latest
+  nightshift:latest
 ```
 
 `docker-entrypoint.sh` rewrites the worktree `.git` pointer to use container paths (`/repo-git/worktrees/agent-<short-id>`), enabling git operations inside the container.

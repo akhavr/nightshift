@@ -308,7 +308,7 @@ class SessionRunner:
         self.tracker.add_label(self.issue.id, "needs-review")
         self.tracker.remove_label(self.issue.id, "agent-in-progress")
         self.notifier.notify(
-            f"🏁 {self.issue.identifier} done. Review with: cli.py accept/reject {self.issue.identifier}"
+            f"🏁 {self.issue.identifier} done. Review with: nightshift accept/reject {self.issue.identifier}"
         )
 
     def _collect_answer(self) -> str:
@@ -352,7 +352,7 @@ class SessionRunner:
 
         if st.status == "done:pending-review":
             # Post proof-of-work and notify, then exit.
-            # Review/merge is handled by the host (cli.py accept/reject).
+            # Review/merge is handled by the host (nightshift accept/reject).
             self._notify_done(st)
             return None
 

@@ -20,7 +20,7 @@ def repo_root() -> Path:
 
 
 def sessions_dir() -> Path:
-    return repo_root() / ".agent-worker" / "sessions"
+    return repo_root() / ".nightshift" / "sessions"
 
 
 def cmd_start(a):
@@ -166,7 +166,7 @@ Begin by reading the codebase, then plan your approach.
 """
 
 DEFAULT_ENV_EXAMPLE = """\
-# Agent Worker environment variables
+# Nightshift environment variables
 # Copy this file to .env and fill in your values.
 
 # Telegram notifications (optional)
@@ -205,8 +205,8 @@ def cmd_init(a):
         env_example.write_text(DEFAULT_ENV_EXAMPLE)
         print(f"Created {env_example}")
 
-    # Create .agent-worker directory
-    aw_dir = root / ".agent-worker" / "sessions"
+    # Create .nightshift directory
+    aw_dir = root / ".nightshift" / "sessions"
     aw_dir.mkdir(parents=True, exist_ok=True)
     print(f"Created {aw_dir.parent}")
 
@@ -214,24 +214,24 @@ def cmd_init(a):
     gitignore = root / ".gitignore"
     lines = gitignore.read_text().splitlines() if gitignore.exists() else []
     entries_to_add = []
-    for entry in [".env", ".worktrees/", ".agent-worker/"]:
+    for entry in [".env", ".worktrees/", ".nightshift/"]:
         if entry not in lines:
             entries_to_add.append(entry)
     if entries_to_add:
         with gitignore.open("a") as f:
             if lines and lines[-1] != "":
                 f.write("\n")
-            f.write("# Agent Worker\n")
+            f.write("# Nightshift\n")
             for entry in entries_to_add:
                 f.write(entry + "\n")
         print(f"Added {', '.join(entries_to_add)} to .gitignore")
     else:
-        print(".gitignore already has agent-worker entries")
+        print(".gitignore already has nightshift entries")
 
     print("\nNext steps:")
     print("  1. cp .env.example .env && edit .env with your credentials")
     print("  2. Review and customize WORKFLOW.md")
-    print("  3. Run: agent-worker start <issue-id>")
+    print("  3. Run: nightshift start <issue-id>")
 
 
 def cmd_accept(a):
@@ -354,7 +354,7 @@ def main():
     except subprocess.CalledProcessError:
         pass  # Not in a git repo (e.g. --help)
 
-    p = argparse.ArgumentParser(prog="agent-worker")
+    p = argparse.ArgumentParser(prog="nightshift")
     p.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
     s = p.add_subparsers(dest="cmd", required=True)
 

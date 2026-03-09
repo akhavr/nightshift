@@ -14,4 +14,4 @@ if [ -f /workspace/.git ] && [ -d /repo-git ] && [ -n "$SHORT_ID" ]; then
     echo "gitdir: /repo-git/worktrees/agent-${SHORT_ID}" > /workspace/.git
 fi
 
-exec python3 /opt/agent-worker/entrypoint.py "$@"
+exec python3 /opt/nightshift/entrypoint.py "$@"

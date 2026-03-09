@@ -5,7 +5,7 @@ Tracker-agnostic: communicates with containers ONLY via files in the shared
 session directory (waiting.json / answer.txt). Optionally polls Telegram
 for replies. Never imports or calls any tracker.
 
-    python host/watcher.py --sessions-dir .agent-worker/sessions
+    python host/watcher.py --sessions-dir .nightshift/sessions
 """
 
 import argparse
@@ -85,7 +85,7 @@ class HostWatcher:
                 except (json.JSONDecodeError, OSError):
                     continue
 
-                container = f"agent-worker-{sid}"
+                container = f"nightshift-{sid}"
 
                 # Brief delay to let container finish writing state
                 time.sleep(1)
@@ -229,7 +229,7 @@ class HostWatcher:
 
 def main():
     p = argparse.ArgumentParser(description="Host watcher — pause/unpause containers")
-    p.add_argument("--sessions-dir", required=True, help=".agent-worker/sessions path")
+    p.add_argument("--sessions-dir", required=True, help=".nightshift/sessions path")
     a = p.parse_args()
 
     # Load .env from repo root (does not override existing env vars)

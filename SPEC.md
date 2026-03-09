@@ -117,7 +117,7 @@ Telegram is the primary Q&A channel. Two independent components use it:
    Active while containers are paused (zero CPU).
 
 Both are optional. Without Telegram, answers come only via CLI
-(`agent-worker answer <id> "text"`).
+(`nightshift answer <id> "text"`).
 
 **Setup steps:**
 
@@ -141,7 +141,7 @@ Both are optional. Without Telegram, answers come only via CLI
 5. Pass the env vars to the container (done automatically by `host/launch.py`).
 6. Start the host watcher in a separate terminal:
    ```bash
-   python host/watcher.py --sessions-dir .agent-worker/sessions
+   python host/watcher.py --sessions-dir .nightshift/sessions
    ```
 
 **How it works at runtime:**
@@ -159,7 +159,7 @@ Telegram polling is self-contained. Same watcher works with any tracker.
 
 Answer sources while container is paused:
 1. Telegram reply (watcher polls, writes `answer.txt`)
-2. CLI: `agent-worker answer <id> "text"` writes `answer.txt` directly
+2. CLI: `nightshift answer <id> "text"` writes `answer.txt` directly
 
 If an answer arrives via tracker only (no Telegram, no CLI) after pause,
 the container stays paused until the user uses CLI or Telegram.
@@ -1316,25 +1316,25 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN curl -sL https://github.com/git-bug/git-bug/releases/latest/download/git-bug_linux_amd64 \
     -o /usr/local/bin/git-bug && chmod +x /usr/local/bin/git-bug
 
-COPY requirements.txt /opt/agent-worker/
-RUN pip install --break-system-packages -r /opt/agent-worker/requirements.txt
+COPY requirements.txt /opt/nightshift/
+RUN pip install --break-system-packages -r /opt/nightshift/requirements.txt
 
-COPY core/ /opt/agent-worker/core/
-COPY adapters/ /opt/agent-worker/adapters/
-COPY entrypoint.py /opt/agent-worker/
-COPY docker-entrypoint.sh /opt/agent-worker/
+COPY core/ /opt/nightshift/core/
+COPY adapters/ /opt/nightshift/adapters/
+COPY entrypoint.py /opt/nightshift/
+COPY docker-entrypoint.sh /opt/nightshift/
 
 RUN useradd -m -s /bin/bash agent && \
-    chmod +x /opt/agent-worker/docker-entrypoint.sh
+    chmod +x /opt/nightshift/docker-entrypoint.sh
 
-ENV PYTHONPATH=/opt/agent-worker
+ENV PYTHONPATH=/opt/nightshift
 USER agent
 
 RUN git config --global --add safe.directory /workspace
 
 WORKDIR /workspace
 
-ENTRYPOINT ["/opt/agent-worker/docker-entrypoint.sh"]
+ENTRYPOINT ["/opt/nightshift/docker-entrypoint.sh"]
 ```
 
 ### docker-entrypoint.sh
@@ -1353,7 +1353,7 @@ if [ -d /claude-auth ]; then
     cp /claude-auth/settings.local.json "$HOME/.claude/" 2>/dev/null || true
 fi
 
-exec python3 /opt/agent-worker/entrypoint.py "$@"
+exec python3 /opt/nightshift/entrypoint.py "$@"
 ```
 
 ### requirements.txt
@@ -2275,7 +2275,7 @@ Tracker-agnostic: communicates with containers ONLY via files in the shared
 session directory (waiting.json / answer.txt). Optionally polls Telegram
 for replies. Never imports or calls any tracker.
 
-    python host/watcher.py --sessions-dir .agent-worker/sessions
+    python host/watcher.py --sessions-dir .nightshift/sessions
 """
 
 import argparse
@@ -2351,7 +2351,7 @@ class HostWatcher:
                 except (json.JSONDecodeError, OSError):
                     continue
 
-                container = f"agent-worker-{sid}"
+                container = f"nightshift-{sid}"
 
                 # Brief delay to let container finish writing state
                 time.sleep(1)
@@ -2495,7 +2495,7 @@ class HostWatcher:
 
 def main():
     p = argparse.ArgumentParser(description="Host watcher — pause/unpause containers")
-    p.add_argument("--sessions-dir", required=True, help=".agent-worker/sessions path")
+    p.add_argument("--sessions-dir", required=True, help=".nightshift/sessions path")
     a = p.parse_args()
     HostWatcher(Path(a.sessions_dir)).run()
 
@@ -2666,7 +2666,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
-    parser.add_argument("--image", default="agent-worker:latest", help="Docker image")
+    parser.add_argument("--image", default="nightshift:latest", help="Docker image")
     args = parser.parse_args()
 
     repo = get_repo_root()
@@ -2677,7 +2677,7 @@ def main():
     max_turns = args.max_turns or config.agent.max_turns
 
     # Session dir (always under repo)
-    session_dir = repo / ".agent-worker" / "sessions" / short_id
+    session_dir = repo / ".nightshift" / "sessions" / short_id
     branch = f"agent/{short_id}"
 
     # Create workspace based on config
@@ -2726,7 +2726,7 @@ def main():
 
     docker_cmd = [
         "docker", "run", "--rm", "-it",
-        "--name", f"agent-worker-{short_id}",
+        "--name", f"nightshift-{short_id}",
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
@@ -2750,7 +2750,7 @@ def main():
         docker_cmd.insert(-1, "-e")
         docker_cmd.insert(-1, "SSH_AUTH_SOCK=/ssh-agent")
 
-    print(f"Launching container agent-worker-{short_id}...")
+    print(f"Launching container nightshift-{short_id}...")
     os.execvp("docker", docker_cmd)
 
 
@@ -2782,7 +2782,7 @@ def repo_root() -> Path:
 
 
 def sessions_dir() -> Path:
-    return repo_root() / ".agent-worker" / "sessions"
+    return repo_root() / ".nightshift" / "sessions"
 
 
 def cmd_start(a):
@@ -2878,7 +2878,7 @@ def cmd_cleanup(a):
 
 
 def main():
-    p = argparse.ArgumentParser(prog="agent-worker")
+    p = argparse.ArgumentParser(prog="nightshift")
     p.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
     s = p.add_subparsers(dest="cmd", required=True)
 

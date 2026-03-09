@@ -1,7 +1,7 @@
-# Agent Worker
+# Nightshift
 .env
 .worktrees/
-.agent-worker/
+.nightshift/
 __pycache__/
 *.pyc
 .venv/
