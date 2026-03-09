@@ -353,48 +353,7 @@ def cmd_reject(a):
     print(f"Rejected and cleaned up {sid}")
 
 
-BOT_PREFIXES = ("💭", "🤖", "❓", "📌", "⚠️", "✅", "⏸️", "🔄", "👤", "💬", "🛑", "🏁")
-
-
-def _collect_review_feedback(tracker, issue_id):
-    """Get human comments posted after the last proof-of-work summary."""
-    tracker.sync()
-    comments = tracker.get_comments(issue_id)
-
-    # Find the last proof-of-work comment
-    pow_idx = -1
-    for i, c in enumerate(comments):
-        if "Work complete" in c.body and "awaiting review" in c.body:
-            pow_idx = i
-
-    if pow_idx == -1:
-        candidates = comments
-    else:
-        candidates = comments[pow_idx + 1:]
-
-    return [c for c in candidates
-            if not any(c.body.startswith(p) for p in BOT_PREFIXES)]
-
-
-def _build_revise_prompt(review_comments, inline_feedback=None):
-    """Build a resume prompt from review feedback."""
-    parts = ["## Review Feedback\n",
-             "Your previous work has been reviewed. Please address the following feedback:\n"]
-
-    if review_comments:
-        for c in review_comments:
-            parts.append(f"**{c.author}:** {c.body}\n")
-
-    if inline_feedback:
-        parts.append(f"**Reviewer:** {inline_feedback}\n")
-
-    parts.append("\n## Instructions")
-    parts.append("Address ALL the review feedback above.")
-    parts.append("The codebase already has your previous work on this branch.")
-    parts.append("Same marker rules apply (@@LOG@@, @@CHECKPOINT@@, @@DONE@@, etc.).")
-    parts.append("When all feedback is addressed: @@DONE@@")
-
-    return "\n".join(parts)
+from core.review import collect_review_feedback, build_revise_prompt
 
 
 def cmd_revise(a):
@@ -416,11 +375,11 @@ def cmd_revise(a):
     # Collect review comments from tracker
     config = load_workflow(a.workflow or r / "WORKFLOW.md")
     tracker = create_tracker(config, repo_dir=str(r))
-    review_comments = _collect_review_feedback(tracker, a.issue_id)
+    review_comments = collect_review_feedback(tracker, a.issue_id)
 
     # Combine with inline feedback
     inline = a.message if hasattr(a, "message") and a.message else None
-    feedback = _build_revise_prompt(review_comments, inline)
+    feedback = build_revise_prompt(review_comments, inline)
 
     if not feedback.strip() or (not review_comments and not inline):
         print("No review feedback found. Add comments to the issue or pass inline feedback.",
