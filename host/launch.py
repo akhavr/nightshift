@@ -54,6 +54,23 @@ def main():
         if not args.resume:
             session_dir.mkdir(parents=True, exist_ok=True)
 
+            # Clean up stale worktree path if it exists
+            if wt_path.exists():
+                import shutil
+                try:
+                    shutil.rmtree(wt_path)
+                except PermissionError:
+                    subprocess.run(["docker", "run", "--rm",
+                                    "-v", f"{wt_path}:/cleanup:rw",
+                                    "ubuntu:24.04", "rm", "-rf", "/cleanup"],
+                                   capture_output=True)
+                    try:
+                        shutil.rmtree(wt_path)
+                    except FileNotFoundError:
+                        pass
+            subprocess.run(["git", "worktree", "prune"],
+                           capture_output=True, cwd=str(repo))
+
             # Create branch (may already exist — ignore error)
             subprocess.run(["git", "branch", branch, config.workspace.base_branch],
                            capture_output=True, cwd=str(repo))
