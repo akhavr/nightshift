@@ -109,6 +109,7 @@ class HostWatcher:
             self._check_for_answers(tg_answers)
             self._check_reviews(tg_reviews)
             self._check_orphaned_sessions()
+            self._check_closed_issues()
             if self.auto_start:
                 self._check_new_issues()
             time.sleep(2)
@@ -309,6 +310,100 @@ class HostWatcher:
                 issue_id, "--resume",
             ]
             subprocess.Popen(cmd, cwd=str(self.repo_dir))
+
+    # --- Closed issue cleanup ---
+
+    def _check_closed_issues(self):
+        """Detect sessions whose issues have been closed — clean up worktree + session."""
+        now = time.time()
+        if now - self._last_review_poll < REVIEW_POLL_INTERVAL_S:
+            return  # piggyback on same interval as review polling
+
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            state_file = session_dir / "state.json"
+            if not state_file.exists():
+                continue
+
+            try:
+                state = json.loads(state_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            # Only clean up sessions that are idle (not actively working)
+            if state.get("status") in ("working", "starting"):
+                continue
+
+            issue_id = state.get("issue_id", "")
+            if not issue_id:
+                continue
+
+            try:
+                tracker = self._get_tracker()
+                issue = tracker.get_issue(issue_id)
+            except Exception as e:
+                log.warning(f"[{sid}] Failed to check issue status: {e}")
+                continue
+
+            if not issue or issue.status not in ("closed",):
+                continue
+
+            # Stop running container if any
+            container = f"nightshift-{sid}"
+            subprocess.run(["docker", "stop", container], capture_output=True)
+
+            log.info(f"[{sid}] Issue closed — cleaning up worktree and session")
+            self._cleanup_session(sid, issue_id, session_dir)
+
+    def _cleanup_session(self, sid: str, issue_id: str, session_dir: Path):
+        """Remove worktree, branch, and session directory."""
+        try:
+            from core.config import load_workflow
+            config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            wt = self.repo_dir / config.workspace.root / f"agent-{sid}"
+            branch = f"agent/{sid}"
+
+            # Remove worktree
+            if wt.exists():
+                result = subprocess.run(
+                    ["git", "worktree", "remove", str(wt), "--force"],
+                    capture_output=True, cwd=str(self.repo_dir),
+                )
+                if result.returncode != 0:
+                    import shutil
+                    try:
+                        shutil.rmtree(wt)
+                    except PermissionError:
+                        subprocess.run(["docker", "run", "--rm",
+                                        "-v", f"{wt}:/cleanup:rw",
+                                        "ubuntu:24.04", "rm", "-rf", "/cleanup"],
+                                       capture_output=True)
+                        try:
+                            shutil.rmtree(wt)
+                        except FileNotFoundError:
+                            pass
+
+            subprocess.run(["git", "worktree", "prune"],
+                           capture_output=True, cwd=str(self.repo_dir))
+            subprocess.run(["git", "branch", "-D", branch],
+                           capture_output=True, cwd=str(self.repo_dir))
+
+            # Remove session dir
+            import shutil
+            shutil.rmtree(session_dir)
+
+            # Clean up tracking state
+            self._review_comment_counts.pop(sid, None)
+            self._recently_launched.pop(sid, None)
+
+            log.info(f"[{sid}] Cleaned up worktree, branch, and session")
+        except Exception as e:
+            log.error(f"[{sid}] Cleanup failed: {e}")
 
     # --- Auto-start ---
 
