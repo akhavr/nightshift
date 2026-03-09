@@ -172,7 +172,58 @@ def main():
         docker_cmd.insert(-1, "SSH_AUTH_SOCK=/ssh-agent")
 
     print(f"Launching container nightshift-{short_id}...")
-    os.execvp("docker", docker_cmd)
+    result = subprocess.run(docker_cmd)
+
+    # Post-container: if agent finished, post proof-of-work to real tracker
+    _post_container(session_dir, config, repo, issue_id)
+
+    sys.exit(result.returncode)
+
+
+def _post_container(session_dir, config, repo, issue_id):
+    """After container exits, post proof-of-work summary to the real tracker."""
+    state_file = session_dir / "state.json"
+    if not state_file.exists():
+        return
+
+    state = json.loads(state_file.read_text())
+    if state.get("status") != "waiting:review":
+        return
+
+    # Read checkpoints for summary
+    checkpoints = state.get("checkpoints", [])
+    human_answers = state.get("human_answers", [])
+    branch = state.get("branch", "")
+
+    summary_lines = [f"- {cp['description']}" for cp in checkpoints]
+    summary = "\n".join(summary_lines) if summary_lines else "No checkpoints recorded."
+
+    # Get diff stat from the worktree
+    base = config.workspace.base_branch
+    diff_result = subprocess.run(
+        ["git", "diff", "--stat", f"{base}..{branch}"],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    diff = diff_result.stdout.strip() if diff_result.returncode == 0 else "N/A"
+
+    ticks = "```"
+    proof = (
+        f"🏁 **Work complete — awaiting review**\n\n"
+        f"**Summary:**\n{summary}\n\n"
+        f"**Q&A exchanges:** {len(human_answers)}\n"
+        f"**Changes:**\n{ticks}\n{diff}\n{ticks}\n\n"
+        f"Review with: `nightshift accept/reject/revise {issue_id}`"
+    )
+
+    tracker = create_tracker(config, repo_dir=str(repo))
+    tracker.add_comment(issue_id, proof)
+    tracker.add_label(issue_id, "needs-review")
+    try:
+        tracker.remove_label(issue_id, "agent-in-progress")
+    except Exception:
+        pass
+    tracker.sync()
+    print(f"Posted review summary to tracker for {issue_id[:12]}")
 
 
 if __name__ == "__main__":
