@@ -215,15 +215,18 @@ def _post_container(session_dir, config, repo, issue_id):
         f"Review with: `nightshift accept/reject/revise {issue_id}`"
     )
 
-    tracker = create_tracker(config, repo_dir=str(repo))
-    tracker.add_comment(issue_id, proof)
-    tracker.add_label(issue_id, "needs-review")
     try:
-        tracker.remove_label(issue_id, "agent-in-progress")
-    except Exception:
-        pass
-    tracker.sync()
-    print(f"Posted review summary to tracker for {issue_id[:12]}")
+        tracker = create_tracker(config, repo_dir=str(repo))
+        tracker.add_comment(issue_id, proof)
+        tracker.add_label(issue_id, "needs-review")
+        try:
+            tracker.remove_label(issue_id, "agent-in-progress")
+        except Exception:
+            pass
+        tracker.sync()
+        print(f"Posted review summary to tracker for {issue_id[:12]}")
+    except Exception as e:
+        print(f"Failed to post review summary: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

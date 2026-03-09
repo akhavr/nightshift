@@ -21,6 +21,8 @@ class GitBugTracker:
                 ["git-bug", *args], cwd=self.cwd,
                 capture_output=True, text=True, timeout=timeout,
             )
+            if r.returncode != 0:
+                log.warning(f"git-bug {' '.join(args)} failed (rc={r.returncode}): {r.stderr.strip()}")
             return r.stdout.strip()
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             log.warning(f"git-bug {args[0]} failed: {e}")
