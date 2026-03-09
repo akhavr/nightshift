@@ -70,6 +70,7 @@ class HostWatcher:
         # Review monitoring: track last-seen comment count per session
         self._review_comment_counts: dict[str, int] = {}
         self._last_review_poll = 0.0
+        self._last_orphan_check = 0.0
 
         # Tracker (lazy-initialized on first review poll)
         self._tracker = None
@@ -96,6 +97,7 @@ class HostWatcher:
             self._scan_for_waiting()
             self._check_for_answers(tg_answers)
             self._check_reviews(tg_reviews)
+            self._check_orphaned_sessions()
             time.sleep(2)
 
     def _scan_for_waiting(self):
@@ -234,6 +236,58 @@ class HostWatcher:
                     log.info(f"[{sid}] Found @nightshift {cmd} from {comment.author}")
                     self._handle_review_command(sid, issue_id, cmd, session_dir)
                     break  # one command per poll cycle
+
+    # --- Orphan detection ---
+
+    def _check_orphaned_sessions(self):
+        """Detect sessions with status 'working' but no running container — auto-resume."""
+        now = time.time()
+        if now - self._last_orphan_check < REVIEW_POLL_INTERVAL_S:
+            return
+        self._last_orphan_check = now
+
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            state_file = session_dir / "state.json"
+            if not state_file.exists():
+                continue
+
+            try:
+                state = json.loads(state_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if state.get("status") not in ("working", "starting"):
+                continue
+
+            # Skip if container is still running
+            container = f"nightshift-{sid}"
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", container],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip() in ("running", "paused"):
+                continue
+
+            # Container is gone but status is working — orphaned
+            issue_id = state.get("issue_id", "")
+            if not issue_id:
+                continue
+
+            log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}). Auto-resuming.")
+
+            # Launch resume in background
+            cmd = [
+                sys.executable,
+                str(Path(__file__).parent / "launch.py"),
+                issue_id, "--resume",
+            ]
+            subprocess.Popen(cmd, cwd=str(self.repo_dir))
 
     def _post_telegram_review_to_tracker(self, issue_id: str, text: str, author: str):
         """Post Telegram review reply as a tracker comment for audit trail."""
