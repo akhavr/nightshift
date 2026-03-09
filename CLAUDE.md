@@ -69,6 +69,10 @@ Key core modules:
 
 **`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, runs `SessionRunner`.
 
+## Coding Rules
+
+- **Never silently catch exceptions.** Always log the error with enough context to diagnose (the operation, the input, the traceback). Bare `except: pass` is forbidden. If you must catch, log at `warning` or `error` level.
+
 ## Key Design Patterns
 
 - **Adapter registration**: `core/config.py` has `AGENT_REGISTRY`, `TRACKER_REGISTRY`, etc. mapping `kind` strings to `(module_path, class_name)` tuples. New adapters: add entry to registry + implement the Protocol.
