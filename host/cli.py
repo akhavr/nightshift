@@ -181,6 +181,25 @@ TELEGRAM_CHAT_ID=
 """
 
 
+def _detect_default_branch(repo: Path) -> str:
+    """Detect the default branch (main, master, etc.)."""
+    # Try HEAD of origin
+    result = subprocess.run(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    if result.returncode == 0:
+        return result.stdout.strip().split("/")[-1]
+    # Fallback: current branch
+    result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return "main"
+
+
 def cmd_init(a):
     """Scaffold WORKFLOW.md and .env.example in the current repo."""
     try:
@@ -189,13 +208,15 @@ def cmd_init(a):
         print("Not inside a git repository.", file=sys.stderr)
         sys.exit(1)
 
+    default_branch = _detect_default_branch(root)
+
     # WORKFLOW.md
     wf = root / "WORKFLOW.md"
     if wf.exists() and not a.force:
         print(f"WORKFLOW.md already exists at {wf}. Use --force to overwrite.")
     else:
-        wf.write_text(DEFAULT_WORKFLOW_MD)
-        print(f"Created {wf}")
+        wf.write_text(DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}"))
+        print(f"Created {wf} (base_branch: {default_branch})")
 
     # .env.example
     env_example = root / ".env.example"
