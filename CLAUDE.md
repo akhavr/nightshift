@@ -72,6 +72,7 @@ Key core modules:
 ## Coding Rules
 
 - **Never silently catch exceptions.** Always log the error with enough context to diagnose (the operation, the input, the traceback). Bare `except: pass` is forbidden. If you must catch, log at `warning` or `error` level.
+- **Rebuild Docker image after code changes.** Any change to files that run inside the container (`core/`, `adapters/`, `entrypoint.py`, `docker-entrypoint.sh`, `Dockerfile`) requires rebuilding: `sg docker "docker build -t nightshift:latest ."`
 
 ## Key Design Patterns
 
