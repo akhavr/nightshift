@@ -28,9 +28,10 @@ def strip_nightshift_command(text: str) -> str:
     return _NIGHTSHIFT_CMD_RE.sub("", text).strip()
 
 
-def collect_review_feedback(tracker, issue_id: str) -> list:
+def collect_review_feedback(tracker, issue_id: str, sync: bool = True) -> list:
     """Get human comments posted after the last proof-of-work summary."""
-    tracker.sync()
+    if sync:
+        tracker.sync()
     comments = tracker.get_comments(issue_id)
 
     # Find the last proof-of-work comment

@@ -75,6 +75,10 @@ class HostWatcher:
         self._last_auto_start_poll = 0.0
         self._known_issue_ids: set[str] = set()
 
+        # Track recently launched sessions to avoid orphan false positives
+        # Maps sid -> launch timestamp
+        self._recently_launched: dict[str, float] = {}
+
         # Tracker (lazy-initialized on first review poll)
         self._tracker = None
         self._config = None
@@ -274,6 +278,13 @@ class HostWatcher:
             if state.get("status") not in ("working", "starting"):
                 continue
 
+            # Skip if recently launched (give it time to start)
+            if sid in self._recently_launched:
+                if now - self._recently_launched[sid] < 120:  # 2 min grace
+                    continue
+                else:
+                    del self._recently_launched[sid]
+
             # Skip if container is still running
             container = f"nightshift-{sid}"
             result = subprocess.run(
@@ -289,6 +300,7 @@ class HostWatcher:
                 continue
 
             log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}). Auto-resuming.")
+            self._recently_launched[sid] = time.time()
 
             # Launch resume in background
             cmd = [
@@ -331,6 +343,8 @@ class HostWatcher:
                 continue
 
             self._known_issue_ids.add(issue.id)
+            sid = issue.id[:12]
+            self._recently_launched[sid] = time.time()
             log.info(f"Auto-start: new issue {issue.identifier} — {issue.title[:60]}")
 
             cmd = [
@@ -364,7 +378,8 @@ class HostWatcher:
         """Collect review feedback and relaunch agent."""
         try:
             tracker = self._get_tracker()
-            review_comments = collect_review_feedback(tracker, issue_id)
+            # Skip sync — tracker was already synced in _check_reviews
+            review_comments = collect_review_feedback(tracker, issue_id, sync=False)
 
             if not review_comments:
                 log.warning(f"[{sid}] No review feedback found — skipping revise")
@@ -377,8 +392,9 @@ class HostWatcher:
             state["status"] = "working"
             (session_dir / "state.json").write_text(json.dumps(state, indent=2))
 
-            # Reset comment count tracking
+            # Reset comment count tracking and mark as recently launched
             self._review_comment_counts.pop(sid, None)
+            self._recently_launched[sid] = time.time()
 
             log.info(f"[{sid}] Revising with {len(review_comments)} comment(s)")
 

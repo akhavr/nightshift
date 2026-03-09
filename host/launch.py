@@ -145,8 +145,10 @@ def main():
         if val:
             notify_env += ["-e", f"{var}={val}"]
 
+    # Use -it only when stdin is a TTY (not when launched from watcher)
+    tty_flags = ["-it"] if sys.stdin.isatty() else []
     docker_cmd = [
-        "docker", "run", "--rm", "-it",
+        "docker", "run", "--rm", *tty_flags,
         "--name", f"nightshift-{short_id}",
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
