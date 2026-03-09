@@ -54,9 +54,10 @@ class HostWatcher:
     2. Manual: user runs `nightshift answer <id> "text"` which writes answer.txt directly
     """
 
-    def __init__(self, sessions_dir: Path, repo_dir: Path):
+    def __init__(self, sessions_dir: Path, repo_dir: Path, auto_start: bool = True):
         self.sessions_dir = sessions_dir
         self.repo_dir = repo_dir
+        self.auto_start = auto_start
 
         # Telegram config (optional)
         self.tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -71,6 +72,8 @@ class HostWatcher:
         self._review_comment_counts: dict[str, int] = {}
         self._last_review_poll = 0.0
         self._last_orphan_check = 0.0
+        self._last_auto_start_poll = 0.0
+        self._known_issue_ids: set[str] = set()
 
         # Tracker (lazy-initialized on first review poll)
         self._tracker = None
@@ -90,6 +93,10 @@ class HostWatcher:
             log.info("Telegram polling enabled")
         else:
             log.info("Telegram not configured — answers via CLI only")
+        if self.auto_start:
+            log.info("Auto-start enabled — polling tracker for new issues")
+        else:
+            log.info("Auto-start disabled")
 
         while True:
             # Single Telegram poll, routes to Q&A or review
@@ -98,6 +105,8 @@ class HostWatcher:
             self._check_for_answers(tg_answers)
             self._check_reviews(tg_reviews)
             self._check_orphaned_sessions()
+            if self.auto_start:
+                self._check_new_issues()
             time.sleep(2)
 
     def _scan_for_waiting(self):
@@ -286,6 +295,48 @@ class HostWatcher:
                 sys.executable,
                 str(Path(__file__).parent / "launch.py"),
                 issue_id, "--resume",
+            ]
+            subprocess.Popen(cmd, cwd=str(self.repo_dir))
+
+    # --- Auto-start ---
+
+    def _check_new_issues(self):
+        """Poll tracker for open issues and start sessions for new ones."""
+        now = time.time()
+        if now - self._last_auto_start_poll < REVIEW_POLL_INTERVAL_S:
+            return
+        self._last_auto_start_poll = now
+
+        try:
+            tracker = self._get_tracker()
+            tracker.sync()
+            issues = tracker.list_issues(status="open")
+        except Exception as e:
+            log.warning(f"Auto-start: tracker poll failed: {e}")
+            return
+
+        # Build set of issue IDs that already have sessions
+        existing_sids = set()
+        if self.sessions_dir.exists():
+            for session_dir in self.sessions_dir.iterdir():
+                if session_dir.is_dir() and (session_dir / "state.json").exists():
+                    try:
+                        state = json.loads((session_dir / "state.json").read_text())
+                        existing_sids.add(state.get("issue_id", ""))
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+        for issue in issues:
+            if issue.id in existing_sids or issue.id in self._known_issue_ids:
+                continue
+
+            self._known_issue_ids.add(issue.id)
+            log.info(f"Auto-start: new issue {issue.identifier} — {issue.title[:60]}")
+
+            cmd = [
+                sys.executable,
+                str(Path(__file__).parent / "launch.py"),
+                issue.id,
             ]
             subprocess.Popen(cmd, cwd=str(self.repo_dir))
 
@@ -480,6 +531,8 @@ class HostWatcher:
 def main():
     p = argparse.ArgumentParser(description="Host watcher — pause/unpause, review monitor")
     p.add_argument("--sessions-dir", required=True, help=".nightshift/sessions path")
+    p.add_argument("--no-auto-start", action="store_true",
+                   help="Disable automatic starting of new issues")
     a = p.parse_args()
 
     # Load .env from repo root (does not override existing env vars)
@@ -492,7 +545,7 @@ def main():
     except subprocess.CalledProcessError:
         repo = Path.cwd()
 
-    HostWatcher(Path(a.sessions_dir), repo).run()
+    HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start).run()
 
 if __name__ == "__main__":
     main()

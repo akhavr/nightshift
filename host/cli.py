@@ -52,10 +52,13 @@ def cmd_answer(a):
 
 
 def cmd_watcher(a):
-    subprocess.run([
+    cmd = [
         sys.executable, str(Path(__file__).parent / "watcher.py"),
         "--sessions-dir", str(sessions_dir()),
-    ])
+    ]
+    if a.no_auto_start:
+        cmd.append("--no-auto-start")
+    subprocess.run(cmd)
 
 
 def cmd_status(a):
@@ -443,6 +446,8 @@ def main():
     sp.set_defaults(func=cmd_answer)
 
     sp = s.add_parser("watcher")
+    sp.add_argument("--no-auto-start", action="store_true",
+                    help="Disable automatic starting of new issues")
     sp.set_defaults(func=cmd_watcher)
 
     sp = s.add_parser("status")
