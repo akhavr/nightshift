@@ -298,9 +298,16 @@ class SessionRunner:
         self.state_mgr.update_status("waiting:review")
         diff = self.workspace_mgr.diff_stat(self._workspace.path) if self._workspace else "N/A"
         ticks = "```"
+
+        # Build summary of work done from checkpoints
+        summary_lines = []
+        for cp in state.checkpoints:
+            summary_lines.append(f"- {cp.description}")
+        summary = "\n".join(summary_lines) if summary_lines else "No checkpoints recorded."
+
         proof = (
             f"🏁 **Work complete — awaiting review**\n\n"
-            f"**Checkpoints:** {len(state.checkpoints)}\n"
+            f"**Summary:**\n{summary}\n\n"
             f"**Q&A exchanges:** {len(state.human_answers)}\n"
             f"**Changes:**\n{ticks}\n{diff}\n{ticks}"
         )
