@@ -15,13 +15,13 @@ class GitBugTracker:
     def __init__(self, repo_dir: str | Path = "/workspace"):
         self.cwd = str(repo_dir)
 
-    def _run(self, *args: str, timeout: int = 30) -> str:
+    def _run(self, *args: str, timeout: int = 30, ignore_rc: set[int] | None = None) -> str:
         try:
             r = subprocess.run(
                 ["git-bug", *args], cwd=self.cwd,
                 capture_output=True, text=True, timeout=timeout,
             )
-            if r.returncode != 0:
+            if r.returncode != 0 and r.returncode not in (ignore_rc or set()):
                 log.warning(f"git-bug {' '.join(args)} failed (rc={r.returncode}): {r.stderr.strip()}")
             return r.stdout.strip()
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -79,10 +79,10 @@ class GitBugTracker:
         self._run("bug", "status", cmd, issue_id)
 
     def add_label(self, issue_id: str, label: str) -> None:
-        self._run("bug", "label", "new", issue_id, label)
+        self._run("bug", "label", "new", issue_id, label, ignore_rc={1})
 
     def remove_label(self, issue_id: str, label: str) -> None:
-        self._run("bug", "label", "rm", issue_id, label)
+        self._run("bug", "label", "rm", issue_id, label, ignore_rc={1})
 
     def sync(self) -> None:
         self._run("pull")
