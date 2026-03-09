@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.config import load_workflow
+from core.config import load_workflow, create_tracker
 from host.env import load_dotenv
 
 
@@ -353,6 +353,96 @@ def cmd_reject(a):
     print(f"Rejected and cleaned up {sid}")
 
 
+BOT_PREFIXES = ("💭", "🤖", "❓", "📌", "⚠️", "✅", "⏸️", "🔄", "👤", "💬", "🛑", "🏁")
+
+
+def _collect_review_feedback(tracker, issue_id):
+    """Get human comments posted after the last proof-of-work summary."""
+    tracker.sync()
+    comments = tracker.get_comments(issue_id)
+
+    # Find the last proof-of-work comment
+    pow_idx = -1
+    for i, c in enumerate(comments):
+        if "Work complete" in c.body and "awaiting review" in c.body:
+            pow_idx = i
+
+    if pow_idx == -1:
+        candidates = comments
+    else:
+        candidates = comments[pow_idx + 1:]
+
+    return [c for c in candidates
+            if not any(c.body.startswith(p) for p in BOT_PREFIXES)]
+
+
+def _build_revise_prompt(review_comments, inline_feedback=None):
+    """Build a resume prompt from review feedback."""
+    parts = ["## Review Feedback\n",
+             "Your previous work has been reviewed. Please address the following feedback:\n"]
+
+    if review_comments:
+        for c in review_comments:
+            parts.append(f"**{c.author}:** {c.body}\n")
+
+    if inline_feedback:
+        parts.append(f"**Reviewer:** {inline_feedback}\n")
+
+    parts.append("\n## Instructions")
+    parts.append("Address ALL the review feedback above.")
+    parts.append("The codebase already has your previous work on this branch.")
+    parts.append("Same marker rules apply (@@LOG@@, @@CHECKPOINT@@, @@DONE@@, etc.).")
+    parts.append("When all feedback is addressed: @@DONE@@")
+
+    return "\n".join(parts)
+
+
+def cmd_revise(a):
+    """Resume agent with review feedback."""
+    r = repo_root()
+    sid = a.issue_id[:12]
+    sd = sessions_dir() / sid
+
+    if not sd.exists() or not (sd / "state.json").exists():
+        print(f"No session found for {sid}", file=sys.stderr)
+        sys.exit(1)
+
+    state = json.loads((sd / "state.json").read_text())
+    if state.get("status") != "waiting:review":
+        print(f"Session {sid} is not awaiting review (status: {state.get('status')})",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Collect review comments from tracker
+    config = load_workflow(a.workflow or r / "WORKFLOW.md")
+    tracker = create_tracker(config, repo_dir=str(r))
+    review_comments = _collect_review_feedback(tracker, a.issue_id)
+
+    # Combine with inline feedback
+    inline = a.message if hasattr(a, "message") and a.message else None
+    feedback = _build_revise_prompt(review_comments, inline)
+
+    if not feedback.strip() or (not review_comments and not inline):
+        print("No review feedback found. Add comments to the issue or pass inline feedback.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Write resume prompt and update state
+    (sd / "resume-prompt.md").write_text(feedback)
+    state["status"] = "working"
+    (sd / "state.json").write_text(json.dumps(state, indent=2))
+
+    print(f"Revising {sid} with {len(review_comments)} comment(s)" +
+          (f" + inline feedback" if inline else ""))
+
+    # Delegate to launch.py --resume
+    cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
+           a.issue_id, "--resume"]
+    if a.workflow:
+        cmd += ["--workflow", a.workflow]
+    subprocess.run(cmd)
+
+
 def cmd_cleanup(a):
     r = repo_root()
     sid = a.issue_id[:12]
@@ -418,6 +508,11 @@ def main():
     sp = s.add_parser("reject", help="Discard agent work and clean up")
     sp.add_argument("issue_id")
     sp.set_defaults(func=cmd_reject)
+
+    sp = s.add_parser("revise", help="Resume agent with review feedback")
+    sp.add_argument("issue_id")
+    sp.add_argument("message", nargs="?", default=None, help="Inline review feedback")
+    sp.set_defaults(func=cmd_revise)
 
     sp = s.add_parser("cleanup")
     sp.add_argument("issue_id")

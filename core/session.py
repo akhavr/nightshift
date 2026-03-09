@@ -308,7 +308,7 @@ class SessionRunner:
         self.tracker.add_label(self.issue.id, "needs-review")
         self.tracker.remove_label(self.issue.id, "agent-in-progress")
         self.notifier.notify(
-            f"🏁 {self.issue.identifier} done. Review with: nightshift accept/reject {self.issue.identifier}"
+            f"🏁 {self.issue.identifier} done. nightshift accept/reject/revise {self.issue.identifier}"
         )
 
     def _collect_answer(self) -> str:
