@@ -73,6 +73,7 @@ class HostWatcher:
         self._last_review_poll = 0.0
         self._last_orphan_check = 0.0
         self._last_auto_start_poll = 0.0
+        self._last_closed_check = 0.0
         self._known_issue_ids: set[str] = set()
 
         # Track recently launched sessions to avoid orphan false positives
@@ -238,8 +239,14 @@ class HostWatcher:
 
             self._review_comment_counts[sid] = len(comments)
 
-            # On first scan, just record count — don't process old comments
+            # On first scan, check the last comment for a pending command
+            # (handles commands posted before watcher started)
             if last_count == 0:
+                if comments:
+                    cmd = parse_nightshift_command(comments[-1].body)
+                    if cmd:
+                        log.info(f"[{sid}] Found pending @nightshift {cmd} from {comments[-1].author}")
+                        self._handle_review_command(sid, issue_id, cmd, session_dir)
                 continue
 
             # Check new comments for @nightshift commands
@@ -316,8 +323,9 @@ class HostWatcher:
     def _check_closed_issues(self):
         """Detect sessions whose issues have been closed — clean up worktree + session."""
         now = time.time()
-        if now - self._last_review_poll < REVIEW_POLL_INTERVAL_S:
-            return  # piggyback on same interval as review polling
+        if now - self._last_closed_check < REVIEW_POLL_INTERVAL_S:
+            return
+        self._last_closed_check = now
 
         if not self.sessions_dir.exists():
             return
