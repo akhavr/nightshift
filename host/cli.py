@@ -23,6 +23,22 @@ def sessions_dir() -> Path:
     return repo_root() / ".nightshift" / "sessions"
 
 
+def resolve_session(issue_id: str) -> str:
+    """Resolve a prefix to the full session ID. Exits on ambiguity or no match."""
+    sd = sessions_dir()
+    if not sd.exists():
+        print(f"No sessions directory found", file=sys.stderr)
+        sys.exit(1)
+    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:12])]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        print(f"Ambiguous ID '{issue_id}' matches: {', '.join(matches)}", file=sys.stderr)
+        sys.exit(1)
+    # No match by session dir — return truncated (for start/new sessions)
+    return issue_id[:12]
+
+
 def cmd_start(a):
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"), a.issue_id]
     if a.max_turns:
@@ -42,7 +58,7 @@ def cmd_resume(a):
 
 def cmd_answer(a):
     """Write answer.txt directly — works even if container is paused."""
-    sid = a.issue_id[:12]
+    sid = resolve_session(a.issue_id)
     sd = sessions_dir() / sid
     if sd.exists():
         (sd / "answer.txt").write_text(a.message)
@@ -78,14 +94,14 @@ def cmd_status(a):
 
 
 def cmd_logs(a):
-    log_file = sessions_dir() / a.issue_id[:12] / "raw-output.log"
+    log_file = sessions_dir() / resolve_session(a.issue_id) / "raw-output.log"
     if not log_file.exists():
         print("No log file.", file=sys.stderr); return
     subprocess.run(["tail", "-f", str(log_file)])
 
 
 def cmd_history(a):
-    cf = sessions_dir() / a.issue_id[:12] / "conversation.jsonl"
+    cf = sessions_dir() / resolve_session(a.issue_id) / "conversation.jsonl"
     if not cf.exists():
         print("No history.", file=sys.stderr); return
     icons = {"thought":"💭","checkpoint":"📌","question":"❓","human_answer_sent":"👤",
@@ -261,7 +277,7 @@ def cmd_init(a):
 def cmd_accept(a):
     """Merge agent branch into base branch, then clean up."""
     r = repo_root()
-    sid = a.issue_id[:12]
+    sid = resolve_session(a.issue_id)
     config = load_workflow(r / "WORKFLOW.md")
     branch = f"agent/{sid}"
     base = config.workspace.base_branch
@@ -332,7 +348,7 @@ def _remove_worktree(repo: Path, wt: Path, branch: str):
 def cmd_reject(a):
     """Discard agent work: remove worktree, branch, and session."""
     r = repo_root()
-    sid = a.issue_id[:12]
+    sid = resolve_session(a.issue_id)
     config = load_workflow(r / "WORKFLOW.md")
     branch = f"agent/{sid}"
 
@@ -362,7 +378,7 @@ from core.review import collect_review_feedback, build_revise_prompt
 def cmd_revise(a):
     """Resume agent with review feedback."""
     r = repo_root()
-    sid = a.issue_id[:12]
+    sid = resolve_session(a.issue_id)
     sd = sessions_dir() / sid
 
     if not sd.exists() or not (sd / "state.json").exists():
@@ -407,7 +423,7 @@ def cmd_revise(a):
 
 def cmd_cleanup(a):
     r = repo_root()
-    sid = a.issue_id[:12]
+    sid = resolve_session(a.issue_id)
     config = load_workflow(r / "WORKFLOW.md")
 
     wt = r / config.workspace.root / f"agent-{sid}"
