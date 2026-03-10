@@ -12,7 +12,7 @@ from pathlib import Path
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
-from host.env import load_dotenv
+from host.env import load_all_dotenv
 
 
 def get_repo_root() -> Path:
@@ -34,7 +34,7 @@ def main():
     repo = get_repo_root()
 
     # Load .env BEFORE config so $VAR references in WORKFLOW.md resolve correctly
-    load_dotenv(repo / ".env")
+    load_all_dotenv(repo / ".env")
 
     config = load_workflow(args.workflow or repo / "WORKFLOW.md")
 
@@ -112,21 +112,28 @@ def main():
 
         workspace_mount = str(wt_path)
 
-    # Dump issue data to session dir for the static tracker inside the container
+    # Dump issue data to session dir for the static tracker inside the container.
+    # On resume, reuse existing dumps if tracker is unavailable (e.g. git-bug locked).
+    issue_json = session_dir / "issue.json"
+    issues_json = session_dir / "issues.json"
+
     tracker = create_tracker(config, repo_dir=str(repo))
     issue = tracker.get_issue(issue_id)
-    if not issue:
+
+    if not issue and args.resume and issue_json.exists():
+        print(f"Tracker unavailable, reusing cached issue data for resume")
+    elif not issue:
         print(f"Issue {issue_id} not found", file=sys.stderr)
         sys.exit(1)
+    else:
+        from dataclasses import asdict
+        issue_json.write_text(json.dumps(asdict(issue), indent=2))
 
-    from dataclasses import asdict
-    (session_dir / "issue.json").write_text(json.dumps(asdict(issue), indent=2))
-
-    all_issues = tracker.list_issues()
-    (session_dir / "issues.json").write_text(
-        json.dumps([asdict(i) for i in all_issues], indent=2)
-    )
-    print(f"Dumped issue + {len(all_issues)} issues to {session_dir}")
+        all_issues = tracker.list_issues()
+        issues_json.write_text(
+            json.dumps([asdict(i) for i in all_issues], indent=2)
+        )
+        print(f"Dumped issue + {len(all_issues)} issues to {session_dir}")
 
     # Auth mounts — read-only, copied to writable HOME by docker-entrypoint.sh
     home = Path.home()

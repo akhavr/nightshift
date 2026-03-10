@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
-from host.env import load_dotenv
+from host.env import load_all_dotenv
 
 
 def repo_root() -> Path:
@@ -68,12 +68,16 @@ def cmd_answer(a):
 
 
 def cmd_watcher(a):
+    log_file = repo_root() / ".nightshift" / "watcher.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable, str(Path(__file__).parent / "watcher.py"),
         "--sessions-dir", str(sessions_dir()),
+        "--log-file", str(log_file),
     ]
     if a.no_auto_start:
         cmd.append("--no-auto-start")
+    print(f"Logging to {log_file}")
     subprocess.run(cmd)
 
 
@@ -439,7 +443,7 @@ def cmd_cleanup(a):
 def main():
     # Load .env early so all commands see credentials
     try:
-        load_dotenv(repo_root() / ".env")
+        load_all_dotenv(repo_root() / ".env")
     except subprocess.CalledProcessError:
         pass  # Not in a git repo (e.g. --help)
 

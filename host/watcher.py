@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from host.env import load_dotenv
+from host.env import load_all_dotenv
 from core.review import (
     parse_nightshift_command, strip_nightshift_command,
     collect_review_feedback, build_revise_prompt,
@@ -80,6 +80,10 @@ class HostWatcher:
         # Maps sid -> launch timestamp
         self._recently_launched: dict[str, float] = {}
 
+        # Track failed commands to avoid retrying too fast
+        # Maps sid -> (last_attempt_time, attempt_count)
+        self._command_failures: dict[str, tuple[float, int]] = {}
+
         # Tracker (lazy-initialized on first review poll)
         self._tracker = None
         self._config = None
@@ -108,12 +112,33 @@ class HostWatcher:
             tg_answers, tg_reviews = self._poll_telegram_all() if self.tg_enabled else ({}, {})
             self._scan_for_waiting()
             self._check_for_answers(tg_answers)
+            # Sync tracker once per review poll cycle (not per-method)
+            self._maybe_sync_tracker()
             self._check_reviews(tg_reviews)
             self._check_orphaned_sessions()
             self._check_closed_issues()
             if self.auto_start:
                 self._check_new_issues()
             time.sleep(2)
+
+    def _maybe_sync_tracker(self):
+        """Sync tracker at most once per review poll interval."""
+        now = time.time()
+        if now - self._last_review_poll < REVIEW_POLL_INTERVAL_S:
+            return
+        try:
+            self._get_tracker().sync()
+        except Exception as e:
+            log.warning(f"Tracker sync failed: {e}")
+
+    def _launch_background(self, cmd: list[str], sid: str):
+        """Launch a subprocess in background, logging its output."""
+        log_file = self.sessions_dir.parent / "watcher.log"
+        try:
+            f = open(log_file, "a")
+            subprocess.Popen(cmd, cwd=str(self.repo_dir), stdout=f, stderr=f)
+        except Exception as e:
+            log.error(f"[{sid}] Failed to launch {cmd}: {e}")
 
     def _scan_for_waiting(self):
         """Detect new waiting.json files → pause those containers."""
@@ -227,7 +252,6 @@ class HostWatcher:
             # Poll tracker for new comments with @nightshift command
             try:
                 tracker = self._get_tracker()
-                tracker.sync()
                 comments = tracker.get_comments(issue_id)
             except Exception as e:
                 log.warning(f"[{sid}] Tracker poll failed: {e}")
@@ -316,7 +340,7 @@ class HostWatcher:
                 str(Path(__file__).parent / "launch.py"),
                 issue_id, "--resume",
             ]
-            subprocess.Popen(cmd, cwd=str(self.repo_dir))
+            self._launch_background(cmd, sid)
 
     # --- Closed issue cleanup ---
 
@@ -424,7 +448,6 @@ class HostWatcher:
 
         try:
             tracker = self._get_tracker()
-            tracker.sync()
             issues = tracker.list_issues(status="open")
         except Exception as e:
             log.warning(f"Auto-start: tracker poll failed: {e}")
@@ -455,7 +478,7 @@ class HostWatcher:
                 str(Path(__file__).parent / "launch.py"),
                 issue.id,
             ]
-            subprocess.Popen(cmd, cwd=str(self.repo_dir))
+            self._launch_background(cmd, sid)
 
     def _post_telegram_review_to_tracker(self, issue_id: str, text: str, author: str):
         """Post Telegram review reply as a tracker comment for audit trail."""
@@ -463,13 +486,19 @@ class HostWatcher:
             tracker = self._get_tracker()
             comment_body = f"Review from {author} via Telegram:\n\n{text}"
             tracker.add_comment(issue_id, comment_body)
-            tracker.sync()
             log.info(f"Posted Telegram review to tracker for {issue_id[:12]}")
         except Exception as e:
             log.warning(f"Failed to post Telegram review to tracker: {e}")
 
     def _handle_review_command(self, sid: str, issue_id: str, cmd: str, session_dir: Path):
         """Execute a @nightshift command on a waiting:review session."""
+        # Backoff on repeated failures: wait 2^attempts minutes (max 30 min)
+        if sid in self._command_failures:
+            last_time, attempts = self._command_failures[sid]
+            backoff_s = min(60 * (2 ** attempts), 1800)
+            if time.time() - last_time < backoff_s:
+                return  # still in cooldown
+
         if cmd == "revise":
             self._do_revise(sid, issue_id, session_dir)
         elif cmd == "accept":
@@ -507,7 +536,7 @@ class HostWatcher:
                 str(Path(__file__).parent / "launch.py"),
                 issue_id, "--resume",
             ]
-            subprocess.Popen(cmd, cwd=str(self.repo_dir))
+            self._launch_background(cmd, sid)
 
         except Exception as e:
             log.error(f"[{sid}] Revise failed: {e}")
@@ -517,10 +546,26 @@ class HostWatcher:
         try:
             log.info(f"[{sid}] Running nightshift {command}")
             self._review_comment_counts.pop(sid, None)
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, str(Path(__file__).parent / "cli.py"), command, issue_id],
-                cwd=str(self.repo_dir),
+                cwd=str(self.repo_dir), capture_output=True, text=True,
             )
+            if result.returncode != 0:
+                error_msg = result.stderr.strip()
+                _, attempts = self._command_failures.get(sid, (0, 0))
+                attempts += 1
+                self._command_failures[sid] = (time.time(), attempts)
+                backoff_m = min(2 ** attempts, 30)
+                log.error(f"[{sid}] nightshift {command} failed (attempt {attempts}, "
+                          f"retry in {backoff_m}m): {error_msg}")
+                self._tg_notify(f"⚠️ `nightshift {command}` failed for `{sid}` "
+                                f"(attempt {attempts}, retry in {backoff_m}m):\n\n{error_msg}")
+            else:
+                log.info(f"[{sid}] nightshift {command} completed")
+                self._tg_notify(f"✅ `nightshift {command}` completed for `{sid}`")
+                self._command_failures.pop(sid, None)
+                if result.stdout.strip():
+                    log.info(f"[{sid}] {result.stdout.strip()}")
         except Exception as e:
             log.error(f"[{sid}] {command} failed: {e}")
 
@@ -606,6 +651,22 @@ class HostWatcher:
 
     # --- Telegram (self-contained) ---
 
+    def _tg_notify(self, text: str):
+        """Send a plain notification to Telegram (no reply expected)."""
+        if not self.tg_enabled:
+            return
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
+                json={
+                    "chat_id": self.tg_chat,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                }, timeout=10,
+            )
+        except Exception as e:
+            log.warning(f"Telegram notify failed: {e}")
+
     def _tg_send_question(self, sid: str, question: str, short_id: str) -> Optional[int]:
         """Send question to Telegram with force_reply. Returns message_id."""
         try:
@@ -652,7 +713,19 @@ def main():
     p.add_argument("--sessions-dir", required=True, help=".nightshift/sessions path")
     p.add_argument("--no-auto-start", action="store_true",
                    help="Disable automatic starting of new issues")
+    p.add_argument("--log-file", default=None,
+                   help="Log to file instead of stderr")
     a = p.parse_args()
+
+    # Reconfigure logging to file if requested
+    if a.log_file:
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [watcher] %(message)s",
+            filename=a.log_file,
+        )
 
     # Load .env from repo root (does not override existing env vars)
     try:
@@ -660,7 +733,7 @@ def main():
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, check=True,
         ).stdout.strip())
-        load_dotenv(repo / ".env")
+        load_all_dotenv(repo / ".env")
     except subprocess.CalledProcessError:
         repo = Path.cwd()
 

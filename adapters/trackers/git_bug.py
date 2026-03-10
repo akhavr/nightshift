@@ -3,6 +3,7 @@
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -10,23 +11,72 @@ from core.protocols import IssueTracker, TrackerIssue, TrackerComment
 
 log = logging.getLogger(__name__)
 
+_LOCK_RETRIES = 3
+_LOCK_RETRY_DELAY_S = 5
+
 
 class GitBugTracker:
     def __init__(self, repo_dir: str | Path = "/workspace"):
         self.cwd = str(repo_dir)
 
     def _run(self, *args: str, timeout: int = 30, ignore_rc: set[int] | None = None) -> str:
-        try:
-            r = subprocess.run(
-                ["git-bug", *args], cwd=self.cwd,
-                capture_output=True, text=True, timeout=timeout,
-            )
-            if r.returncode != 0 and r.returncode not in (ignore_rc or set()):
+        for attempt in range(_LOCK_RETRIES):
+            try:
+                r = subprocess.run(
+                    ["git-bug", *args], cwd=self.cwd,
+                    capture_output=True, text=True, timeout=timeout,
+                )
+                if r.returncode == 0:
+                    return r.stdout.strip()
+                if r.returncode in (ignore_rc or set()):
+                    return r.stdout.strip()
+                if "already locked by the process pid" in r.stderr:
+                    # Check if the locking process is still alive
+                    pid = self._extract_lock_pid(r.stderr)
+                    if pid and not self._pid_alive(pid):
+                        log.warning(f"git-bug locked by dead process {pid} — clearing lock")
+                        self._clear_stale_lock()
+                        continue  # retry immediately after clearing
+                    if attempt < _LOCK_RETRIES - 1:
+                        log.info(f"git-bug locked (pid {pid}), retrying in {_LOCK_RETRY_DELAY_S}s...")
+                        time.sleep(_LOCK_RETRY_DELAY_S)
+                        continue
                 log.warning(f"git-bug {' '.join(args)} failed (rc={r.returncode}): {r.stderr.strip()}")
-            return r.stdout.strip()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            log.warning(f"git-bug {args[0]} failed: {e}")
-            return ""
+                return r.stdout.strip()
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                log.warning(f"git-bug {args[0]} failed: {e}")
+                return ""
+        return ""
+
+    @staticmethod
+    def _extract_lock_pid(stderr: str) -> int | None:
+        """Extract PID from 'already locked by the process pid NNNN'."""
+        import re
+        m = re.search(r"process pid (\d+)", stderr)
+        return int(m.group(1)) if m else None
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """Check if a process is still running."""
+        try:
+            import os
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # process exists but we can't signal it
+
+    def _clear_stale_lock(self):
+        """Remove stale git-bug lock files."""
+        import glob as globmod
+        repo_git = Path(self.cwd) / ".git"
+        # git-bug uses Go's lockfile package — look for lock files
+        for pattern in ["git-bug-cache.lock", "*.lock"]:
+            for lock in repo_git.glob(f"**/{pattern}"):
+                if "git-bug" in str(lock) or "bug" in str(lock):
+                    log.info(f"Removing stale lock: {lock}")
+                    lock.unlink(missing_ok=True)
 
     def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
         raw = self._run("bug", "show", issue_id, "-f", "json")
