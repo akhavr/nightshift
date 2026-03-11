@@ -282,39 +282,125 @@ def cmd_accept(a):
     """Merge agent branch into base branch, then clean up."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
-    config = load_workflow(r / "WORKFLOW.md")
+    config = load_workflow(a.workflow or r / "WORKFLOW.md")
     branch = f"agent/{sid}"
     base = config.workspace.base_branch
+    wt = r / config.workspace.root / f"agent-{sid}"
 
-    # Check branch exists
+    # Find merge source: branch or worktree HEAD
     result = subprocess.run(
         ["git", "rev-parse", "--verify", branch],
-        capture_output=True, cwd=str(r),
+        capture_output=True, text=True, cwd=str(r),
     )
-    if result.returncode != 0:
-        print(f"Branch {branch} not found.", file=sys.stderr)
+    if result.returncode == 0:
+        merge_ref = branch
+    elif wt.exists():
+        # Branch gone but worktree still has commits — use its HEAD
+        wt_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=str(wt),
+        )
+        if wt_head.returncode != 0:
+            print(f"Branch {branch} not found and worktree HEAD unreadable.", file=sys.stderr)
+            sys.exit(1)
+        merge_ref = wt_head.stdout.strip()
+        print(f"Branch {branch} gone, using worktree HEAD {merge_ref[:12]}")
+    else:
+        print(f"Branch {branch} not found and no worktree at {wt}.", file=sys.stderr)
         sys.exit(1)
 
     # Show what will be merged
-    subprocess.run(["git", "log", "--oneline", f"{base}..{branch}"], cwd=str(r))
-    subprocess.run(["git", "diff", "--stat", f"{base}..{branch}"], cwd=str(r))
+    subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))
+    subprocess.run(["git", "diff", "--stat", f"{base}..{merge_ref}"], cwd=str(r))
 
     # Merge
     result = subprocess.run(
-        ["git", "merge", "--no-ff", branch, "-m", f"Merge {branch}: agent work on {a.issue_id}"],
+        ["git", "merge", "--no-ff", merge_ref, "-m", f"Merge {branch}: agent work on {a.issue_id}"],
         capture_output=True, text=True, cwd=str(r),
     )
     if result.returncode != 0:
-        print(f"Merge failed:\n{result.stderr}", file=sys.stderr)
-        print("Resolve conflicts manually, then run cleanup.")
-        sys.exit(1)
+        merge_err = result.stderr.strip()
 
-    print(f"Merged {branch} into {base}")
+        # Dirty working tree — user must commit/stash first
+        if "local changes" in merge_err or "overwritten by merge" in merge_err:
+            print(f"Merge failed — uncommitted changes on {base}:\n{merge_err}", file=sys.stderr)
+            _report_accept_failure(config, r, a.issue_id,
+                                   f"Cannot merge: uncommitted changes on `{base}`. "
+                                   f"Commit or stash them first.")
+            sys.exit(1)
 
-    wt = r / config.workspace.root / f"agent-{sid}"
+        # Conflict — abort the failed merge, rebase agent branch onto base, retry
+        subprocess.run(["git", "merge", "--abort"], capture_output=True, cwd=str(r))
+        print(f"Merge conflict — rebasing {branch} onto {base}...")
+
+        # Rebase from repo root (worktree .git may point to container paths).
+        # Checkout the branch in the main repo temporarily.
+        old_branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True, cwd=str(r),
+        ).stdout.strip()
+        subprocess.run(["git", "checkout", branch],
+                       capture_output=True, cwd=str(r))
+        rebase = subprocess.run(
+            ["git", "rebase", base],
+            capture_output=True, text=True, cwd=str(r),
+        )
+        if rebase.returncode != 0:
+            subprocess.run(["git", "rebase", "--abort"],
+                           capture_output=True, cwd=str(r))
+            subprocess.run(["git", "checkout", old_branch],
+                           capture_output=True, cwd=str(r))
+            conflict_details = rebase.stderr.strip()
+            print(f"Rebase failed:\n{conflict_details}", file=sys.stderr)
+            _report_accept_failure(
+                config, r, a.issue_id,
+                f"Merge conflicts with `{base}` that need manual resolution:\n"
+                f"```\n{conflict_details}\n```\n"
+                f"@nightshift revise")
+            sys.exit(1)
+
+        # Switch back to base branch for the merge
+        subprocess.run(["git", "checkout", old_branch],
+                       capture_output=True, cwd=str(r))
+        print(f"Rebase successful, retrying merge...")
+        new_ref = branch
+
+        result = subprocess.run(
+            ["git", "merge", "--no-ff", new_ref,
+             "-m", f"Merge {branch}: agent work on {a.issue_id}"],
+            capture_output=True, text=True, cwd=str(r),
+        )
+        if result.returncode != 0:
+            print(f"Merge still failed after rebase:\n{result.stderr}", file=sys.stderr)
+            _report_accept_failure(config, r, a.issue_id,
+                                   f"Merge failed even after rebase:\n"
+                                   f"```\n{result.stderr.strip()}\n```")
+            sys.exit(1)
+
+    print(f"Merged into {base}")
+
     _remove_worktree(r, wt, branch)
 
+    # Close issue in tracker
+    try:
+        tracker = create_tracker(config, repo_dir=str(r))
+        tracker.set_status(a.issue_id, "closed")
+        tracker.add_comment(a.issue_id, f"✅ Accepted and merged into `{base}`.")
+        tracker.sync()
+    except Exception as e:
+        print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
+
     print(f"Accepted and cleaned up {sid}")
+
+
+def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
+    """Post accept failure to tracker as a comment."""
+    try:
+        tracker = create_tracker(config, repo_dir=str(repo))
+        tracker.add_comment(issue_id, f"⚠️ Accept failed: {message}")
+        tracker.sync()
+    except Exception as e:
+        print(f"Warning: failed to post failure to tracker: {e}", file=sys.stderr)
 
 
 def _force_remove_dir(path: Path):
@@ -372,6 +458,15 @@ def cmd_reject(a):
     if ss.exists():
         import shutil
         shutil.rmtree(ss)
+
+    # Close issue in tracker
+    try:
+        tracker = create_tracker(config, repo_dir=str(r))
+        tracker.set_status(a.issue_id, "closed")
+        tracker.add_comment(a.issue_id, "🛑 Rejected — agent work discarded.")
+        tracker.sync()
+    except Exception as e:
+        print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
 
     print(f"Rejected and cleaned up {sid}")
 
