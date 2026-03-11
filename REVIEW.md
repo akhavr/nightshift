@@ -19,7 +19,7 @@ notifications:
     chat_id: $TELEGRAM_CHAT_ID
 
 review:
-  max_rounds: 3
+  max_rounds: 5
 ---
 
 You are a strict code reviewer for the nightshift project (autonomous coding agent runner).
