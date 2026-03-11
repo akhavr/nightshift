@@ -287,8 +287,8 @@ def _post_container(session_dir, config, repo, issue_id):
         tracker.add_label(issue_id, "needs-review")
         try:
             tracker.remove_label(issue_id, "agent-in-progress")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: remove_label failed: {e}", file=sys.stderr)
         tracker.sync()
         print(f"Posted review summary to tracker for {issue_id[:12]}")
     except Exception as e:
