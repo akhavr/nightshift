@@ -179,11 +179,9 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 
 ## Orphan Tests
 
-| Test File | Notes |
-|---|---|
-| oq1_stdin_test.py | Manual integration test verifying Claude Code CLI stdin behavior. Maps to REQ-003 but requires manual execution with real Claude Code. Consider keeping as a manual verification script rather than a CI test. |
+No orphan tests — all test files map to at least one requirement.
 
-No test files are truly orphaned; all map to at least one requirement.
+**Note:** `oq1_stdin_test.py` maps to REQ-003 but requires manual execution with a real Claude Code installation. It is not included in automated CI runs. Consider keeping it as a manual verification script.
 
 ---
 
