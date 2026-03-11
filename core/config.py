@@ -48,14 +48,6 @@ class MergeConfig:
 
 
 @dataclass
-class AutoStartConfig:
-    enabled: bool = False
-    label: str = "nightshift"
-    poll_interval_s: int = 30
-    max_concurrent: int = 4
-
-
-@dataclass
 class HooksConfig:
     after_create: str | None = None
     before_run: str | None = None
@@ -66,6 +58,14 @@ class HooksConfig:
 @dataclass
 class ReviewConfig:
     max_rounds: int = 3
+
+
+@dataclass
+class AutoStartConfig:
+    enabled: bool = False
+    label: str = "nightshift"
+    poll_interval_s: int = 30
+    max_concurrent: int = 4
 
 
 @dataclass

@@ -83,12 +83,13 @@ Key core modules:
 - **Q&A flow**: Agent outputs `@@QUESTION@@` then `@@WAITING@@` (or exits — 30s timeout auto-triggers waiting). Container writes `waiting.json`. Host watcher pauses the container. Answer arrives via Telegram reply, tracker comment, or `cli.py answer`. Written to `answer.txt`. Container unpaused. Agent restarted with `--resume` and answer as prompt (no stdin — `-p` mode is fire-and-forget).
 - **Auto-resume**: On context limit, stall, or max-turns, `SessionRunner` builds a resume prompt with checkpoint history and recent conversation, then restarts the agent in a loop (up to `MAX_RESUMES=10`).
 - **Review/merge lifecycle**: Container exits after `@@DONE@@` with status `waiting:review`. Host user runs `cli.py accept <id>` to merge or `cli.py reject <id>` to discard.
+- **Auto-start**: Watcher polls tracker for new issues matching a configured label (default `nightshift`), auto-launches `nightshift start` for each. Configured via `auto_start` section in WORKFLOW.md (`enabled`, `label`, `poll_interval_s`, `max_concurrent`). Tracks already-started issues via in-memory set + session dir check. Respects `max_concurrent` to avoid resource exhaustion.
 
 ## Testing
 
 Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). Test directories exist for `tests/adapters/` and `tests/integration/` but have no test files yet.
 
-Current test files: `test_stream_parser.py` (Claude Code stream-json parsing), `test_marker_reliability.py` (marker failure modes), `oq1_stdin_test.py` (CLI behavior verification), `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`.
+Current test files: `test_stream_parser.py` (Claude Code stream-json parsing), `test_marker_reliability.py` (marker failure modes), `oq1_stdin_test.py` (CLI behavior verification), `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py` (automated review), `test_auto_start.py` (auto-start config and watcher logic).
 
 ## Docker
 
