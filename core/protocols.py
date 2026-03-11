@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Protocol, Optional, Iterator, Any, runtime_checkable
 
 
+SHORT_ID_LEN = 12   # default truncation length for issue IDs
+
 # ── Issue Tracker ─────────────────────────────────────────
 
 @dataclass

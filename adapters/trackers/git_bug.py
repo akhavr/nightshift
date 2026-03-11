@@ -2,12 +2,14 @@
 
 import json
 import logging
+import os
+import re
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
-from core.protocols import IssueTracker, TrackerIssue, TrackerComment
+from core.protocols import IssueTracker, TrackerIssue, TrackerComment, SHORT_ID_LEN
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +53,6 @@ class GitBugTracker:
     @staticmethod
     def _extract_lock_pid(stderr: str) -> int | None:
         """Extract PID from 'already locked by the process pid NNNN'."""
-        import re
         m = re.search(r"process pid (\d+)", stderr)
         return int(m.group(1)) if m else None
 
@@ -59,7 +60,6 @@ class GitBugTracker:
     def _pid_alive(pid: int) -> bool:
         """Check if a process is still running."""
         try:
-            import os
             os.kill(pid, 0)
             return True
         except ProcessLookupError:
@@ -69,7 +69,6 @@ class GitBugTracker:
 
     def _clear_stale_lock(self):
         """Remove stale git-bug lock files."""
-        import glob as globmod
         repo_git = Path(self.cwd) / ".git"
         # git-bug uses Go's lockfile package — look for lock files
         for pattern in ["git-bug-cache.lock", "*.lock"]:
@@ -85,7 +84,7 @@ class GitBugTracker:
             d = json.loads(raw)
             comments = d.get("comments", [])
             return TrackerIssue(
-                id=issue_id, identifier=issue_id[:12],
+                id=issue_id, identifier=issue_id[:SHORT_ID_LEN],
                 title=d.get("title", "Unknown"),
                 body=comments[0].get("message", "") if comments else "",
                 status=d.get("status", "unknown"),

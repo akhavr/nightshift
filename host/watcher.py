@@ -37,6 +37,7 @@ from host.constants import (
     TG_LONG_POLL_TIMEOUT_S, TG_HTTP_TIMEOUT_S, TG_POST_TIMEOUT_S,
     TG_MESSAGE_SOFT_LIMIT, TG_TRUNCATION_POINT,
 )
+from core.config import load_workflow, create_tracker
 from core.review import (
     parse_nightshift_command, strip_nightshift_command,
     collect_review_feedback, build_revise_prompt,
@@ -109,7 +110,6 @@ class HostWatcher:
     def _get_tracker(self):
         """Lazy-init tracker from WORKFLOW.md."""
         if self._tracker is None:
-            from core.config import load_workflow, create_tracker
             self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
             self._tracker = create_tracker(self._config, repo_dir=str(self.repo_dir))
         return self._tracker
@@ -117,7 +117,6 @@ class HostWatcher:
     def _get_auto_start_config(self):
         """Lazy-load auto_start config from WORKFLOW.md."""
         if self._auto_start_config is None:
-            from core.config import load_workflow
             if self._config is None:
                 self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
             self._auto_start_config = self._config.auto_start
@@ -277,7 +276,6 @@ class HostWatcher:
                               issue_id: str, review_md: Path):
         """Launch a review session for sid, or escalate if max rounds reached."""
         try:
-            from core.config import load_workflow
             review_config = load_workflow(review_md)
             max_rounds = review_config.review.max_rounds
         except Exception:
@@ -472,7 +470,6 @@ class HostWatcher:
             # Extract the coder sid to determine short_id
             coder_sid = review_sid[len("review-"):]
 
-            from core.config import load_workflow
             review_md = self.repo_dir / "REVIEW.md"
             config = load_workflow(review_md) if review_md.exists() else load_workflow(self.repo_dir / "WORKFLOW.md")
 
@@ -662,7 +659,6 @@ class HostWatcher:
     def _cleanup_session(self, sid: str, issue_id: str, session_dir: Path):
         """Remove worktree, branch, and session directory."""
         try:
-            from core.config import load_workflow
             config = load_workflow(self.repo_dir / "WORKFLOW.md")
             wt = self.repo_dir / config.workspace.root / f"agent-{sid}"
             branch = f"agent/{sid}"

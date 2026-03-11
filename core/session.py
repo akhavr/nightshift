@@ -4,9 +4,12 @@ Works with any adapters implementing the protocols.
 """
 
 import logging
+import subprocess
 import time
 from pathlib import Path
 
+from core.config import MergeConfig
+from core.prompts import build_resume_prompt
 from core.protocols import (
     CodingAgent, IssueTracker, Notifier, WorkspaceManager,
     AgentEventType, MarkerType, parse_marker, TrackerIssue, Workspace,
@@ -47,7 +50,6 @@ class SessionRunner:
 
         # Merge policy from WORKFLOW.md (defaults if not provided)
         if merge_config is None:
-            from core.config import MergeConfig
             merge_config = MergeConfig()
         self.merge_config = merge_config
 
@@ -119,7 +121,6 @@ class SessionRunner:
         if hasattr(self.workspace_mgr, "run_hook"):
             ok = self.workspace_mgr.run_hook(self._workspace.path, script, timeout)
         else:
-            import subprocess
             try:
                 subprocess.run(
                     ["sh", "-c", script], cwd=str(self._workspace.path),
@@ -443,7 +444,6 @@ class SessionRunner:
         return "none"
 
     def _build_resume(self, checkpoint_summary: str | None = None):
-        from core.prompts import build_resume_prompt
         build_resume_prompt(
             self.issue.title, self.issue.body, "", self.state_mgr,
             checkpoint_summary=checkpoint_summary,

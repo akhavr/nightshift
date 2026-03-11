@@ -6,13 +6,17 @@ No hardcoded adapter imports. Adapter selection is driven by WORKFLOW.md.
 
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
+from adapters.notifiers.composite import CompositeNotifier
+from adapters.trackers.static import StaticTracker
 from core.config import (
     load_workflow, create_agent, create_tracker,
     create_workspace_mgr, create_notifiers,
 )
+from core.prompts import render_template, build_initial_prompt
 from core.protocols import Workspace
 from core.state import StateManager
 from core.session import SessionRunner
@@ -24,7 +28,6 @@ log = logging.getLogger("entrypoint")
 
 
 def _current_branch(repo_dir: str) -> str:
-    import subprocess
     try:
         return subprocess.check_output(
             ["git", "branch", "--show-current"],
@@ -54,7 +57,6 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
     state_mgr.update_status("working")
 
     if config.prompt_template:
-        from core.prompts import render_template
         extra_vars = {}
         if step == "review":
             extra_vars["diff"] = _read_diff()
@@ -65,15 +67,11 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
             related_context=related, attempt=None,
             **extra_vars,
         )
-    from core.prompts import build_initial_prompt
     return build_initial_prompt(issue.title, issue.body, related)
 
 
 def _create_adapters(config):
     """Instantiate all adapters from config."""
-    from adapters.trackers.static import StaticTracker
-    from adapters.notifiers.composite import CompositeNotifier
-
     tracker = StaticTracker(session_dir="/session")
     agent = create_agent(config)
     workspace_mgr = create_workspace_mgr(config, repo_root=Path("/workspace"))
