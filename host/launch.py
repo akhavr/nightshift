@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
     parser.add_argument("--image", default="nightshift:latest", help="Docker image")
+    parser.add_argument("--step", default="coder", choices=["coder", "review"],
+                        help="Pipeline step (coder or review)")
     args = parser.parse_args()
 
     repo = get_repo_root()
@@ -36,20 +38,31 @@ def main():
     # Load .env BEFORE config so $VAR references in WORKFLOW.md resolve correctly
     load_all_dotenv(repo / ".env")
 
-    config = load_workflow(args.workflow or repo / "WORKFLOW.md")
+    workflow_path = args.workflow or repo / "WORKFLOW.md"
+    config = load_workflow(workflow_path)
 
     issue_id = args.issue_id
     short_id = issue_id[:12]
     max_turns = args.max_turns or config.agent.max_turns
 
+    # Step-dependent naming
+    is_review = args.step == "review"
+    prefix = "review" if is_review else "agent"
+    session_name = f"review-{short_id}" if is_review else short_id
+    branch = f"{prefix}/{short_id}"
+    container_name = f"nightshift-{prefix}-{short_id}" if is_review else f"nightshift-{short_id}"
+    worktree_name = f"{prefix}-{short_id}"
+
+    # For review step, base off the agent branch (not the repo base branch)
+    base_branch = f"agent/{short_id}" if is_review else config.workspace.base_branch
+
     # Session dir (always under repo)
-    session_dir = repo / ".nightshift" / "sessions" / short_id
-    branch = f"agent/{short_id}"
+    session_dir = repo / ".nightshift" / "sessions" / session_name
 
     # Create workspace based on config
     if config.workspace.kind == "worktree":
         wt_root = repo / config.workspace.root
-        wt_path = wt_root / f"agent-{short_id}"
+        wt_path = wt_root / worktree_name
 
         if not args.resume:
             session_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +85,7 @@ def main():
                            capture_output=True, cwd=str(repo))
 
             # Create branch (may already exist — ignore error)
-            subprocess.run(["git", "branch", branch, config.workspace.base_branch],
+            subprocess.run(["git", "branch", branch, base_branch],
                            capture_output=True, cwd=str(repo))
 
             # Create worktree — must succeed
@@ -94,7 +107,7 @@ def main():
             # Verify worktree has files (not just .git)
             files = [f for f in wt_path.iterdir() if f.name != ".git"]
             if not files:
-                print(f"Worktree at {wt_path} is empty — check base_branch in WORKFLOW.md", file=sys.stderr)
+                print(f"Worktree at {wt_path} is empty — check base_branch", file=sys.stderr)
                 sys.exit(1)
 
             (session_dir / "state.json").write_text(json.dumps({
@@ -104,36 +117,46 @@ def main():
                 "checkpoints": [], "human_answers": [],
             }, indent=2))
             print(f"Created worktree at {wt_path}")
+
+            # For review step: generate diff and copy issue data from coder session
+            if is_review:
+                _prepare_review_session(repo, session_dir, short_id, config)
+
         else:
             if not (session_dir / "state.json").exists():
                 print(f"No session state at {session_dir}", file=sys.stderr)
                 sys.exit(1)
-            print(f"Resuming session for {short_id}")
+            print(f"Resuming session for {session_name}")
 
         workspace_mount = str(wt_path)
 
     # Dump issue data to session dir for the static tracker inside the container.
     # On resume, reuse existing dumps if tracker is unavailable (e.g. git-bug locked).
+    # Review sessions copy issue data from coder session instead.
     issue_json = session_dir / "issue.json"
     issues_json = session_dir / "issues.json"
 
-    tracker = create_tracker(config, repo_dir=str(repo))
-    issue = tracker.get_issue(issue_id)
-
-    if not issue and args.resume and issue_json.exists():
-        print(f"Tracker unavailable, reusing cached issue data for resume")
-    elif not issue:
-        print(f"Issue {issue_id} not found", file=sys.stderr)
-        sys.exit(1)
+    if is_review and issue_json.exists():
+        # Already copied from coder session in _prepare_review_session
+        pass
     else:
-        from dataclasses import asdict
-        issue_json.write_text(json.dumps(asdict(issue), indent=2))
+        tracker = create_tracker(config, repo_dir=str(repo))
+        issue = tracker.get_issue(issue_id)
 
-        all_issues = tracker.list_issues()
-        issues_json.write_text(
-            json.dumps([asdict(i) for i in all_issues], indent=2)
-        )
-        print(f"Dumped issue + {len(all_issues)} issues to {session_dir}")
+        if not issue and args.resume and issue_json.exists():
+            print(f"Tracker unavailable, reusing cached issue data for resume")
+        elif not issue:
+            print(f"Issue {issue_id} not found", file=sys.stderr)
+            sys.exit(1)
+        else:
+            from dataclasses import asdict
+            issue_json.write_text(json.dumps(asdict(issue), indent=2))
+
+            all_issues = tracker.list_issues()
+            issues_json.write_text(
+                json.dumps([asdict(i) for i in all_issues], indent=2)
+            )
+            print(f"Dumped issue + {len(all_issues)} issues to {session_dir}")
 
     # Auth mounts — read-only, copied to writable HOME by docker-entrypoint.sh
     home = Path.home()
@@ -154,20 +177,26 @@ def main():
 
     # Use -it only when stdin is a TTY (not when launched from watcher)
     tty_flags = ["-it"] if sys.stdin.isatty() else []
+
+    # Mount the workflow file (WORKFLOW.md or REVIEW.md)
+    workflow_mount = str(Path(workflow_path).resolve())
+
     docker_cmd = [
         "docker", "run", "--rm", *tty_flags,
-        "--name", f"nightshift-{short_id}",
+        "--name", container_name,
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
         "-v", f"{repo / '.git'}:/repo-git:rw",
-        # Mount WORKFLOW.md so container can read it
-        "-v", f"{repo / 'WORKFLOW.md'}:/workspace/WORKFLOW.md:ro",
+        # Mount workflow file so container can read it
+        "-v", f"{workflow_mount}:/workspace/WORKFLOW.md:ro",
         *auth_mounts,
         "-e", f"ISSUE_ID={issue_id}",
         "-e", f"SHORT_ID={short_id}",
+        "-e", f"WORKTREE_NAME={worktree_name}",
         "-e", f"RESUME={'--resume' if args.resume else ''}",
         "-e", f"MAX_TURNS={max_turns}",
+        "-e", f"STEP={args.step}",
         *notify_env,
         args.image,
     ]
@@ -180,13 +209,38 @@ def main():
         docker_cmd.insert(-1, "-e")
         docker_cmd.insert(-1, "SSH_AUTH_SOCK=/ssh-agent")
 
-    print(f"Launching container nightshift-{short_id}...")
+    print(f"Launching container {container_name}...")
     result = subprocess.run(docker_cmd)
 
     # Post-container: if agent finished, post proof-of-work to real tracker
-    _post_container(session_dir, config, repo, issue_id)
+    # (only for coder sessions — reviewer posts its own verdict)
+    if not is_review:
+        _post_container(session_dir, config, repo, issue_id)
 
     sys.exit(result.returncode)
+
+
+def _prepare_review_session(repo, review_session_dir, short_id, config):
+    """Prepare review session: copy issue data and generate diff."""
+    import shutil
+    coder_session = repo / ".nightshift" / "sessions" / short_id
+
+    # Copy issue data from coder session
+    for fname in ("issue.json", "issues.json"):
+        src = coder_session / fname
+        if src.exists():
+            shutil.copy2(str(src), str(review_session_dir / fname))
+
+    # Generate diff between base branch and agent branch
+    base = config.workspace.base_branch
+    agent_branch = f"agent/{short_id}"
+    diff_result = subprocess.run(
+        ["git", "diff", f"{base}..{agent_branch}"],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    diff = diff_result.stdout if diff_result.returncode == 0 else "N/A"
+    (review_session_dir / "diff.patch").write_text(diff)
+    print(f"Generated diff ({len(diff)} bytes) for review")
 
 
 def _post_container(session_dir, config, repo, issue_id):

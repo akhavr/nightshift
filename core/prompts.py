@@ -11,11 +11,13 @@ def render_template(
     issue: TrackerIssue,
     related_context: str = "",
     attempt: int | None = None,
+    **extra_vars,
 ) -> str:
     """Render a WORKFLOW.md prompt template with issue context.
 
     Supports simple {{ var }} and {% if %} / {% endif %} syntax.
     For full Jinja2 support, install jinja2 and switch to that engine.
+    Extra keyword args are passed through as template variables (e.g. diff=...).
     """
     try:
         import jinja2
@@ -23,6 +25,7 @@ def render_template(
         tmpl = env.from_string(template)
         return tmpl.render(
             issue=issue, related_context=related_context, attempt=attempt,
+            **extra_vars,
         )
     except ImportError:
         # Fallback: simple {{ var }} replacement (no conditionals)

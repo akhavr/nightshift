@@ -6,7 +6,7 @@ from typing import Optional
 BOT_PREFIXES = ("💭", "🤖", "❓", "📌", "⚠️", "✅", "⏸️", "🔄", "👤", "💬", "🛑", "🏁")
 
 # Matches @nightshift <command> anywhere except inside backtick-quoted text
-_NIGHTSHIFT_CMD_RE = re.compile(r"@nightshift\s+(revise|accept|reject)\b", re.IGNORECASE)
+_NIGHTSHIFT_CMD_RE = re.compile(r"@nightshift\s+(revise|accept|reject|approve)\b", re.IGNORECASE)
 _FENCED_BLOCK_RE = re.compile(r"```[\s\S]*?```")
 _INLINE_CODE_RE = re.compile(r"`[^`]+`")
 

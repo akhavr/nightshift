@@ -9,9 +9,10 @@ if [ -d /claude-auth ]; then
 fi
 
 # Fix worktree .git pointer: the host path doesn't exist inside the container.
-# Rewrite to use the mounted /repo-git path so commits land on the agent branch.
-if [ -f /workspace/.git ] && [ -d /repo-git ] && [ -n "$SHORT_ID" ]; then
-    echo "gitdir: /repo-git/worktrees/agent-${SHORT_ID}" > /workspace/.git
+# Rewrite to use the mounted /repo-git path so commits land on the correct branch.
+# WORKTREE_NAME is set by launch.py (e.g. "agent-abc123" or "review-abc123").
+if [ -f /workspace/.git ] && [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
+    echo "gitdir: /repo-git/worktrees/${WORKTREE_NAME}" > /workspace/.git
 fi
 
 exec python3 /opt/nightshift/entrypoint.py "$@"
