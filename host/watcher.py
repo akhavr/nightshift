@@ -551,7 +551,7 @@ class HostWatcher:
                 cwd=str(self.repo_dir), capture_output=True, text=True,
             )
             if result.returncode != 0:
-                error_msg = result.stderr.strip()
+                error_msg = (result.stderr.strip() + "\n" + result.stdout.strip()).strip()
                 _, attempts = self._command_failures.get(sid, (0, 0))
                 attempts += 1
                 self._command_failures[sid] = (time.time(), attempts)
@@ -655,6 +655,9 @@ class HostWatcher:
         """Send a plain notification to Telegram (no reply expected)."""
         if not self.tg_enabled:
             return
+        # Telegram limit is 4096 chars
+        if len(text) > 4000:
+            text = text[:3950] + "\n\n… (truncated, see watcher.log)"
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.tg_token}/sendMessage",

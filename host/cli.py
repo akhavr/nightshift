@@ -309,6 +309,22 @@ def cmd_accept(a):
         print(f"Branch {branch} not found and no worktree at {wt}.", file=sys.stderr)
         sys.exit(1)
 
+    # Pre-check: repo must be clean (no uncommitted changes or unresolved conflicts)
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, cwd=str(r),
+    )
+    dirty_files = [l for l in status.stdout.strip().splitlines()
+                   if l and not l.startswith("??")]
+    if dirty_files:
+        file_list = "\n".join(dirty_files[:10])
+        msg = (f"Cannot merge: working tree on `{base}` is not clean.\n"
+               f"```\n{file_list}\n```\n"
+               f"Commit or stash changes first.")
+        print(f"Working tree not clean:\n{file_list}", file=sys.stderr)
+        _report_accept_failure(config, r, a.issue_id, msg)
+        sys.exit(1)
+
     # Show what will be merged
     subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))
     subprocess.run(["git", "diff", "--stat", f"{base}..{merge_ref}"], cwd=str(r))
