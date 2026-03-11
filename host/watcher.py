@@ -84,6 +84,9 @@ class HostWatcher:
         # Maps sid -> (last_attempt_time, attempt_count)
         self._command_failures: dict[str, tuple[float, int]] = {}
 
+        # Track reviewer <-> coder round counts: coder_sid -> rounds
+        self._review_rounds: dict[str, int] = {}
+
         # Tracker (lazy-initialized on first review poll)
         self._tracker = None
         self._config = None
@@ -115,6 +118,8 @@ class HostWatcher:
             # Sync tracker once per review poll cycle (not per-method)
             self._maybe_sync_tracker()
             self._check_reviews(tg_reviews)
+            self._check_for_auto_review()
+            self._check_reviewer_done()
             self._check_orphaned_sessions()
             self._check_closed_issues()
             if self.auto_start:
@@ -210,6 +215,286 @@ class HostWatcher:
             if int(elapsed) % 300 == 0 and int(elapsed) > 0:
                 log.info(f"[{sid}] Still waiting ({elapsed/60:.0f}m)")
 
+    # --- Automated review step ---
+
+    def _check_for_auto_review(self):
+        """Detect waiting:review coder sessions, launch reviewer if REVIEW.md exists."""
+        if not self.sessions_dir.exists():
+            return
+
+        review_md = self.repo_dir / "REVIEW.md"
+        if not review_md.exists():
+            return  # No REVIEW.md → skip automated review
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+
+            # Only process coder sessions (not review-* sessions)
+            if sid.startswith("review-"):
+                continue
+
+            state_file = session_dir / "state.json"
+            if not state_file.exists():
+                continue
+
+            try:
+                state = json.loads(state_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if state.get("status") != "waiting:review":
+                continue
+
+            issue_id = state.get("issue_id", "")
+            if not issue_id:
+                continue
+
+            # Check max_rounds before launching another review
+            try:
+                from core.config import load_workflow
+                review_config = load_workflow(review_md)
+                max_rounds = review_config.review.max_rounds
+            except Exception:
+                max_rounds = 3
+
+            rounds = self._review_rounds.get(sid, 0)
+            if rounds >= max_rounds:
+                log.info(f"[{sid}] Max review rounds ({max_rounds}) reached — escalating to human")
+                state["status"] = "waiting:human-review"
+                (state_file).write_text(json.dumps(state, indent=2))
+                self._tg_notify(
+                    f"⚠️ `{sid}` hit max review rounds ({max_rounds}). "
+                    f"Escalating to human review.\n"
+                    f"`nightshift accept/reject/revise {issue_id}`")
+                continue
+
+            # Transition coder to reviewing
+            state["status"] = "reviewing"
+            state_file.write_text(json.dumps(state, indent=2))
+
+            review_sid = f"review-{sid}"
+            self._recently_launched[review_sid] = time.time()
+            self._review_rounds[sid] = rounds + 1
+
+            log.info(f"[{sid}] Launching automated review (round {rounds + 1}/{max_rounds})")
+
+            cmd = [
+                sys.executable,
+                str(Path(__file__).parent / "launch.py"),
+                issue_id,
+                "--workflow", str(review_md),
+                "--step", "review",
+                "--coder-session", sid,
+            ]
+            self._launch_background(cmd, review_sid)
+
+    def _check_reviewer_done(self):
+        """Check if reviewer sessions have finished, handle approve/revise verdict."""
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+
+            # Only process review sessions
+            if not sid.startswith("review-"):
+                continue
+
+            state_file = session_dir / "state.json"
+            if not state_file.exists():
+                continue
+
+            try:
+                state = json.loads(state_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if state.get("status") != "waiting:review":
+                continue
+
+            # Reviewer is done — check its tracker comments for verdict
+            issue_id = state.get("issue_id", "")
+            coder_sid = sid[len("review-"):]  # strip "review-" prefix
+            coder_dir = self.sessions_dir / coder_sid
+
+            if not coder_dir.exists():
+                continue
+
+            # Check reviewer conversation log for @nightshift command
+            conv_log = session_dir / "conversation.jsonl"
+            verdict = self._extract_reviewer_verdict(conv_log, issue_id)
+
+            if not verdict:
+                continue
+
+            log.info(f"[{sid}] Reviewer verdict: {verdict}")
+
+            if verdict == "approve":
+                self._handle_reviewer_approve(coder_sid, coder_dir, issue_id)
+            elif verdict == "revise":
+                self._handle_reviewer_revise(coder_sid, coder_dir, issue_id, session_dir)
+
+            # Clean up reviewer session
+            self._cleanup_review_session(sid, session_dir)
+
+    def _extract_reviewer_verdict(self, conv_log: Path, issue_id: str) -> Optional[str]:
+        """Extract @nightshift approve/revise from reviewer's conversation log."""
+        if not conv_log.exists():
+            return None
+
+        # Check conversation log for @nightshift commands
+        for line in reversed(conv_log.read_text().strip().splitlines()):
+            try:
+                entry = json.loads(line)
+                text = entry.get("content", "")
+                cmd = parse_nightshift_command(text)
+                if cmd in ("approve", "revise"):
+                    return cmd
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        # Also check tracker comments
+        try:
+            tracker = self._get_tracker()
+            comments = tracker.get_comments(issue_id)
+            # Check recent comments for reviewer verdict
+            for comment in reversed(comments[-5:] if len(comments) > 5 else comments):
+                cmd = parse_nightshift_command(comment.body)
+                if cmd in ("approve", "revise"):
+                    return cmd
+        except Exception:
+            pass
+
+        return None
+
+    def _handle_reviewer_approve(self, coder_sid: str, coder_dir: Path, issue_id: str):
+        """Reviewer approved — transition coder to waiting:human-review."""
+        try:
+            state = json.loads((coder_dir / "state.json").read_text())
+            state["status"] = "waiting:human-review"
+            (coder_dir / "state.json").write_text(json.dumps(state, indent=2))
+            log.info(f"[{coder_sid}] Reviewer approved → waiting:human-review")
+
+            self._tg_notify(
+                f"✅ Automated review *approved* `{coder_sid}`.\n"
+                f"Human review: `nightshift accept/reject/revise {issue_id}`")
+
+            try:
+                tracker = self._get_tracker()
+                tracker.add_comment(issue_id,
+                    "🤖 **Automated review: APPROVED**\n\n"
+                    "Reviewer is satisfied with the changes. Awaiting human confirmation.\n\n"
+                    f"Review with: `nightshift accept/reject/revise {issue_id}`")
+                tracker.sync()
+            except Exception as e:
+                log.warning(f"[{coder_sid}] Failed to post approval to tracker: {e}")
+
+        except Exception as e:
+            log.error(f"[{coder_sid}] Failed to handle reviewer approve: {e}")
+
+    def _handle_reviewer_revise(self, coder_sid: str, coder_dir: Path,
+                                issue_id: str, review_dir: Path):
+        """Reviewer requested revisions — resume coder with feedback."""
+        try:
+            # Collect reviewer's feedback from its conversation
+            feedback_parts = []
+            conv_log = review_dir / "conversation.jsonl"
+            if conv_log.exists():
+                for line in conv_log.read_text().strip().splitlines():
+                    try:
+                        entry = json.loads(line)
+                        text = entry.get("content", "")
+                        if "@nightshift" in text.lower() and "revise" in text.lower():
+                            # Extract the feedback (everything except the command)
+                            cleaned = strip_nightshift_command(text)
+                            if cleaned:
+                                feedback_parts.append(cleaned)
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
+            # Also collect from tracker comments
+            try:
+                tracker = self._get_tracker()
+                comments = tracker.get_comments(issue_id)
+                for comment in reversed(comments[-5:] if len(comments) > 5 else comments):
+                    cmd = parse_nightshift_command(comment.body)
+                    if cmd == "revise":
+                        cleaned = strip_nightshift_command(comment.body)
+                        if cleaned:
+                            feedback_parts.append(cleaned)
+                        break
+            except Exception:
+                pass
+
+            if not feedback_parts:
+                feedback_parts = ["Reviewer requested revisions but did not provide specific feedback."]
+
+            feedback = build_revise_prompt([], inline_feedback="\n".join(feedback_parts))
+            (coder_dir / "resume-prompt.md").write_text(feedback)
+
+            state = json.loads((coder_dir / "state.json").read_text())
+            state["status"] = "working"
+            (coder_dir / "state.json").write_text(json.dumps(state, indent=2))
+
+            self._recently_launched[coder_sid] = time.time()
+            log.info(f"[{coder_sid}] Reviewer requested revisions — resuming coder")
+
+            self._tg_notify(f"🔄 Reviewer requested revisions for `{coder_sid}`. Coder resuming.")
+
+            cmd = [
+                sys.executable,
+                str(Path(__file__).parent / "launch.py"),
+                issue_id, "--resume",
+            ]
+            self._launch_background(cmd, coder_sid)
+
+        except Exception as e:
+            log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e}")
+
+    def _cleanup_review_session(self, review_sid: str, review_dir: Path):
+        """Clean up a reviewer session (worktree, branch, session dir)."""
+        try:
+            # Extract the coder sid to determine short_id
+            coder_sid = review_sid[len("review-"):]
+
+            from core.config import load_workflow
+            review_md = self.repo_dir / "REVIEW.md"
+            config = load_workflow(review_md) if review_md.exists() else load_workflow(self.repo_dir / "WORKFLOW.md")
+
+            wt = self.repo_dir / config.workspace.root / f"review-{coder_sid}"
+            branch = f"review/{coder_sid}"
+
+            if wt.exists():
+                result = subprocess.run(
+                    ["git", "worktree", "remove", str(wt), "--force"],
+                    capture_output=True, cwd=str(self.repo_dir),
+                )
+                if result.returncode != 0:
+                    import shutil
+                    try:
+                        shutil.rmtree(wt)
+                    except (PermissionError, FileNotFoundError):
+                        pass
+
+            subprocess.run(["git", "worktree", "prune"],
+                           capture_output=True, cwd=str(self.repo_dir))
+            subprocess.run(["git", "branch", "-D", branch],
+                           capture_output=True, cwd=str(self.repo_dir))
+
+            import shutil
+            shutil.rmtree(review_dir, ignore_errors=True)
+
+            self._recently_launched.pop(review_sid, None)
+            self._review_comment_counts.pop(review_sid, None)
+
+            log.info(f"[{review_sid}] Cleaned up reviewer session")
+        except Exception as e:
+            log.error(f"[{review_sid}] Reviewer cleanup failed: {e}")
+
     # --- Review monitoring ---
 
     def _check_reviews(self, tg_review_replies: dict[str, tuple[str, str]]):
@@ -235,7 +520,7 @@ class HostWatcher:
             except (json.JSONDecodeError, OSError):
                 continue
 
-            if state.get("status") != "waiting:review":
+            if state.get("status") not in ("waiting:review", "waiting:human-review"):
                 # Clean up tracking for non-review sessions
                 self._review_comment_counts.pop(sid, None)
                 continue
@@ -307,6 +592,7 @@ class HostWatcher:
             except (json.JSONDecodeError, OSError):
                 continue
 
+            # Skip non-active statuses (but include reviewing — reviewer may be orphaned)
             if state.get("status") not in ("working", "starting"):
                 continue
 
@@ -505,6 +791,9 @@ class HostWatcher:
             self._do_cli_command(sid, "accept", issue_id)
         elif cmd == "reject":
             self._do_cli_command(sid, "reject", issue_id)
+        elif cmd == "approve":
+            # Manual approve (same as reviewer approve — transition to human-review)
+            self._handle_reviewer_approve(sid, session_dir, issue_id)
 
     def _do_revise(self, sid: str, issue_id: str, session_dir: Path):
         """Collect review feedback and relaunch agent."""

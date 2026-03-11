@@ -188,6 +188,42 @@ RULES:
 Begin by reading the codebase, then plan your approach.
 """
 
+DEFAULT_REVIEW_MD = """\
+---
+agent:
+  kind: claude-code
+  max_turns: 30
+
+review:
+  max_rounds: 3
+---
+
+You are a code reviewer. Review the following changes for the issue:
+
+**Title:** {{ issue.title }}
+**Description:**
+{{ issue.body }}
+
+**Diff to review:**
+```
+{{ diff }}
+```
+
+**Base branch:** {{ base_branch }}
+**Agent branch:** {{ agent_branch }}
+
+RULES:
+1. Read the diff carefully. Check for correctness, security, and style.
+2. Run tests if available.
+3. For every observation: @@LOG@@ <your observation>
+4. After reviewing: @@CHECKPOINT@@ <summary of findings>
+5. If the code is acceptable: post @nightshift approve
+6. If changes are needed: explain what needs fixing, then post @nightshift revise
+7. When done: @@DONE@@
+
+Begin by reading the diff and understanding the changes.
+"""
+
 DEFAULT_ENV_EXAMPLE = """\
 # Nightshift environment variables
 # Copy this file to .env and fill in your values.
@@ -240,6 +276,14 @@ def cmd_init(a):
     else:
         wf.write_text(DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}"))
         print(f"Created {wf} (base_branch: {default_branch})")
+
+    # REVIEW.md
+    rv = root / "REVIEW.md"
+    if rv.exists() and not a.force:
+        print(f"REVIEW.md already exists at {rv}. Use --force to overwrite.")
+    else:
+        rv.write_text(DEFAULT_REVIEW_MD)
+        print(f"Created {rv}")
 
     # .env.example
     env_example = root / ".env.example"
@@ -397,6 +441,9 @@ def cmd_accept(a):
 
     _remove_worktree(r, wt, branch)
 
+    # Clean up any lingering review session
+    _cleanup_review_artifacts(r, sid, config)
+
     # Close issue in tracker
     try:
         tracker = create_tracker(config, repo_dir=str(r))
@@ -407,6 +454,25 @@ def cmd_accept(a):
         print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
 
     print(f"Accepted and cleaned up {sid}")
+
+
+def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
+    """Clean up reviewer worktree, branch, and session if they exist."""
+    review_wt = repo / config.workspace.root / f"review-{coder_sid}"
+    review_branch = f"review/{coder_sid}"
+    review_session = repo / ".nightshift" / "sessions" / f"review-{coder_sid}"
+
+    if review_wt.exists():
+        _remove_worktree(repo, review_wt, review_branch)
+    else:
+        # Still try to clean branch
+        subprocess.run(["git", "branch", "-D", review_branch],
+                       capture_output=True, cwd=str(repo))
+
+    if review_session.exists():
+        import shutil
+        shutil.rmtree(review_session, ignore_errors=True)
+        print(f"Cleaned up review session for {coder_sid}")
 
 
 def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
@@ -469,6 +535,9 @@ def cmd_reject(a):
     wt = r / config.workspace.root / f"agent-{sid}"
     _remove_worktree(r, wt, branch)
 
+    # Clean up any review artifacts
+    _cleanup_review_artifacts(r, sid, config)
+
     # Remove session
     ss = sessions_dir() / sid
     if ss.exists():
@@ -501,7 +570,7 @@ def cmd_revise(a):
         sys.exit(1)
 
     state = json.loads((sd / "state.json").read_text())
-    if state.get("status") != "waiting:review":
+    if state.get("status") not in ("waiting:review", "waiting:human-review"):
         print(f"Session {sid} is not awaiting review (status: {state.get('status')})",
               file=sys.stderr)
         sys.exit(1)

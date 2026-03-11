@@ -17,11 +17,12 @@ def render_template(
 
     Supports simple {{ var }} and {% if %} / {% endif %} syntax.
     For full Jinja2 support, install jinja2 and switch to that engine.
-    Extra keyword args are passed through as template variables (e.g. diff=...).
+    Extra keyword arguments are passed as additional template variables
+    (e.g. diff, base_branch, agent_branch for REVIEW.md).
     """
     try:
         import jinja2
-        env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+        env = jinja2.Environment(undefined=jinja2.Undefined)
         tmpl = env.from_string(template)
         return tmpl.render(
             issue=issue, related_context=related_context, attempt=attempt,
@@ -35,6 +36,8 @@ def render_template(
         result = result.replace("{{ issue.identifier }}", issue.identifier)
         result = result.replace("{{ related_context }}", related_context)
         result = result.replace("{{ attempt }}", str(attempt) if attempt else "")
+        for k, v in extra_vars.items():
+            result = result.replace(f"{{{{ {k} }}}}", str(v))
         # Strip unresolved {% %} blocks
         result = re.sub(r"\{%.*?%\}", "", result, flags=re.DOTALL)
         return result.strip()

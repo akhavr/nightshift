@@ -34,9 +34,18 @@ def _current_branch(repo_dir: str) -> str:
         return "unknown"
 
 
+def _read_diff() -> str:
+    """Read pre-generated diff from session dir (created by host-side _prepare_review_session)."""
+    diff_path = Path("/session/diff.patch")
+    if diff_path.exists():
+        return diff_path.read_text().strip()
+    return "N/A"
+
+
 def main():
     issue_id = os.environ["ISSUE_ID"]
     resume = os.environ.get("RESUME") == "--resume"
+    step = os.environ.get("STEP", "")
 
     # Load config from WORKFLOW.md (mounted into container at /workspace)
     workflow_path = Path("/workspace/WORKFLOW.md")
@@ -88,9 +97,16 @@ def main():
 
         if config.prompt_template:
             from core.prompts import render_template
+            # Extra template variables for review step
+            extra_vars = {}
+            if step == "review":
+                extra_vars["diff"] = _read_diff()
+                extra_vars["base_branch"] = os.environ.get("BASE_BRANCH", "master")
+                extra_vars["agent_branch"] = workspace.branch
             prompt = render_template(
                 config.prompt_template, issue=issue,
                 related_context=related, attempt=None,
+                **extra_vars,
             )
         else:
             from core.prompts import build_initial_prompt

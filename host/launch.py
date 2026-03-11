@@ -31,6 +31,8 @@ def main():
     parser.add_argument("--image", default="nightshift:latest", help="Docker image")
     parser.add_argument("--step", default="coder", choices=["coder", "review"],
                         help="Pipeline step (coder or review)")
+    parser.add_argument("--coder-session", default=None,
+                        help="Coder session ID (for review step, links back to coder)")
     args = parser.parse_args()
 
     repo = get_repo_root()
@@ -179,7 +181,7 @@ def main():
     tty_flags = ["-it"] if sys.stdin.isatty() else []
 
     # Mount the workflow file (WORKFLOW.md or REVIEW.md)
-    workflow_mount = str(Path(workflow_path).resolve())
+    workflow_mount = str(Path(args.workflow or repo / "WORKFLOW.md").resolve())
 
     docker_cmd = [
         "docker", "run", "--rm", *tty_flags,
@@ -225,7 +227,7 @@ def _prepare_review_session(repo, review_session_dir, short_id, config):
     import shutil
     coder_session = repo / ".nightshift" / "sessions" / short_id
 
-    # Copy issue data from coder session
+    # Copy issue data from coder session (avoids git-bug lock contention)
     for fname in ("issue.json", "issues.json"):
         src = coder_session / fname
         if src.exists():
