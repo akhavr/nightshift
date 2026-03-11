@@ -17,6 +17,7 @@ ORPHAN_GRACE_PERIOD_S = 120           # Grace period before treating as orphaned
 COMMAND_BACKOFF_BASE_S = 60           # Base backoff for CLI command retries
 COMMAND_BACKOFF_CAP_S = 1800          # Max backoff (30 min)
 COMMAND_BACKOFF_CAP_CYCLES = 30       # Max backoff cycles (used for log messages)
+DEFAULT_MAX_REVIEW_ROUNDS = 3         # Fallback max review rounds when config unavailable
 
 # ── Telegram ─────────────────────────────────────────────
 TG_LONG_POLL_TIMEOUT_S = 1

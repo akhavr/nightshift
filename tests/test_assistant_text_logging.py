@@ -102,7 +102,7 @@ def test_reviewer_verdict_extractable_from_assistant_text(tmp_path):
     repo.mkdir()
     watcher = HostWatcher(sessions, repo, auto_start=False)
 
-    verdict = watcher._extract_reviewer_verdict(state_mgr.conversation_log, "test-001")
+    verdict = watcher.reviews.extract_reviewer_verdict(state_mgr.conversation_log, "test-001")
     assert verdict == "approve"
 
 
@@ -127,5 +127,5 @@ def test_revise_verdict_extractable(tmp_path):
     repo.mkdir()
     watcher = HostWatcher(sessions, repo, auto_start=False)
 
-    verdict = watcher._extract_reviewer_verdict(state_mgr.conversation_log, "test-001")
+    verdict = watcher.reviews.extract_reviewer_verdict(state_mgr.conversation_log, "test-001")
     assert verdict == "revise"
