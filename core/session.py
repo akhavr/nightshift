@@ -421,8 +421,8 @@ class SessionRunner:
             summary = " ".join(summary_parts).strip()
             if summary:
                 self._build_resume(checkpoint_summary=summary)
-        except Exception:
-            pass  # non-critical — raw checkpoints are fine
+        except Exception as e:
+            log.warning(f"Checkpoint summarization failed: {e}")
 
     def _issue_is_terminal(self) -> bool:
         self.tracker.sync()

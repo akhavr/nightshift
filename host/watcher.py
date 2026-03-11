@@ -384,8 +384,8 @@ class HostWatcher:
                 cmd = parse_nightshift_command(comment.body)
                 if cmd in ("approve", "revise"):
                     return cmd
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Tracker poll for reviewer verdict failed: {e}")
 
         return None
 
@@ -445,8 +445,8 @@ class HostWatcher:
                         if cleaned:
                             feedback_parts.append(cleaned)
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"[{coder_sid}] Tracker poll for review feedback failed: {e}")
 
             if not feedback_parts:
                 feedback_parts = ["Reviewer requested revisions but did not provide specific feedback."]
@@ -1055,8 +1055,8 @@ class HostWatcher:
                     "reply_to_message_id": reply_to,
                 }, timeout=10,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Telegram ack failed: {e}")
 
 
 def main():

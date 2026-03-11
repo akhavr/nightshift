@@ -9,6 +9,7 @@ from typing import Optional
 
 import requests
 from core.protocols import Notifier, IssueTracker
+from adapters.notifiers._utils import project_prefix
 
 log = logging.getLogger(__name__)
 
@@ -38,9 +39,11 @@ class TelegramNotifier:
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
-                json={"chat_id": self.chat_id, "text": f"🤖 {message}",
+                json={"chat_id": self.chat_id,
+                      "text": project_prefix(f"🤖 {message}"),
                       "parse_mode": "Markdown"}, timeout=10)
-        except requests.RequestException: pass
+        except requests.RequestException as e:
+            log.warning(f"Telegram notify failed: {e}")
 
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool:
         if not self.enabled: return False
@@ -49,8 +52,9 @@ class TelegramNotifier:
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
                 json={
                     "chat_id": self.chat_id,
-                    "text": (f"❓ *Question*\n*Issue:* `{short_id or issue_id[:12]}`\n"
-                             f"*Q:* {question}\n\n_Reply to answer._"),
+                    "text": project_prefix(
+                        f"❓ *Question*\n*Issue:* `{short_id or issue_id[:12]}`\n"
+                        f"*Q:* {question}\n\n_Reply to answer._"),
                     "parse_mode": "Markdown",
                     "reply_markup": {"force_reply": True, "selective": True,
                                      "input_field_placeholder": "Answer..."},
@@ -63,7 +67,9 @@ class TelegramNotifier:
                     "answer": None, "event": threading.Event(),
                 }
             return True
-        except requests.RequestException: return False
+        except requests.RequestException as e:
+            log.warning(f"Telegram send_question failed: {e}")
+            return False
 
     def check_answer(self, issue_id: str) -> Optional[str]:
         with self._lock:

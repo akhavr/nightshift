@@ -1,9 +1,13 @@
 """Generic webhook notifier."""
 
+import logging
 import os
 from typing import Optional
 import requests
 from core.protocols import Notifier
+from adapters.notifiers._utils import project_prefix
+
+log = logging.getLogger(__name__)
 
 
 class WebhookNotifier:
@@ -12,8 +16,9 @@ class WebhookNotifier:
 
     def notify(self, message: str) -> None:
         if self.url:
-            try: requests.post(self.url, json={"text": message}, timeout=10)
-            except Exception: pass
+            try: requests.post(self.url, json={"text": project_prefix(message)}, timeout=10)
+            except Exception as e:
+                log.warning(f"Webhook notify failed: {e}")
 
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool:
         self.notify(f"❓ [{short_id}] {question}"); return False

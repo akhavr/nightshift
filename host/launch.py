@@ -199,6 +199,7 @@ def main():
         "-e", f"RESUME={'--resume' if args.resume else ''}",
         "-e", f"MAX_TURNS={max_turns}",
         "-e", f"STEP={args.step}",
+        "-e", f"PROJECT_NAME={repo.name}",
         *notify_env,
         args.image,
     ]
@@ -286,8 +287,8 @@ def _post_container(session_dir, config, repo, issue_id):
         tracker.add_label(issue_id, "needs-review")
         try:
             tracker.remove_label(issue_id, "agent-in-progress")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: remove_label failed: {e}", file=sys.stderr)
         tracker.sync()
         print(f"Posted review summary to tracker for {issue_id[:12]}")
     except Exception as e:
