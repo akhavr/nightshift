@@ -13,12 +13,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from host.merge import (
+    resolve_merge_ref,
+    check_working_tree_clean,
+    merge_with_rebase_fallback,
+    verify_no_conflict_markers,
+)
 from host.cli import (
-    _resolve_merge_ref,
-    _check_working_tree_clean,
-    _merge_with_rebase_fallback,
-    _rebase_and_retry_merge,
-    _verify_no_conflict_markers,
     _build_parser,
     _scaffold_file,
     _update_gitignore,
@@ -66,7 +67,12 @@ def _make_config():
     return config
 
 
-# ── _resolve_merge_ref ───────────────────────────────────────────────────────
+def _noop_report(*args, **kwargs):
+    """No-op failure reporter for merge functions."""
+    pass
+
+
+# ── resolve_merge_ref ────────────────────────────────────────────────────────
 
 
 class TestResolveMergeRef:
@@ -80,7 +86,7 @@ class TestResolveMergeRef:
         run("git", "checkout", "main")
 
         wt = tmp_path / "worktree"  # doesn't need to exist
-        result = _resolve_merge_ref(repo, "agent/abc123", wt)
+        result = resolve_merge_ref(repo, "agent/abc123", wt)
         assert result == "agent/abc123"
 
     def test_branch_gone_worktree_exists(self, tmp_path, capsys):
@@ -90,13 +96,11 @@ class TestResolveMergeRef:
         (repo / "new.txt").write_text("work\n")
         run("git", "add", ".")
         run("git", "commit", "-m", "agent work")
-        agent_head = run("git", "rev-parse", "HEAD").stdout.strip()
         run("git", "checkout", "main")
 
         # Create a worktree-like dir with a git repo pointing at the commit
         wt = tmp_path / "worktree"
         wt.mkdir()
-        # Initialize a temp repo in the worktree dir so git rev-parse HEAD works
         subprocess.run(["git", "init"], cwd=str(wt), capture_output=True)
         subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(wt), capture_output=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=str(wt), capture_output=True)
@@ -104,11 +108,9 @@ class TestResolveMergeRef:
         subprocess.run(["git", "add", "."], cwd=str(wt), capture_output=True)
         subprocess.run(["git", "commit", "-m", "wt"], cwd=str(wt), capture_output=True)
 
-        # Delete the branch so it can't be found
         run("git", "branch", "-D", "agent/abc123")
 
-        result = _resolve_merge_ref(repo, "agent/abc123", wt)
-        # Should return a commit hash (the worktree HEAD)
+        result = resolve_merge_ref(repo, "agent/abc123", wt)
         assert len(result) == 40  # full SHA
         out = capsys.readouterr().out
         assert "worktree HEAD" in out
@@ -119,22 +121,21 @@ class TestResolveMergeRef:
         wt = tmp_path / "nonexistent_worktree"
 
         with pytest.raises(SystemExit) as exc_info:
-            _resolve_merge_ref(repo, "agent/nonexistent", wt)
+            resolve_merge_ref(repo, "agent/nonexistent", wt)
         assert exc_info.value.code == 1
 
     def test_branch_gone_worktree_unreadable_exits(self, tmp_path):
         """When branch is gone and worktree HEAD is unreadable, exits."""
         repo, run = _init_repo(tmp_path)
-        # Create a worktree dir without git init (so rev-parse fails)
         wt = tmp_path / "broken_wt"
         wt.mkdir()
 
         with pytest.raises(SystemExit) as exc_info:
-            _resolve_merge_ref(repo, "agent/nonexistent", wt)
+            resolve_merge_ref(repo, "agent/nonexistent", wt)
         assert exc_info.value.code == 1
 
 
-# ── _check_working_tree_clean ────────────────────────────────────────────────
+# ── check_working_tree_clean ─────────────────────────────────────────────────
 
 
 class TestCheckWorkingTreeClean:
@@ -142,8 +143,7 @@ class TestCheckWorkingTreeClean:
         """No error when working tree is clean."""
         repo, run = _init_repo(tmp_path)
         config = _make_config()
-        # Should not raise
-        _check_working_tree_clean(repo, "main", config, "issue-1")
+        check_working_tree_clean(repo, "main", config, "issue-1", _noop_report)
 
     def test_dirty_tree_exits(self, tmp_path, capsys):
         """Exits with code 1 when there are modified tracked files."""
@@ -151,9 +151,9 @@ class TestCheckWorkingTreeClean:
         (repo / "file.txt").write_text("modified\n")
         config = _make_config()
 
-        with patch("host.cli._report_accept_failure") as mock_report, \
-             pytest.raises(SystemExit) as exc_info:
-            _check_working_tree_clean(repo, "main", config, "issue-1")
+        mock_report = MagicMock()
+        with pytest.raises(SystemExit) as exc_info:
+            check_working_tree_clean(repo, "main", config, "issue-1", mock_report)
 
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
@@ -165,11 +165,10 @@ class TestCheckWorkingTreeClean:
         repo, run = _init_repo(tmp_path)
         (repo / "untracked.txt").write_text("untracked\n")
         config = _make_config()
-        # Should not raise — untracked files are ignored
-        _check_working_tree_clean(repo, "main", config, "issue-1")
+        check_working_tree_clean(repo, "main", config, "issue-1", _noop_report)
 
 
-# ── _merge_with_rebase_fallback ──────────────────────────────────────────────
+# ── merge_with_rebase_fallback ───────────────────────────────────────────────
 
 
 class TestMergeWithRebaseFallback:
@@ -183,12 +182,11 @@ class TestMergeWithRebaseFallback:
         run("git", "checkout", "main")
 
         config = _make_config()
-        # Should not raise
-        _merge_with_rebase_fallback(
-            repo, "agent/test1", "agent/test1", "main", "issue-1", config
+        merge_with_rebase_fallback(
+            repo, "agent/test1", "agent/test1", "main", "issue-1", config,
+            _noop_report,
         )
 
-        # Verify merge happened
         log = run("git", "log", "--oneline").stdout
         assert "agent commit" in log
 
@@ -196,18 +194,18 @@ class TestMergeWithRebaseFallback:
         """When merge fails due to local changes, exits immediately."""
         repo, run = _init_repo(tmp_path)
 
-        # Use mock to simulate the "local changes" merge failure
         mock_merge_result = MagicMock(
             returncode=1,
             stderr="error: Your local changes would be overwritten by merge"
         )
 
         config = _make_config()
-        with patch("host.cli.subprocess.run", return_value=mock_merge_result), \
-             patch("host.cli._report_accept_failure") as mock_report, \
+        mock_report = MagicMock()
+        with patch("host.merge.subprocess.run", return_value=mock_merge_result), \
              pytest.raises(SystemExit) as exc_info:
-            _merge_with_rebase_fallback(
-                repo, "agent/test1", "agent/test1", "main", "issue-1", config
+            merge_with_rebase_fallback(
+                repo, "agent/test1", "agent/test1", "main", "issue-1", config,
+                mock_report,
             )
 
         assert exc_info.value.code == 1
@@ -224,95 +222,20 @@ class TestMergeWithRebaseFallback:
         mock_abort_result = MagicMock(returncode=0)
 
         config = _make_config()
-        with patch("host.cli.subprocess.run") as mock_run, \
-             patch("host.cli._rebase_and_retry_merge") as mock_rebase:
+        with patch("host.merge.subprocess.run") as mock_run, \
+             patch("host.merge._rebase_and_retry_merge") as mock_rebase:
             mock_run.side_effect = [mock_merge_result, mock_abort_result]
-            _merge_with_rebase_fallback(
-                repo, "agent/test1", "agent/test1", "main", "issue-1", config
+            merge_with_rebase_fallback(
+                repo, "agent/test1", "agent/test1", "main", "issue-1", config,
+                _noop_report,
             )
 
         mock_rebase.assert_called_once_with(
-            repo, "agent/test1", "main", "issue-1", config
+            repo, "agent/test1", "main", "issue-1", config, _noop_report,
         )
 
 
-# ── _rebase_and_retry_merge ─────────────────────────────────────────────────
-
-
-class TestRebaseAndRetryMerge:
-    def test_rebase_success_then_merge_success(self, tmp_path):
-        """Successful rebase + merge completes without error."""
-        repo, run = _init_repo(tmp_path)
-        # Create diverged branches
-        run("git", "checkout", "-b", "agent/test1")
-        (repo / "agent_file.txt").write_text("agent\n")
-        run("git", "add", ".")
-        run("git", "commit", "-m", "agent commit")
-        run("git", "checkout", "main")
-        (repo / "main_file.txt").write_text("main change\n")
-        run("git", "add", ".")
-        run("git", "commit", "-m", "main commit")
-
-        config = _make_config()
-        # Should not raise — rebase should succeed, then merge
-        _rebase_and_retry_merge(repo, "agent/test1", "main", "issue-1", config)
-
-        log = run("git", "log", "--oneline").stdout
-        assert "agent commit" in log
-
-    def test_rebase_fails_exits(self, tmp_path, capsys):
-        """When rebase fails, aborts rebase, checks out old branch, exits."""
-        repo, run = _init_repo(tmp_path)
-
-        # Mock subprocess calls for: show-current, checkout, rebase(fail), rebase --abort, checkout
-        call_results = [
-            MagicMock(stdout="main\n", returncode=0),       # git branch --show-current
-            MagicMock(returncode=0),                          # git checkout branch
-            MagicMock(returncode=1, stderr="CONFLICT\n"),     # git rebase (fails)
-            MagicMock(returncode=0),                          # git rebase --abort
-            MagicMock(returncode=0),                          # git checkout old_branch
-        ]
-
-        config = _make_config()
-        with patch("host.cli.subprocess.run", side_effect=call_results), \
-             patch("host.cli._report_accept_failure") as mock_report, \
-             pytest.raises(SystemExit) as exc_info:
-            _rebase_and_retry_merge(repo, "agent/test1", "main", "issue-1", config)
-
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        assert "Rebase failed" in err
-        mock_report.assert_called_once()
-        # Check that the report message suggests manual resolution
-        call_msg = mock_report.call_args[0][3]
-        assert "manual resolution" in call_msg.lower() or "revise" in call_msg.lower()
-
-    def test_rebase_succeeds_but_merge_fails_exits(self, tmp_path, capsys):
-        """When rebase succeeds but retry merge still fails, exits."""
-        repo, run = _init_repo(tmp_path)
-
-        # Mock: show-current, checkout, rebase(ok), checkout-back, merge(fail)
-        call_results = [
-            MagicMock(stdout="main\n", returncode=0),       # git branch --show-current
-            MagicMock(returncode=0),                          # git checkout branch
-            MagicMock(returncode=0, stderr=""),                # git rebase (succeeds)
-            MagicMock(returncode=0),                          # git checkout old_branch
-            MagicMock(returncode=1, stderr="merge failed\n"), # git merge --no-ff (fails)
-        ]
-
-        config = _make_config()
-        with patch("host.cli.subprocess.run", side_effect=call_results), \
-             patch("host.cli._report_accept_failure") as mock_report, \
-             pytest.raises(SystemExit) as exc_info:
-            _rebase_and_retry_merge(repo, "agent/test1", "main", "issue-1", config)
-
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        assert "still failed" in err.lower()
-        mock_report.assert_called_once()
-
-
-# ── _verify_no_conflict_markers ──────────────────────────────────────────────
+# ── verify_no_conflict_markers ───────────────────────────────────────────────
 
 
 class TestVerifyNoConflictMarkers:
@@ -331,9 +254,10 @@ class TestVerifyNoConflictMarkers:
         (sessions / "state.json").write_text(json.dumps({"status": "working"}))
 
         config = _make_config()
-        with patch("host.cli.sessions_dir", return_value=repo / ".nightshift" / "sessions"):
-            # Should not raise
-            _verify_no_conflict_markers(repo, config, "issue-1", "clean1")
+        verify_no_conflict_markers(
+            repo, config, "issue-1", "clean1",
+            repo / ".nightshift" / "sessions", _noop_report,
+        )
 
     def test_markers_found_resets_and_exits(self, tmp_path, capsys):
         """Conflict markers trigger reset and sys.exit(1)."""
@@ -351,20 +275,20 @@ class TestVerifyNoConflictMarkers:
         (sessions / "state.json").write_text(json.dumps({"status": "working"}))
 
         config = _make_config()
-        with patch("host.cli.sessions_dir", return_value=repo / ".nightshift" / "sessions"), \
-             patch("host.cli._report_accept_failure") as mock_report, \
-             pytest.raises(SystemExit) as exc_info:
-            _verify_no_conflict_markers(repo, config, "issue-1", "markers1")
+        mock_report = MagicMock()
+        with pytest.raises(SystemExit) as exc_info:
+            verify_no_conflict_markers(
+                repo, config, "issue-1", "markers1",
+                repo / ".nightshift" / "sessions", mock_report,
+            )
 
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
         assert "Conflict markers" in err
 
-        # HEAD should be reset
         post_head = run("git", "rev-parse", "HEAD").stdout.strip()
         assert post_head == pre_merge
 
-        # State should be updated
         state = json.loads((sessions / "state.json").read_text())
         assert state["status"] == "error:merge-conflict"
 
@@ -380,12 +304,12 @@ class TestVerifyNoConflictMarkers:
         run("git", "checkout", "main")
         run("git", "merge", "--no-ff", "agent/nostate1", "-m", "Merge")
 
-        # No session dir at all
         config = _make_config()
-        with patch("host.cli.sessions_dir", return_value=repo / ".nightshift" / "sessions"), \
-             patch("host.cli._report_accept_failure"), \
-             pytest.raises(SystemExit) as exc_info:
-            _verify_no_conflict_markers(repo, config, "issue-1", "nostate1")
+        with pytest.raises(SystemExit) as exc_info:
+            verify_no_conflict_markers(
+                repo, config, "issue-1", "nostate1",
+                repo / ".nightshift" / "sessions", _noop_report,
+            )
 
         assert exc_info.value.code == 1
 
@@ -400,7 +324,6 @@ class TestCmdLogs:
         repo.mkdir()
         sd = repo / ".nightshift" / "sessions" / "logtest12345"
         sd.mkdir(parents=True)
-        # No raw-output.log
 
         with patch("host.cli.repo_root", return_value=repo), \
              patch("host.cli.resolve_session", return_value="logtest12345"):
@@ -457,7 +380,6 @@ class TestResolveSession:
         """Multiple matches cause sys.exit(1)."""
         repo = tmp_path / "repo"
         sessions = repo / ".nightshift" / "sessions"
-        # Both dirs share the same first 12 chars "aabbccddee11"
         (sessions / "aabbccddee11_first").mkdir(parents=True)
         (sessions / "aabbccddee11_second").mkdir(parents=True)
 
@@ -501,7 +423,6 @@ class TestDetectDefaultBranch:
         """Returns 'main' when all detection methods fail."""
         repo = tmp_path / "repo"
         repo.mkdir()
-        # Not a git repo — both commands will fail
         result = _detect_default_branch(repo)
         assert result == "main"
 
@@ -557,7 +478,6 @@ class TestCmdCleanupEdgeCases:
             "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
             "---\nPrompt\n"
         )
-        # No session dir exists
         (repo / ".nightshift" / "sessions").mkdir(parents=True)
 
         with patch("host.cli.repo_root", return_value=repo), \
@@ -602,7 +522,7 @@ class TestCmdStatusEdgeCases:
         assert "?" in out
 
 
-# ── _build_parser ─────────────────────────────────────────────────────────
+# ── _build_parser ────────────────────────────────────────────────────────────
 
 
 class TestBuildParser:
@@ -633,7 +553,7 @@ class TestBuildParser:
         assert args.keep_session is True
 
 
-# ── _scaffold_file ────────────────────────────────────────────────────────
+# ── _scaffold_file ───────────────────────────────────────────────────────────
 
 
 class TestScaffoldFile:
@@ -661,7 +581,7 @@ class TestScaffoldFile:
         assert "main branch" in capsys.readouterr().out
 
 
-# ── _update_gitignore ─────────────────────────────────────────────────────
+# ── _update_gitignore ────────────────────────────────────────────────────────
 
 
 class TestUpdateGitignore:

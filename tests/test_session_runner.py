@@ -13,6 +13,7 @@ from core.protocols import (
 from core.config.models import HooksConfig, MergeConfig
 from core.state import StateManager, SessionState
 from core.session import SessionRunner, MAX_RESUMES
+from core.answer_collector import collect_answer
 
 # Re-use mocks from conftest
 from tests.conftest import (
@@ -681,16 +682,15 @@ class TestMaybeSummarizeCheckpoints:
 class TestCollectAnswer:
     def test_collect_from_answer_file(self, tmp_path):
         runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path)
-        runner._pending_questions.append("test?")
         state_mgr.answer_file.write_text("the answer")
-        answer = runner._collect_answer()
+        answer = collect_answer(state_mgr, notifier, tracker, "test-001")
         assert answer == "the answer"
 
     def test_collect_from_notifier(self, tmp_path):
         runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path)
         notifier.pending_answers["test-001"] = "notifier answer"
-        with patch("core.session.ANSWER_POLL_S", 0):
-            answer = runner._collect_answer()
+        with patch("core.answer_collector.ANSWER_POLL_S", 0):
+            answer = collect_answer(state_mgr, notifier, tracker, "test-001")
         assert answer == "notifier answer"
 
     def test_collect_from_tracker_comments(self, tmp_path):
@@ -709,8 +709,8 @@ class TestCollectAnswer:
         state_mgr.check_answer = mock_check
         notifier.check_answer = lambda issue_id: None
 
-        with patch("core.session.ANSWER_POLL_S", 0):
-            answer = runner._collect_answer()
+        with patch("core.answer_collector.ANSWER_POLL_S", 0):
+            answer = collect_answer(state_mgr, notifier, tracker, "test-001")
         assert answer == "human says: use postgres"
 
 

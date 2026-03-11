@@ -39,6 +39,8 @@ from host.session_utils import remove_worktree  # noqa: E402
 # -- Re-export classes from submodules ----------------------------------------
 from host.watcher.telegram_relay import TelegramRelay  # noqa: E402
 from host.watcher.qa_handler import QAHandler  # noqa: E402
+from host.watcher.verdict_handler import VerdictHandler  # noqa: E402
+from host.watcher.command_executor import CommandExecutor  # noqa: E402
 from host.watcher.review_orchestrator import ReviewOrchestrator  # noqa: E402
 from host.watcher.session_monitor import SessionMonitor  # noqa: E402
 from host.watcher.host_watcher import HostWatcher  # noqa: E402
@@ -47,6 +49,8 @@ from host.watcher.main import main  # noqa: E402
 __all__ = [
     "TelegramRelay",
     "QAHandler",
+    "VerdictHandler",
+    "CommandExecutor",
     "ReviewOrchestrator",
     "SessionMonitor",
     "HostWatcher",

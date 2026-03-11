@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from host.cli import _check_conflict_markers
+from host.merge import check_conflict_markers as _check_conflict_markers
 
 
 def test_cli_has_accept_command():

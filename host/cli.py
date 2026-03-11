@@ -13,6 +13,10 @@ from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import SHORT_ID_LEN
 from host.env import load_all_dotenv
+from host.merge import (
+    resolve_merge_ref, check_working_tree_clean,
+    merge_with_rebase_fallback, verify_no_conflict_markers,
+)
 from host.session_utils import (
     get_repo_root,
     read_state, write_state, update_status,
@@ -32,7 +36,7 @@ def resolve_session(issue_id: str) -> str:
     """Resolve a prefix to the full session ID. Exits on ambiguity or no match."""
     sd = sessions_dir()
     if not sd.exists():
-        print(f"No sessions directory found", file=sys.stderr)
+        print("No sessions directory found", file=sys.stderr)
         sys.exit(1)
     matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:SHORT_ID_LEN])]
     if len(matches) == 1:
@@ -253,14 +257,12 @@ TELEGRAM_CHAT_ID=
 
 def _detect_default_branch(repo: Path) -> str:
     """Detect the default branch (main, master, etc.)."""
-    # Try HEAD of origin
     result = subprocess.run(
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
         capture_output=True, text=True, cwd=str(repo),
     )
     if result.returncode == 0:
         return result.stdout.strip().split("/")[-1]
-    # Fallback: current branch
     result = subprocess.run(
         ["git", "branch", "--show-current"],
         capture_output=True, text=True, cwd=str(repo),
@@ -326,134 +328,31 @@ def cmd_init(a):
     print("  3. Run: nightshift start <issue-id>")
 
 
-def _resolve_merge_ref(r: Path, branch: str, wt: Path) -> str:
-    """Find the merge source: branch ref or worktree HEAD. Exits on failure."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", branch],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    if result.returncode == 0:
-        return branch
-    if wt.exists():
-        wt_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, cwd=str(wt),
-        )
-        if wt_head.returncode != 0:
-            print(f"Branch {branch} not found and worktree HEAD unreadable.", file=sys.stderr)
-            sys.exit(1)
-        ref = wt_head.stdout.strip()
-        print(f"Branch {branch} gone, using worktree HEAD {ref[:SHORT_ID_LEN]}")
-        return ref
-    print(f"Branch {branch} not found and no worktree at {wt}.", file=sys.stderr)
-    sys.exit(1)
+def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
+    """Post accept failure to tracker as a comment."""
+    try:
+        tracker = create_tracker(config, repo_dir=str(repo))
+        tracker.add_comment(issue_id, f"⚠️ Accept failed: {message}")
+        tracker.sync()
+    except Exception as e:
+        print(f"Warning: failed to post failure to tracker: {e}", file=sys.stderr)
 
 
-def _check_working_tree_clean(r: Path, base: str, config, issue_id: str):
-    """Exit if repo has uncommitted changes."""
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    dirty_files = [l for l in status.stdout.strip().splitlines()
-                   if l and not l.startswith("??")]
-    if dirty_files:
-        file_list = "\n".join(dirty_files[:10])
-        msg = (f"Cannot merge: working tree on `{base}` is not clean.\n"
-               f"```\n{file_list}\n```\n"
-               f"Commit or stash changes first.")
-        print(f"Working tree not clean:\n{file_list}", file=sys.stderr)
-        _report_accept_failure(config, r, issue_id, msg)
-        sys.exit(1)
+def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
+    """Clean up reviewer worktree, branch, and session if they exist."""
+    review_wt = repo / config.workspace.root / f"review-{coder_sid}"
+    review_branch = f"review/{coder_sid}"
+    review_session = repo / ".nightshift" / "sessions" / f"review-{coder_sid}"
 
+    if review_wt.exists():
+        remove_worktree(repo, review_wt, review_branch)
+    else:
+        subprocess.run(["git", "branch", "-D", review_branch],
+                       capture_output=True, cwd=str(repo))
 
-def _merge_with_rebase_fallback(r: Path, merge_ref: str, branch: str,
-                                 base: str, issue_id: str, config):
-    """Attempt merge; on conflict, rebase and retry. Exits on failure."""
-    result = subprocess.run(
-        ["git", "merge", "--no-ff", merge_ref,
-         "-m", f"Merge {branch}: agent work on {issue_id}"],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    if result.returncode == 0:
-        return
-
-    merge_err = result.stderr.strip()
-    if "local changes" in merge_err or "overwritten by merge" in merge_err:
-        print(f"Merge failed — uncommitted changes on {base}:\n{merge_err}", file=sys.stderr)
-        _report_accept_failure(config, r, issue_id,
-                               f"Cannot merge: uncommitted changes on `{base}`. "
-                               f"Commit or stash them first.")
-        sys.exit(1)
-
-    # Conflict — abort, rebase, retry
-    subprocess.run(["git", "merge", "--abort"], capture_output=True, cwd=str(r))
-    print(f"Merge conflict — rebasing {branch} onto {base}...")
-    _rebase_and_retry_merge(r, branch, base, issue_id, config)
-
-
-def _rebase_and_retry_merge(r: Path, branch: str, base: str,
-                             issue_id: str, config):
-    """Rebase branch onto base, then retry the merge. Exits on failure."""
-    old_branch = subprocess.run(
-        ["git", "branch", "--show-current"],
-        capture_output=True, text=True, cwd=str(r),
-    ).stdout.strip()
-    subprocess.run(["git", "checkout", branch], capture_output=True, cwd=str(r))
-    rebase = subprocess.run(
-        ["git", "rebase", base],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    if rebase.returncode != 0:
-        subprocess.run(["git", "rebase", "--abort"], capture_output=True, cwd=str(r))
-        subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(r))
-        details = rebase.stderr.strip()
-        print(f"Rebase failed:\n{details}", file=sys.stderr)
-        _report_accept_failure(
-            config, r, issue_id,
-            f"Merge conflicts with `{base}` that need manual resolution:\n"
-            f"```\n{details}\n```\n"
-            f"@nightshift revise")
-        sys.exit(1)
-
-    subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(r))
-    print(f"Rebase successful, retrying merge...")
-
-    result = subprocess.run(
-        ["git", "merge", "--no-ff", branch,
-         "-m", f"Merge {branch}: agent work on {issue_id}"],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    if result.returncode != 0:
-        print(f"Merge still failed after rebase:\n{result.stderr}", file=sys.stderr)
-        _report_accept_failure(config, r, issue_id,
-                               f"Merge failed even after rebase:\n"
-                               f"```\n{result.stderr.strip()}\n```")
-        sys.exit(1)
-
-
-def _verify_no_conflict_markers(r: Path, config, issue_id: str, sid: str):
-    """Check for conflict markers post-merge. Resets and exits if found."""
-    conflict_files = _check_conflict_markers(r)
-    if not conflict_files:
-        return
-    file_list = "\n".join(conflict_files[:20])
-    print(f"Conflict markers found after merge — aborting:\n{file_list}",
-          file=sys.stderr)
-    subprocess.run(["git", "reset", "--hard", "HEAD~1"],
-                   capture_output=True, cwd=str(r))
-    msg = (f"Merge aborted: conflict markers (`<<<<<<<`) found in "
-           f"{len(conflict_files)} file(s) after rebase+merge:\n"
-           f"```\n{file_list}\n```\n"
-           f"Manual conflict resolution required.")
-    _report_accept_failure(config, r, issue_id, msg)
-    sd = sessions_dir() / sid
-    if (sd / "state.json").exists():
-        try:
-            update_status(sd, "error:merge-conflict")
-        except Exception as e:
-            print(f"Failed to update session state: {e}", file=sys.stderr)
-    sys.exit(1)
+    if review_session.exists():
+        shutil.rmtree(review_session, ignore_errors=True)
+        print(f"Cleaned up review session for {coder_sid}")
 
 
 def cmd_accept(a):
@@ -465,17 +364,19 @@ def cmd_accept(a):
     base = config.workspace.base_branch
     wt = r / config.workspace.root / f"agent-{sid}"
 
-    merge_ref = _resolve_merge_ref(r, branch, wt)
-    _check_working_tree_clean(r, base, config, a.issue_id)
+    merge_ref = resolve_merge_ref(r, branch, wt)
+    check_working_tree_clean(r, base, config, a.issue_id, _report_accept_failure)
 
     # Show what will be merged
     subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))
     subprocess.run(["git", "diff", "--stat", f"{base}..{merge_ref}"], cwd=str(r))
 
-    _merge_with_rebase_fallback(r, merge_ref, branch, base, a.issue_id, config)
+    merge_with_rebase_fallback(r, merge_ref, branch, base, a.issue_id, config,
+                                _report_accept_failure)
     print(f"Merged into {base}")
 
-    _verify_no_conflict_markers(r, config, a.issue_id, sid)
+    verify_no_conflict_markers(r, config, a.issue_id, sid,
+                                sessions_dir(), _report_accept_failure)
 
     remove_worktree(r, wt, branch)
     _cleanup_review_artifacts(r, sid, config)
@@ -491,69 +392,6 @@ def cmd_accept(a):
     print(f"Accepted and cleaned up {sid}")
 
 
-def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
-    """Clean up reviewer worktree, branch, and session if they exist."""
-    review_wt = repo / config.workspace.root / f"review-{coder_sid}"
-    review_branch = f"review/{coder_sid}"
-    review_session = repo / ".nightshift" / "sessions" / f"review-{coder_sid}"
-
-    if review_wt.exists():
-        remove_worktree(repo, review_wt, review_branch)
-    else:
-        # Still try to clean branch
-        subprocess.run(["git", "branch", "-D", review_branch],
-                       capture_output=True, cwd=str(repo))
-
-    if review_session.exists():
-        shutil.rmtree(review_session, ignore_errors=True)
-        print(f"Cleaned up review session for {coder_sid}")
-
-
-def _check_conflict_markers(repo: Path) -> list[str]:
-    """Check files changed by the merge commit for conflict markers.
-
-    Returns list of files containing markers, or empty list if clean.
-    """
-    # Get files changed in the merge commit vs its first parent (the base branch)
-    diff_result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD^1..HEAD"],
-        capture_output=True, text=True, cwd=str(repo),
-    )
-    if diff_result.returncode != 0:
-        print(f"Warning: git diff --name-only failed (rc={diff_result.returncode}), "
-              f"skipping conflict marker check", file=sys.stderr)
-        return []
-    changed_files = [f for f in diff_result.stdout.strip().splitlines() if f]
-    if not changed_files:
-        return []
-
-    conflict_files = []
-    for fname in changed_files:
-        fpath = repo / fname
-        if not fpath.is_file():
-            continue
-        try:
-            content = fpath.read_text(errors="replace")
-        except Exception as e:
-            print(f"Warning: cannot read {fname}: {e}", file=sys.stderr)
-            continue
-        if "\n<<<<<<<" in content or content.startswith("<<<<<<<"):
-            conflict_files.append(fname)
-    return conflict_files
-
-
-def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
-    """Post accept failure to tracker as a comment."""
-    try:
-        tracker = create_tracker(config, repo_dir=str(repo))
-        tracker.add_comment(issue_id, f"⚠️ Accept failed: {message}")
-        tracker.sync()
-    except Exception as e:
-        print(f"Warning: failed to post failure to tracker: {e}", file=sys.stderr)
-
-
-
-
 def cmd_reject(a):
     """Discard agent work: remove worktree, branch, and session."""
     r = repo_root()
@@ -561,7 +399,6 @@ def cmd_reject(a):
     config = load_workflow(r / "WORKFLOW.md")
     branch = f"agent/{sid}"
 
-    # Show what will be discarded
     result = subprocess.run(
         ["git", "log", "--oneline", f"{config.workspace.base_branch}..{branch}"],
         capture_output=True, text=True, cwd=str(r),
@@ -571,16 +408,12 @@ def cmd_reject(a):
 
     wt = r / config.workspace.root / f"agent-{sid}"
     remove_worktree(r, wt, branch)
-
-    # Clean up any review artifacts
     _cleanup_review_artifacts(r, sid, config)
 
-    # Remove session
     ss = sessions_dir() / sid
     if ss.exists():
         shutil.rmtree(ss)
 
-    # Close issue in tracker
     try:
         tracker = create_tracker(config, repo_dir=str(r))
         tracker.set_status(a.issue_id, "closed")
@@ -608,12 +441,10 @@ def cmd_revise(a):
               file=sys.stderr)
         sys.exit(1)
 
-    # Collect review comments from tracker
     config = load_workflow(a.workflow or r / "WORKFLOW.md")
     tracker = create_tracker(config, repo_dir=str(r))
     review_comments = collect_review_feedback(tracker, a.issue_id)
 
-    # Combine with inline feedback
     inline = a.message if hasattr(a, "message") and a.message else None
     feedback = build_revise_prompt(review_comments, inline)
 
@@ -622,14 +453,12 @@ def cmd_revise(a):
               file=sys.stderr)
         sys.exit(1)
 
-    # Write resume prompt and update state
     (sd / "resume-prompt.md").write_text(feedback)
     update_status(sd, "working")
 
     print(f"Revising {sid} with {len(review_comments)} comment(s)" +
           (f" + inline feedback" if inline else ""))
 
-    # Delegate to launch.py --resume
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
     if a.workflow:
@@ -652,7 +481,7 @@ def cmd_cleanup(a):
 
 
 def _register_session_commands(s):
-    """Register session lifecycle commands (start, resume, answer, accept, reject, revise, cleanup)."""
+    """Register session lifecycle commands."""
     sp = s.add_parser("start")
     sp.add_argument("issue_id")
     sp.add_argument("--max-turns", type=int, default=None)
