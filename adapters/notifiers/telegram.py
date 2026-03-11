@@ -20,10 +20,17 @@ class TelegramNotifier:
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
         self.enabled = bool(self.token and self.chat_id)
+        self._project = os.environ.get("PROJECT_NAME", "")
         self._pending: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._offset = 0
         self._running = False
+
+    def _prefix(self, text: str) -> str:
+        """Prefix message with [project] if PROJECT_NAME is set."""
+        if self._project:
+            return f"[{self._project}] {text}"
+        return text
 
     def start(self):
         if not self.enabled: return
@@ -38,9 +45,11 @@ class TelegramNotifier:
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
-                json={"chat_id": self.chat_id, "text": f"🤖 {message}",
+                json={"chat_id": self.chat_id,
+                      "text": self._prefix(f"🤖 {message}"),
                       "parse_mode": "Markdown"}, timeout=10)
-        except requests.RequestException: pass
+        except requests.RequestException as e:
+            log.warning(f"Telegram notify failed: {e}")
 
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool:
         if not self.enabled: return False
@@ -49,8 +58,9 @@ class TelegramNotifier:
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
                 json={
                     "chat_id": self.chat_id,
-                    "text": (f"❓ *Question*\n*Issue:* `{short_id or issue_id[:12]}`\n"
-                             f"*Q:* {question}\n\n_Reply to answer._"),
+                    "text": self._prefix(
+                        f"❓ *Question*\n*Issue:* `{short_id or issue_id[:12]}`\n"
+                        f"*Q:* {question}\n\n_Reply to answer._"),
                     "parse_mode": "Markdown",
                     "reply_markup": {"force_reply": True, "selective": True,
                                      "input_field_placeholder": "Answer..."},
@@ -63,7 +73,9 @@ class TelegramNotifier:
                     "answer": None, "event": threading.Event(),
                 }
             return True
-        except requests.RequestException: return False
+        except requests.RequestException as e:
+            log.warning(f"Telegram send_question failed: {e}")
+            return False
 
     def check_answer(self, issue_id: str) -> Optional[str]:
         with self._lock:

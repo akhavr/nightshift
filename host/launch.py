@@ -199,6 +199,7 @@ def main():
         "-e", f"RESUME={'--resume' if args.resume else ''}",
         "-e", f"MAX_TURNS={max_turns}",
         "-e", f"STEP={args.step}",
+        "-e", f"PROJECT_NAME={repo.name}",
         *notify_env,
         args.image,
     ]
