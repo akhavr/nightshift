@@ -5,7 +5,7 @@ Executive summary of what nightshift must do, traced to tests.
 ---
 
 ### REQ-001: Launch agent in isolated workspace
-The system creates a git worktree per issue and runs the coding agent inside a Docker container against that worktree.
+The system creates a git worktree per issue and runs the coding agent inside a Docker container against that worktree. Git operations work correctly inside the container.
 
 - **Tests:** test_worktree_git_fix.py
 - **Status:** partial
@@ -35,7 +35,7 @@ Agent work is not merged automatically. On completion, the system posts a proof-
 - **Status:** covered
 
 ### REQ-006: Accept (merge) agent work
-A human can accept agent work via CLI, which merges the agent branch into the base branch with --no-ff, handles conflicts, cleans up worktrees, and closes the issue.
+A human can accept agent work via CLI, which merges the agent branch into the base branch, detects unresolved conflict markers, handles conflicts, cleans up worktrees, and closes the issue.
 
 - **Tests:** test_accept_reject.py
 - **Status:** covered
@@ -59,7 +59,7 @@ When a REVIEW.md template exists, the system automatically launches a reviewer a
 - **Status:** covered
 
 ### REQ-010: Notifications via pluggable channels
-The system sends notifications (status updates, questions, completion) through configurable channels (Telegram, webhook, Slack).
+The system sends notifications (status updates, questions, completion) through configurable channels (Telegram, webhook, Slack). Notifications include a project name prefix so multi-project setups are distinguishable.
 
 - **Tests:** test_notifier_prefix.py
 - **Status:** partial
@@ -100,55 +100,37 @@ Inside the container, issue data is read from pre-dumped JSON files (no network 
 - **Tests:** test_static_tracker.py
 - **Status:** covered
 
-### REQ-017: Container .git pointer fix
-Docker worktrees have their .git pointer rewritten to use container-internal paths so git operations work inside the container.
-
-- **Tests:** test_worktree_git_fix.py
-- **Status:** covered
-
-### REQ-018: Auto-start new issues
+### REQ-017: Auto-start new issues
 The host watcher can poll the tracker for new issues matching a configured label and auto-launch agent sessions, respecting a max concurrency limit.
 
 - **Tests:** test_auto_start.py
 - **Status:** covered
 
-### REQ-019: Project name prefix in notifications
-Notifications include a configurable project name prefix (from PROJECT_NAME env var) so multi-project setups are distinguishable.
-
-- **Tests:** test_notifier_prefix.py
-- **Status:** covered
-
-### REQ-020: Conflict detection on merge
-When accepting agent work, the system detects unresolved conflict markers in merged files and aborts the merge if found.
-
-- **Tests:** test_accept_reject.py
-- **Status:** covered
-
-### REQ-021: Proof-of-work summary on completion
+### REQ-018: Proof-of-work summary on completion
 When the agent finishes, the system posts a summary of checkpoints, Q&A exchanges, and a diff stat to the issue tracker.
 
 - **Tests:** test_post_container.py
 - **Status:** partial
 
-### REQ-022: Host watcher pause/unpause
+### REQ-019: Host watcher pause/unpause
 The host watcher monitors session directories, pauses idle containers (zero CPU), and unpauses them when answers arrive.
 
 - **Tests:** _(none)_
 - **Status:** untested
 
-### REQ-023: External cancellation
+### REQ-020: External cancellation
 If the tracked issue is closed externally while the agent is running, the session is cancelled gracefully.
 
 - **Tests:** _(none)_
 - **Status:** untested
 
-### REQ-024: Workspace hooks
+### REQ-021: Workspace hooks
 Users can configure shell hooks (after_create, before_run, after_run) that run at lifecycle points. A fatal hook failure stops the session.
 
 - **Tests:** _(none)_
 - **Status:** untested
 
-### REQ-025: Pluggable adapters
+### REQ-022: Pluggable adapters
 The system supports swappable adapters for agents, trackers, workspaces, and notifiers via a registry + dynamic import pattern. New adapters require only a registry entry and protocol implementation.
 
 - **Tests:** _(none)_
@@ -160,19 +142,19 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 
 | Test File | Requirements |
 |---|---|
-| test_accept_reject.py | REQ-006, REQ-007, REQ-012, REQ-020 |
+| test_accept_reject.py | REQ-006, REQ-007, REQ-012 |
 | test_assistant_text_logging.py | REQ-008, REQ-009 |
-| test_auto_start.py | REQ-011, REQ-018 |
+| test_auto_start.py | REQ-011, REQ-017 |
 | test_cli_env.py | REQ-012, REQ-013 |
 | test_dotenv.py | REQ-013 |
 | test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015 |
-| test_notifier_prefix.py | REQ-010, REQ-019 |
-| test_post_container.py | REQ-005, REQ-021 |
+| test_notifier_prefix.py | REQ-010 |
+| test_post_container.py | REQ-005, REQ-018 |
 | test_review.py | REQ-005, REQ-008 |
 | test_review_step.py | REQ-005, REQ-008, REQ-009, REQ-011 |
 | test_static_tracker.py | REQ-016 |
 | test_stream_parser.py | REQ-014 |
-| test_worktree_git_fix.py | REQ-001, REQ-017 |
+| test_worktree_git_fix.py | REQ-001 |
 | oq1_stdin_test.py | REQ-003 |
 
 ---
@@ -197,7 +179,7 @@ Requirements with some test coverage but significant gaps remaining.
 | REQ-010: Notifications via pluggable channels | Prefix behavior tested, but no tests for Telegram API calls, webhook delivery, or CompositeNotifier broadcast. |
 | REQ-011: Configuration via WORKFLOW.md | Config parsing tested for auto_start and review sections only. No tests for agent/tracker/workspace/notifications/merge/hooks config parsing or $VAR resolution. |
 | REQ-012: CLI for all operations | Only accept/reject and .env loading tested. No tests for init, start, resume, answer, status, logs, history, cleanup, or watcher commands. |
-| REQ-021: Proof-of-work summary on completion | Post-container summary posting is tested, but no tests for checkpoint summarization or Q&A exchange collection in the summary. |
+| REQ-018: Proof-of-work summary on completion | Post-container summary posting is tested, but no tests for checkpoint summarization or Q&A exchange collection in the summary. |
 
 ---
 
@@ -207,7 +189,7 @@ Requirements with no test coverage at all.
 
 | Requirement | Gap |
 |---|---|
-| REQ-022: Host watcher pause/unpause | No tests for container pause/unpause, waiting.json detection, answer.txt writing, or Telegram polling in the watcher. |
-| REQ-023: External cancellation | No tests for issue-closed detection during a running session. |
-| REQ-024: Workspace hooks | No tests for hook execution, fatal hook failure, or hook timeout. |
-| REQ-025: Pluggable adapters | No tests for adapter registry, dynamic import, or factory functions. |
+| REQ-019: Host watcher pause/unpause | No tests for container pause/unpause, waiting.json detection, answer.txt writing, or Telegram polling in the watcher. |
+| REQ-020: External cancellation | No tests for issue-closed detection during a running session. |
+| REQ-021: Workspace hooks | No tests for hook execution, fatal hook failure, or hook timeout. |
+| REQ-022: Pluggable adapters | No tests for adapter registry, dynamic import, or factory functions. |
