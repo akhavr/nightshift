@@ -84,23 +84,32 @@ def _dump_issue_data(config, repo: Path, session_dir: Path,
         print(f"Dumped issue + {len(all_issues)} issues to {session_dir}")
 
 
+_PASSTHROUGH_ENV_VARS = (
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    "NOTIFY_WEBHOOK_URL", "SLACK_WEBHOOK",
+    "ANTHROPIC_API_KEY", "GITHUB_TOKEN",
+)
+
+
+def _auth_mounts() -> list[str]:
+    """Build -v flags for Claude auth credentials."""
+    home = Path.home()
+    mounts: list[str] = []
+    if (home / ".claude").is_dir():
+        mounts += ["-v", f"{home / '.claude'}:/claude-auth:ro"]
+    if (home / ".claude.json").exists():
+        mounts += ["-v", f"{home / '.claude.json'}:/home/agent/.claude.json:ro"]
+    return mounts
+
+
 def _build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
                       container_name: str, worktree_name: str,
                       issue_id: str, short_id: str, max_turns: int,
                       step: str, is_resume: bool, workflow_path: str,
                       image: str) -> list[str]:
     """Build the docker run command with all mounts and env vars."""
-    home = Path.home()
-    auth_mounts = []
-    if (home / ".claude").is_dir():
-        auth_mounts += ["-v", f"{home / '.claude'}:/claude-auth:ro"]
-    if (home / ".claude.json").exists():
-        auth_mounts += ["-v", f"{home / '.claude.json'}:/home/agent/.claude.json:ro"]
-
     notify_env = []
-    for var in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-                "NOTIFY_WEBHOOK_URL", "SLACK_WEBHOOK",
-                "ANTHROPIC_API_KEY", "GITHUB_TOKEN"):
+    for var in _PASSTHROUGH_ENV_VARS:
         val = os.environ.get(var, "")
         if val:
             notify_env += ["-e", f"{var}={val}"]
@@ -116,7 +125,7 @@ def _build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "-v", f"{session_dir}:/session:rw",
         "-v", f"{repo / '.git'}:/repo-git:rw",
         "-v", f"{workflow_mount_path}:/workspace/WORKFLOW.md:ro",
-        *auth_mounts,
+        *_auth_mounts(),
         "-e", f"ISSUE_ID={issue_id}",
         "-e", f"SHORT_ID={short_id}",
         "-e", f"WORKTREE_NAME={worktree_name}",
@@ -138,6 +147,22 @@ def _build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
     return cmd
 
 
+def _resolve_names(issue_id: str, step: str, config):
+    """Derive session/branch/container names from issue_id and step."""
+    short_id = issue_id[:12]
+    is_review = step == "review"
+    prefix = "review" if is_review else "agent"
+    return {
+        "short_id": short_id,
+        "is_review": is_review,
+        "session_name": f"review-{short_id}" if is_review else short_id,
+        "branch": f"{prefix}/{short_id}",
+        "container_name": f"nightshift-{prefix}-{short_id}" if is_review else f"nightshift-{short_id}",
+        "worktree_name": f"{prefix}-{short_id}",
+        "base_branch": f"agent/{short_id}" if is_review else config.workspace.base_branch,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Launch agent worker")
     parser.add_argument("issue_id")
@@ -156,48 +181,36 @@ def main():
 
     workflow_path = args.workflow or repo / "WORKFLOW.md"
     config = load_workflow(workflow_path)
-
-    issue_id = args.issue_id
-    short_id = issue_id[:12]
     max_turns = args.max_turns or config.agent.max_turns
-
-    is_review = args.step == "review"
-    prefix = "review" if is_review else "agent"
-    session_name = f"review-{short_id}" if is_review else short_id
-    branch = f"{prefix}/{short_id}"
-    container_name = f"nightshift-{prefix}-{short_id}" if is_review else f"nightshift-{short_id}"
-    worktree_name = f"{prefix}-{short_id}"
-    base_branch = f"agent/{short_id}" if is_review else config.workspace.base_branch
-    session_dir = repo / ".nightshift" / "sessions" / session_name
+    n = _resolve_names(args.issue_id, args.step, config)
+    session_dir = repo / ".nightshift" / "sessions" / n["session_name"]
 
     if config.workspace.kind == "worktree":
-        wt_path = repo / config.workspace.root / worktree_name
-
+        wt_path = repo / config.workspace.root / n["worktree_name"]
         if not args.resume:
-            _create_worktree(repo, wt_path, branch, base_branch, session_dir, issue_id)
-            if is_review:
-                _prepare_review_session(repo, session_dir, short_id, config)
+            _create_worktree(repo, wt_path, n["branch"], n["base_branch"], session_dir, args.issue_id)
+            if n["is_review"]:
+                _prepare_review_session(repo, session_dir, n["short_id"], config)
         else:
             if not (session_dir / "state.json").exists():
                 print(f"No session state at {session_dir}", file=sys.stderr)
                 sys.exit(1)
-            print(f"Resuming session for {session_name}")
-
+            print(f"Resuming session for {n['session_name']}")
         workspace_mount = str(wt_path)
 
-    _dump_issue_data(config, repo, session_dir, issue_id, is_review, args.resume)
+    _dump_issue_data(config, repo, session_dir, args.issue_id, n["is_review"], args.resume)
 
     docker_cmd = _build_docker_cmd(
-        repo, workspace_mount, session_dir, container_name,
-        worktree_name, issue_id, short_id, max_turns,
+        repo, workspace_mount, session_dir, n["container_name"],
+        n["worktree_name"], args.issue_id, n["short_id"], max_turns,
         args.step, args.resume, str(workflow_path), args.image,
     )
 
-    print(f"Launching container {container_name}...")
+    print(f"Launching container {n['container_name']}...")
     result = subprocess.run(docker_cmd)
 
-    if not is_review:
-        _post_container(session_dir, config, repo, issue_id)
+    if not n["is_review"]:
+        _post_container(session_dir, config, repo, args.issue_id)
 
     sys.exit(result.returncode)
 

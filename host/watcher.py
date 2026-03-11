@@ -573,44 +573,42 @@ class HostWatcher:
             sid = session_dir.name
             if not (session_dir / "state.json").exists():
                 continue
+            self._maybe_resume_orphan(session_dir, sid, now)
 
-            try:
-                state = read_state(session_dir)
-            except (json.JSONDecodeError, OSError):
-                continue
+    def _maybe_resume_orphan(self, session_dir: Path, sid: str, now: float):
+        """Check a single session and auto-resume if orphaned."""
+        try:
+            state = read_state(session_dir)
+        except (json.JSONDecodeError, OSError):
+            return
 
-            # Skip non-active statuses (but include reviewing — reviewer may be orphaned)
-            if state.get("status") not in ("working", "starting"):
-                continue
+        if state.get("status") not in ("working", "starting"):
+            return
 
-            # Skip if recently launched (give it time to start)
-            if sid in self._recently_launched:
-                if now - self._recently_launched[sid] < ORPHAN_GRACE_PERIOD_S:
-                    continue
-                else:
-                    del self._recently_launched[sid]
+        # Skip if recently launched (give it time to start)
+        if sid in self._recently_launched:
+            if now - self._recently_launched[sid] < ORPHAN_GRACE_PERIOD_S:
+                return
+            del self._recently_launched[sid]
 
-            # Skip if container is still running
-            container = f"nightshift-{sid}"
-            container_state = docker_container_status(container)
-            if container_state in ("running", "paused"):
-                continue
+        # Skip if container is still running
+        container = f"nightshift-{sid}"
+        if docker_container_status(container) in ("running", "paused"):
+            return
 
-            # Container is gone but status is working — orphaned
-            issue_id = state.get("issue_id", "")
-            if not issue_id:
-                continue
+        issue_id = state.get("issue_id", "")
+        if not issue_id:
+            return
 
-            log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}). Auto-resuming.")
-            self._recently_launched[sid] = time.time()
+        log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}). Auto-resuming.")
+        self._recently_launched[sid] = time.time()
 
-            # Launch resume in background
-            cmd = [
-                sys.executable,
-                str(Path(__file__).parent / "launch.py"),
-                issue_id, "--resume",
-            ]
-            self._launch_background(cmd, sid)
+        cmd = [
+            sys.executable,
+            str(Path(__file__).parent / "launch.py"),
+            issue_id, "--resume",
+        ]
+        self._launch_background(cmd, sid)
 
     # --- Closed issue cleanup ---
 

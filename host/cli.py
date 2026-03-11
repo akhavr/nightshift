@@ -269,52 +269,23 @@ def _detect_default_branch(repo: Path) -> str:
     return "main"
 
 
-def cmd_init(a):
-    """Scaffold WORKFLOW.md and .env.example in the current repo."""
-    try:
-        root = repo_root()
-    except subprocess.CalledProcessError:
-        print("Not inside a git repository.", file=sys.stderr)
-        sys.exit(1)
+def _scaffold_file(path: Path, content: str, force: bool, label: str = ""):
+    """Write a scaffold file, skipping if it exists and force is False."""
+    if path.exists() and not force:
+        print(f"{path.name} already exists at {path}. Use --force to overwrite.")
+        return
+    path.write_text(content)
+    msg = f"Created {path}"
+    if label:
+        msg += f" ({label})"
+    print(msg)
 
-    default_branch = _detect_default_branch(root)
 
-    # WORKFLOW.md
-    wf = root / "WORKFLOW.md"
-    if wf.exists() and not a.force:
-        print(f"WORKFLOW.md already exists at {wf}. Use --force to overwrite.")
-    else:
-        wf.write_text(DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}"))
-        print(f"Created {wf} (base_branch: {default_branch})")
-
-    # REVIEW.md
-    rv = root / "REVIEW.md"
-    if rv.exists() and not a.force:
-        print(f"REVIEW.md already exists at {rv}. Use --force to overwrite.")
-    else:
-        rv.write_text(DEFAULT_REVIEW_MD)
-        print(f"Created {rv}")
-
-    # .env.example
-    env_example = root / ".env.example"
-    if env_example.exists() and not a.force:
-        print(f".env.example already exists. Use --force to overwrite.")
-    else:
-        env_example.write_text(DEFAULT_ENV_EXAMPLE)
-        print(f"Created {env_example}")
-
-    # Create .nightshift directory
-    aw_dir = root / ".nightshift" / "sessions"
-    aw_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Created {aw_dir.parent}")
-
-    # Add .env to .gitignore if not already there
+def _update_gitignore(root: Path):
+    """Ensure .env, .worktrees/, .nightshift/ are in .gitignore."""
     gitignore = root / ".gitignore"
     lines = gitignore.read_text().splitlines() if gitignore.exists() else []
-    entries_to_add = []
-    for entry in [".env", ".worktrees/", ".nightshift/"]:
-        if entry not in lines:
-            entries_to_add.append(entry)
+    entries_to_add = [e for e in [".env", ".worktrees/", ".nightshift/"] if e not in lines]
     if entries_to_add:
         with gitignore.open("a") as f:
             if lines and lines[-1] != "":
@@ -325,6 +296,28 @@ def cmd_init(a):
         print(f"Added {', '.join(entries_to_add)} to .gitignore")
     else:
         print(".gitignore already has nightshift entries")
+
+
+def cmd_init(a):
+    """Scaffold WORKFLOW.md and .env.example in the current repo."""
+    try:
+        root = repo_root()
+    except subprocess.CalledProcessError:
+        print("Not inside a git repository.", file=sys.stderr)
+        sys.exit(1)
+
+    default_branch = _detect_default_branch(root)
+    workflow_content = DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}")
+
+    _scaffold_file(root / "WORKFLOW.md", workflow_content, a.force, f"base_branch: {default_branch}")
+    _scaffold_file(root / "REVIEW.md", DEFAULT_REVIEW_MD, a.force)
+    _scaffold_file(root / ".env.example", DEFAULT_ENV_EXAMPLE, a.force)
+
+    aw_dir = root / ".nightshift" / "sessions"
+    aw_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Created {aw_dir.parent}")
+
+    _update_gitignore(root)
 
     print("\nNext steps:")
     print("  1. cp .env.example .env && edit .env with your credentials")
@@ -657,17 +650,8 @@ def cmd_cleanup(a):
     print(f"Cleaned up {sid}")
 
 
-def main():
-    # Load .env early so all commands see credentials
-    try:
-        load_all_dotenv(repo_root() / ".env")
-    except subprocess.CalledProcessError:
-        pass  # Not in a git repo (e.g. --help)
-
-    p = argparse.ArgumentParser(prog="nightshift")
-    p.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
-    s = p.add_subparsers(dest="cmd", required=True)
-
+def _register_session_commands(s):
+    """Register session lifecycle commands (start, resume, answer, accept, reject, revise, cleanup)."""
     sp = s.add_parser("start")
     sp.add_argument("issue_id")
     sp.add_argument("--max-turns", type=int, default=None)
@@ -681,6 +665,33 @@ def main():
     sp.add_argument("issue_id")
     sp.add_argument("message")
     sp.set_defaults(func=cmd_answer)
+
+    sp = s.add_parser("accept", help="Merge agent work into base branch")
+    sp.add_argument("issue_id")
+    sp.set_defaults(func=cmd_accept)
+
+    sp = s.add_parser("reject", help="Discard agent work and clean up")
+    sp.add_argument("issue_id")
+    sp.set_defaults(func=cmd_reject)
+
+    sp = s.add_parser("revise", help="Resume agent with review feedback")
+    sp.add_argument("issue_id")
+    sp.add_argument("message", nargs="?", default=None, help="Inline review feedback")
+    sp.set_defaults(func=cmd_revise)
+
+    sp = s.add_parser("cleanup")
+    sp.add_argument("issue_id")
+    sp.add_argument("--keep-session", action="store_true")
+    sp.set_defaults(func=cmd_cleanup)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser with all subcommands."""
+    p = argparse.ArgumentParser(prog="nightshift")
+    p.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
+    s = p.add_subparsers(dest="cmd", required=True)
+
+    _register_session_commands(s)
 
     sp = s.add_parser("watcher")
     sp.add_argument("--no-auto-start", action="store_true",
@@ -702,24 +713,17 @@ def main():
     sp.add_argument("--force", action="store_true", help="Overwrite existing files")
     sp.set_defaults(func=cmd_init)
 
-    sp = s.add_parser("accept", help="Merge agent work into base branch")
-    sp.add_argument("issue_id")
-    sp.set_defaults(func=cmd_accept)
+    return p
 
-    sp = s.add_parser("reject", help="Discard agent work and clean up")
-    sp.add_argument("issue_id")
-    sp.set_defaults(func=cmd_reject)
 
-    sp = s.add_parser("revise", help="Resume agent with review feedback")
-    sp.add_argument("issue_id")
-    sp.add_argument("message", nargs="?", default=None, help="Inline review feedback")
-    sp.set_defaults(func=cmd_revise)
+def main():
+    # Load .env early so all commands see credentials
+    try:
+        load_all_dotenv(repo_root() / ".env")
+    except subprocess.CalledProcessError:
+        pass  # Not in a git repo (e.g. --help)
 
-    sp = s.add_parser("cleanup")
-    sp.add_argument("issue_id")
-    sp.add_argument("--keep-session", action="store_true")
-    sp.set_defaults(func=cmd_cleanup)
-
+    p = _build_parser()
     a = p.parse_args()
     a.func(a)
 

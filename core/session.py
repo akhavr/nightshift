@@ -54,26 +54,43 @@ class SessionRunner:
         # Hooks from WORKFLOW.md
         self.hooks_config = hooks_config
 
-    def run(self, workspace: Workspace | None = None):
-        """Main entry. Loops on auto-resume (no recursion → no stack overflow).
-
-        If *workspace* is provided, use it directly (e.g. container mode where
-        the host already mounted the worktree). Otherwise delegate to
-        workspace_mgr.create().
-        """
+    def _init_workspace(self, workspace: Workspace | None):
+        """Set up workspace and run after_create hook if new."""
         if workspace is not None:
             self._workspace = workspace
         else:
             self._workspace = self.workspace_mgr.create(self.issue)
-
-        # Run after_create hook on new workspaces
         if self._workspace.is_new and self.hooks_config:
             self._run_hook(self.hooks_config.after_create, "after_create", fatal=True)
+
+    def _run_agent_cycle(self, prompt: str) -> bool:
+        """Run one agent start→event-loop→terminate cycle. Returns False to stop."""
+        if self.hooks_config:
+            if not self._run_hook(self.hooks_config.before_run, "before_run", fatal=True):
+                self.state_mgr.update_status("suspended:hook-failure")
+                self.notifier.notify(
+                    f"⚠️ {self.issue.identifier}: before_run hook failed.")
+                return False
+
+        self.state_mgr.append_conversation("user", prompt)
+        self.agent.start(prompt, self._workspace.path, self.max_turns)
+        log.info(f"Agent started (pid={self.agent.pid})")
+        try:
+            self._event_loop()
+        finally:
+            self.agent.terminate()
+
+        if self.hooks_config:
+            self._run_hook(self.hooks_config.after_run, "after_run", fatal=False)
+        return True
+
+    def run(self, workspace: Workspace | None = None):
+        """Main entry. Loops on auto-resume (no recursion → no stack overflow)."""
+        self._init_workspace(workspace)
 
         prompt = self.prompt
         resume_count = 0
         while True:
-            # Guard against infinite resume loops
             if resume_count >= MAX_RESUMES:
                 log.error(f"Hit max resumes ({MAX_RESUMES}). Stopping.")
                 self.state_mgr.update_status("suspended:max-resumes")
@@ -81,32 +98,14 @@ class SessionRunner:
                     f"⚠️ {self.issue.identifier} hit {MAX_RESUMES} resumes. Manual --resume needed.")
                 break
 
-            # Run before_run hook
-            if self.hooks_config:
-                if not self._run_hook(self.hooks_config.before_run, "before_run", fatal=True):
-                    self.state_mgr.update_status("suspended:hook-failure")
-                    self.notifier.notify(
-                        f"⚠️ {self.issue.identifier}: before_run hook failed.")
-                    break
+            if not self._run_agent_cycle(prompt):
+                break
 
-            self.state_mgr.append_conversation("user", prompt)
-            self.agent.start(prompt, self._workspace.path, self.max_turns)
-            log.info(f"Agent started (pid={self.agent.pid})")
-            try:
-                self._event_loop()
-            finally:
-                self.agent.terminate()
-
-            # Run after_run hook (best-effort)
-            if self.hooks_config:
-                self._run_hook(self.hooks_config.after_run, "after_run", fatal=False)
-
-            # Check if we need to auto-resume or stop
             resume_prompt = self._post_run()
             if resume_prompt is None:
-                break  # terminal state — exit the loop
+                break
             resume_count += 1
-            prompt = resume_prompt  # auto-resume with new prompt
+            prompt = resume_prompt
 
     def _run_hook(self, script: str | None, name: str, fatal: bool = False) -> bool:
         """Execute a hook script. Returns True on success."""
@@ -134,6 +133,31 @@ class SessionRunner:
             log.error(f"{name} hook failed (fatal)")
         return ok
 
+    def _dispatch_event(self, event) -> str | None:
+        """Dispatch a single agent event. Returns 'STOP' to break the loop."""
+        if event.type == AgentEventType.TEXT:
+            return self._handle_text(event.content)
+
+        if event.type == AgentEventType.TOOL_CALL:
+            self.state_mgr.append_conversation("tool_call", event.content)
+        elif event.type == AgentEventType.TOOL_RESULT:
+            self.state_mgr.append_conversation("tool_result", event.content)
+        elif event.type == AgentEventType.SYSTEM:
+            if "context window" in event.content or "token limit" in event.content:
+                self._commit_wip("context limit")
+                self.state_mgr.update_status("suspended:context-limit")
+                self._build_resume()
+                return "STOP"
+            self.state_mgr.append_conversation("system", event.content)
+        elif event.type == AgentEventType.STALL:
+            log.warning(f"Stall: {event.content}")
+            self._commit_wip("stalled")
+            self.state_mgr.update_status("suspended:stall")
+            return "STOP"
+        elif event.type == AgentEventType.PROCESS_EXIT:
+            return "STOP"
+        return None
+
     def _event_loop(self):
         last_reconcile = time.monotonic()
         question_time: float | None = None  # OQ-4: track when question was asked
@@ -141,35 +165,11 @@ class SessionRunner:
         for event in self.agent.stream_events():
             self.state_mgr.append_raw(event.raw)
 
-            if event.type == AgentEventType.TEXT:
-                result = self._handle_text(event.content)
-                if result == "STOP":
-                    break
-                if result == "QUESTION_ASKED":
-                    question_time = time.monotonic()
-
-            elif event.type == AgentEventType.TOOL_CALL:
-                self.state_mgr.append_conversation("tool_call", event.content)
-
-            elif event.type == AgentEventType.TOOL_RESULT:
-                self.state_mgr.append_conversation("tool_result", event.content)
-
-            elif event.type == AgentEventType.SYSTEM:
-                if "context window" in event.content or "token limit" in event.content:
-                    self._commit_wip("context limit")
-                    self.state_mgr.update_status("suspended:context-limit")
-                    self._build_resume()
-                    break
-                self.state_mgr.append_conversation("system", event.content)
-
-            elif event.type == AgentEventType.STALL:
-                log.warning(f"Stall: {event.content}")
-                self._commit_wip("stalled")
-                self.state_mgr.update_status("suspended:stall")
+            result = self._dispatch_event(event)
+            if result == "STOP":
                 break
-
-            elif event.type == AgentEventType.PROCESS_EXIT:
-                break
+            if result == "QUESTION_ASKED":
+                question_time = time.monotonic()
 
             # OQ-4: if @@QUESTION@@ was seen but @@WAITING@@ hasn't arrived
             if (question_time and self._pending_questions
@@ -185,9 +185,7 @@ class SessionRunner:
                     self.state_mgr.update_status("cancelled:external")
                     break
 
-        # OQ-1: In -p mode, the agent exits after responding. If a question
-        # was asked but @@WAITING@@ was never seen (or process exited before
-        # the OQ-4 timer), handle pending questions now.
+        # OQ-1: handle pending questions after agent exits
         if self._pending_questions:
             log.info("Agent exited with pending question(s). Collecting answer...")
             self._on_waiting()

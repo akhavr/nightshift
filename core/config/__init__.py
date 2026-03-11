@@ -1,0 +1,45 @@
+"""Configuration package — re-exports all public symbols for backward compatibility."""
+
+from core.config.models import (
+    AgentConfig,
+    AutoStartConfig,
+    HooksConfig,
+    MergeConfig,
+    NotifierConfig,
+    ReviewConfig,
+    TrackerConfig,
+    WorkflowConfig,
+    WorkspaceConfig,
+)
+from core.config.loader import load_workflow
+from core.config.factories import (
+    AGENT_REGISTRY,
+    NOTIFIER_REGISTRY,
+    TRACKER_REGISTRY,
+    WORKSPACE_REGISTRY,
+    create_agent,
+    create_notifiers,
+    create_tracker,
+    create_workspace_mgr,
+)
+
+__all__ = [
+    "AgentConfig",
+    "AutoStartConfig",
+    "HooksConfig",
+    "MergeConfig",
+    "NotifierConfig",
+    "ReviewConfig",
+    "TrackerConfig",
+    "WorkflowConfig",
+    "WorkspaceConfig",
+    "load_workflow",
+    "AGENT_REGISTRY",
+    "NOTIFIER_REGISTRY",
+    "TRACKER_REGISTRY",
+    "WORKSPACE_REGISTRY",
+    "create_agent",
+    "create_notifiers",
+    "create_tracker",
+    "create_workspace_mgr",
+]

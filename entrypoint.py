@@ -42,25 +42,40 @@ def _read_diff() -> str:
     return "N/A"
 
 
-def main():
-    issue_id = os.environ["ISSUE_ID"]
-    resume = os.environ.get("RESUME") == "--resume"
-    step = os.environ.get("STEP", "")
+def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
+                  issue_id, resume, step):
+    """Build or load the agent prompt."""
+    if resume and (p := state_mgr.read_resume_prompt()):
+        tracker.add_comment(issue_id, f"🤖 Resuming from step {state_mgr.load_state().step}...")
+        return p
 
-    # Load config from WORKFLOW.md (mounted into container at /workspace)
-    workflow_path = Path("/workspace/WORKFLOW.md")
-    config = load_workflow(workflow_path)
+    tracker.add_label(issue_id, "agent-in-progress")
+    tracker.add_comment(issue_id, f"🤖 Starting on {issue.identifier}")
+    state_mgr.update_status("working")
 
-    # Override max_turns from env if set (CLI takes precedence over WORKFLOW.md)
-    max_turns = int(os.environ.get("MAX_TURNS", config.agent.max_turns))
+    if config.prompt_template:
+        from core.prompts import render_template
+        extra_vars = {}
+        if step == "review":
+            extra_vars["diff"] = _read_diff()
+            extra_vars["base_branch"] = os.environ.get("BASE_BRANCH", "master")
+            extra_vars["agent_branch"] = workspace.branch
+        return render_template(
+            config.prompt_template, issue=issue,
+            related_context=related, attempt=None,
+            **extra_vars,
+        )
+    from core.prompts import build_initial_prompt
+    return build_initial_prompt(issue.title, issue.body, related)
 
-    # Use static tracker inside container (issue data pre-dumped by host)
+
+def _create_adapters(config):
+    """Instantiate all adapters from config."""
     from adapters.trackers.static import StaticTracker
+    from adapters.notifiers.composite import CompositeNotifier
+
     tracker = StaticTracker(session_dir="/session")
     agent = create_agent(config)
-
-    # Inside the container, /workspace is already set up by the host
-    # (worktree created and mounted). Build a Workspace directly.
     workspace_mgr = create_workspace_mgr(config, repo_root=Path("/workspace"))
     workspace = Workspace(
         path=Path("/workspace"),
@@ -68,49 +83,30 @@ def main():
         is_new=False,
     )
     state_mgr = StateManager("/session")
-
-    # Notifiers (may include Telegram, webhook, etc.)
     notifiers = create_notifiers(config, tracker=tracker)
-
-    # Wrap in composite: broadcasts to all, Q&A through primary
-    from adapters.notifiers.composite import CompositeNotifier
     notifier = CompositeNotifier(notifiers)
+    return tracker, agent, workspace_mgr, workspace, state_mgr, notifier
+
+
+def main():
+    issue_id = os.environ["ISSUE_ID"]
+    resume = os.environ.get("RESUME") == "--resume"
+    step = os.environ.get("STEP", "")
+
+    config = load_workflow(Path("/workspace/WORKFLOW.md"))
+    max_turns = int(os.environ.get("MAX_TURNS", config.agent.max_turns))
+
+    tracker, agent, workspace_mgr, workspace, state_mgr, notifier = _create_adapters(config)
     notifier.start()
 
-    # Load issue
     issue = tracker.get_issue(issue_id)
     if not issue:
         log.error(f"Issue {issue_id} not found")
         sys.exit(1)
 
-    # Search related issues
     related = search_related_issues(issue, tracker.list_issues(), tracker)
-
-    # Build or load prompt
-    if resume and (p := state_mgr.read_resume_prompt()):
-        tracker.add_comment(issue_id, f"🤖 Resuming from step {state_mgr.load_state().step}...")
-        prompt = p
-    else:
-        tracker.add_label(issue_id, "agent-in-progress")
-        tracker.add_comment(issue_id, f"🤖 Starting on {issue.identifier}")
-        state_mgr.update_status("working")
-
-        if config.prompt_template:
-            from core.prompts import render_template
-            # Extra template variables for review step
-            extra_vars = {}
-            if step == "review":
-                extra_vars["diff"] = _read_diff()
-                extra_vars["base_branch"] = os.environ.get("BASE_BRANCH", "master")
-                extra_vars["agent_branch"] = workspace.branch
-            prompt = render_template(
-                config.prompt_template, issue=issue,
-                related_context=related, attempt=None,
-                **extra_vars,
-            )
-        else:
-            from core.prompts import build_initial_prompt
-            prompt = build_initial_prompt(issue.title, issue.body, related)
+    prompt = _build_prompt(config, issue, related, workspace, state_mgr,
+                           tracker, issue_id, resume, step)
 
     runner = SessionRunner(
         agent=agent, tracker=tracker, notifier=notifier,

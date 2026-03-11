@@ -113,25 +113,30 @@ class ClaudeCodeAgent:
     def pid(self) -> int | None:
         return self._pid
 
+    def _parse_user_event(self, ev: dict, raw: str) -> Optional[AgentEvent]:
+        """Parse a 'user' event containing tool results."""
+        msg = ev.get("message", {})
+        content_parts = msg.get("content", []) if isinstance(msg, dict) else []
+        for part in content_parts:
+            if isinstance(part, dict) and part.get("type") == "tool_result":
+                result_content = part.get("content", "")
+                if isinstance(result_content, list):
+                    result_content = " ".join(
+                        p.get("text", "") for p in result_content
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                return AgentEvent(
+                    type=AgentEventType.TOOL_RESULT,
+                    content=str(result_content)[:500], raw=raw)
+        return None
+
     def _parse(self, raw: str) -> Optional[AgentEvent]:
-        """Parse a stream-json line into an AgentEvent.
-
-        OQ-2 RESOLVED: Verified schema against Claude Code 2.1.70.
-
-        Real event types (one JSON object per line):
-          system (subtype=init)  → {session_id, tools, model, ...}
-          assistant              → {message: {content: [{type, ...}]}}
-                                   content items: "text", "tool_use", "thinking"
-          user                   → {message: {content: [{type: "tool_result", ...}]}}
-          result                 → {subtype: "success"/"error", result: str}
-          rate_limit_event       → {rate_limit_info: ...} (ignored)
-        """
+        """Parse a stream-json line into an AgentEvent."""
         if not raw.strip(): return None
         try: ev = json.loads(raw)
         except json.JSONDecodeError: return None
         t = ev.get("type", "")
 
-        # --- system (subtype=init) ---
         if t == "system" and ev.get("subtype") == "init":
             sid = ev.get("session_id")
             if sid:
@@ -140,45 +145,25 @@ class ClaudeCodeAgent:
             return AgentEvent(type=AgentEventType.SYSTEM,
                               content="init", raw=raw)
 
-        # --- assistant: contains text, tool_use, and/or thinking ---
         if t == "assistant":
             msg = ev.get("message", {})
             content_parts = msg.get("content", []) if isinstance(msg, dict) else []
             events = list(self._parse_assistant_content(content_parts, raw))
-            # Yield the first event; caller gets the rest via _extra_events
             if events:
                 self._extra_events.extend(events[1:])
                 return events[0]
             return None
 
-        # --- user: tool results ---
         if t == "user":
-            msg = ev.get("message", {})
-            content_parts = msg.get("content", []) if isinstance(msg, dict) else []
-            for part in content_parts:
-                if isinstance(part, dict) and part.get("type") == "tool_result":
-                    result_content = part.get("content", "")
-                    if isinstance(result_content, list):
-                        # Content can be a list of {type: "text", text: ...}
-                        result_content = " ".join(
-                            p.get("text", "") for p in result_content
-                            if isinstance(p, dict) and p.get("type") == "text"
-                        )
-                    return AgentEvent(
-                        type=AgentEventType.TOOL_RESULT,
-                        content=str(result_content)[:500], raw=raw)
-            return None
+            return self._parse_user_event(ev, raw)
 
-        # --- result: session complete ---
         if t == "result":
             return AgentEvent(type=AgentEventType.SYSTEM,
                               content=ev.get("result", ""), raw=raw)
 
-        # --- rate_limit_event: skip ---
         if t == "rate_limit_event":
             return None
 
-        # --- system (other subtypes) ---
         if t == "system":
             return AgentEvent(type=AgentEventType.SYSTEM,
                               content=ev.get("message", ""), raw=raw)
