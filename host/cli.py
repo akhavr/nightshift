@@ -188,6 +188,42 @@ RULES:
 Begin by reading the codebase, then plan your approach.
 """
 
+DEFAULT_REVIEW_MD = """\
+---
+agent:
+  kind: claude-code
+  max_turns: 30
+
+review:
+  max_rounds: 3
+---
+
+You are a code reviewer. Review the following changes for the issue:
+
+**Title:** {{ issue.title }}
+**Description:**
+{{ issue.body }}
+
+**Diff to review:**
+```
+{{ diff }}
+```
+
+**Base branch:** {{ base_branch }}
+**Agent branch:** {{ agent_branch }}
+
+RULES:
+1. Read the diff carefully. Check for correctness, security, and style.
+2. Run tests if available.
+3. For every observation: @@LOG@@ <your observation>
+4. After reviewing: @@CHECKPOINT@@ <summary of findings>
+5. If the code is acceptable: post @nightshift approve
+6. If changes are needed: explain what needs fixing, then post @nightshift revise
+7. When done: @@DONE@@
+
+Begin by reading the diff and understanding the changes.
+"""
+
 DEFAULT_ENV_EXAMPLE = """\
 # Nightshift environment variables
 # Copy this file to .env and fill in your values.
@@ -240,6 +276,14 @@ def cmd_init(a):
     else:
         wf.write_text(DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}"))
         print(f"Created {wf} (base_branch: {default_branch})")
+
+    # REVIEW.md
+    rv = root / "REVIEW.md"
+    if rv.exists() and not a.force:
+        print(f"REVIEW.md already exists at {rv}. Use --force to overwrite.")
+    else:
+        rv.write_text(DEFAULT_REVIEW_MD)
+        print(f"Created {rv}")
 
     # .env.example
     env_example = root / ".env.example"

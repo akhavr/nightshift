@@ -28,21 +28,21 @@ from core.protocols import TrackerIssue
 
 def test_max_rounds_default():
     config = WorkflowConfig()
-    assert config.max_rounds == 3
+    assert config.review.max_rounds == 3
 
 
 def test_max_rounds_from_yaml(tmp_path):
     wf = tmp_path / "WORKFLOW.md"
-    wf.write_text("---\nmax_rounds: 5\n---\nPrompt here\n")
+    wf.write_text("---\nreview:\n  max_rounds: 5\n---\nPrompt here\n")
     config = load_workflow(wf)
-    assert config.max_rounds == 5
+    assert config.review.max_rounds == 5
 
 
 def test_max_rounds_default_when_not_specified(tmp_path):
     wf = tmp_path / "WORKFLOW.md"
     wf.write_text("---\nagent:\n  kind: claude-code\n---\nPrompt\n")
     config = load_workflow(wf)
-    assert config.max_rounds == 3
+    assert config.review.max_rounds == 3
 
 
 # --- Review command: approve ---
@@ -190,7 +190,7 @@ def test_watcher_max_rounds_escalation(tmp_path):
     sessions.mkdir()
     repo.mkdir()
 
-    (repo / "REVIEW.md").write_text("---\nmax_rounds: 2\n---\nReview\n")
+    (repo / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 2\n---\nReview\n")
 
     coder_dir = sessions / "abc123"
     coder_dir.mkdir()

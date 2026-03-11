@@ -255,7 +255,7 @@ class HostWatcher:
             try:
                 from core.config import load_workflow
                 review_config = load_workflow(review_md)
-                max_rounds = review_config.max_rounds
+                max_rounds = review_config.review.max_rounds
             except Exception:
                 max_rounds = 3
 

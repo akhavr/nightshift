@@ -56,6 +56,11 @@ class HooksConfig:
 
 
 @dataclass
+class ReviewConfig:
+    max_rounds: int = 3
+
+
+@dataclass
 class WorkflowConfig:
     """Fully parsed, typed configuration from WORKFLOW.md."""
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -64,8 +69,8 @@ class WorkflowConfig:
     notifications: list[NotifierConfig] = field(default_factory=list)
     merge: MergeConfig = field(default_factory=MergeConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
+    review: ReviewConfig = field(default_factory=ReviewConfig)
     terminal_statuses: list[str] = field(default_factory=lambda: ["closed"])
-    max_rounds: int = 3  # max reviewer <-> coder cycles before escalating
     prompt_template: str = ""
 
 
@@ -151,13 +156,16 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
             timeout_s=int(h.get("timeout_s", 60)),
         )
 
+    # Review
+    if "review" in raw:
+        rv = raw["review"]
+        config.review = ReviewConfig(
+            max_rounds=int(rv.get("max_rounds", 3)),
+        )
+
     # Terminal statuses
     if "terminal_statuses" in raw:
         config.terminal_statuses = [str(s) for s in raw["terminal_statuses"]]
-
-    # Max rounds (reviewer <-> coder cycles)
-    if "max_rounds" in raw:
-        config.max_rounds = int(raw["max_rounds"])
 
     return config
 
