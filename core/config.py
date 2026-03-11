@@ -65,6 +65,7 @@ class WorkflowConfig:
     merge: MergeConfig = field(default_factory=MergeConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
     terminal_statuses: list[str] = field(default_factory=lambda: ["closed"])
+    max_rounds: int = 3  # max reviewer <-> coder cycles before escalating
     prompt_template: str = ""
 
 
@@ -153,6 +154,10 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
     # Terminal statuses
     if "terminal_statuses" in raw:
         config.terminal_statuses = [str(s) for s in raw["terminal_statuses"]]
+
+    # Max rounds (reviewer <-> coder cycles)
+    if "max_rounds" in raw:
+        config.max_rounds = int(raw["max_rounds"])
 
     return config
 

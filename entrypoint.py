@@ -34,9 +34,23 @@ def _current_branch(repo_dir: str) -> str:
         return "unknown"
 
 
+def _git_diff(base: str, head: str, workspace: str = "/workspace") -> str:
+    """Get diff between two branches."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "diff", f"{base}..{head}"],
+            capture_output=True, text=True, cwd=workspace,
+        )
+        return result.stdout.strip() if result.returncode == 0 else "N/A"
+    except Exception:
+        return "N/A"
+
+
 def main():
     issue_id = os.environ["ISSUE_ID"]
     resume = os.environ.get("RESUME") == "--resume"
+    step = os.environ.get("STEP", "")
 
     # Load config from WORKFLOW.md (mounted into container at /workspace)
     workflow_path = Path("/workspace/WORKFLOW.md")
@@ -88,9 +102,19 @@ def main():
 
         if config.prompt_template:
             from core.prompts import render_template
+            # Extra template variables for review step
+            extra_vars = {}
+            if step == "review":
+                base_branch = os.environ.get("BASE_BRANCH", "master")
+                agent_branch = os.environ.get("AGENT_BRANCH", "")
+                if agent_branch:
+                    extra_vars["diff"] = _git_diff(base_branch, agent_branch)
+                    extra_vars["base_branch"] = base_branch
+                    extra_vars["agent_branch"] = agent_branch
             prompt = render_template(
                 config.prompt_template, issue=issue,
                 related_context=related, attempt=None,
+                **extra_vars,
             )
         else:
             from core.prompts import build_initial_prompt

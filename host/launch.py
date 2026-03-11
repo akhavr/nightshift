@@ -29,6 +29,10 @@ def main():
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
     parser.add_argument("--image", default="nightshift:latest", help="Docker image")
+    parser.add_argument("--step", default=None,
+                        help="Pipeline step name (e.g. 'review'). Changes session/branch naming.")
+    parser.add_argument("--coder-session", default=None,
+                        help="Coder session ID (for review step, links back to coder)")
     args = parser.parse_args()
 
     repo = get_repo_root()
@@ -41,15 +45,22 @@ def main():
     issue_id = args.issue_id
     short_id = issue_id[:12]
     max_turns = args.max_turns or config.agent.max_turns
+    step = args.step  # e.g. "review"
 
-    # Session dir (always under repo)
-    session_dir = repo / ".nightshift" / "sessions" / short_id
-    branch = f"agent/{short_id}"
+    # Session dir and branch naming: step prefix distinguishes coder from reviewer
+    if step:
+        session_name = f"{step}-{short_id}"
+        branch = f"{step}/{short_id}"
+    else:
+        session_name = short_id
+        branch = f"agent/{short_id}"
+    session_dir = repo / ".nightshift" / "sessions" / session_name
 
     # Create workspace based on config
     if config.workspace.kind == "worktree":
         wt_root = repo / config.workspace.root
-        wt_path = wt_root / f"agent-{short_id}"
+        wt_prefix = step or "agent"
+        wt_path = wt_root / f"{wt_prefix}-{short_id}"
 
         if not args.resume:
             session_dir.mkdir(parents=True, exist_ok=True)
@@ -71,8 +82,14 @@ def main():
             subprocess.run(["git", "worktree", "prune"],
                            capture_output=True, cwd=str(repo))
 
+            # For review step, branch off the agent branch (not the base branch)
+            if step == "review" and args.coder_session:
+                base_ref = f"agent/{args.coder_session}"
+            else:
+                base_ref = config.workspace.base_branch
+
             # Create branch (may already exist — ignore error)
-            subprocess.run(["git", "branch", branch, config.workspace.base_branch],
+            subprocess.run(["git", "branch", branch, base_ref],
                            capture_output=True, cwd=str(repo))
 
             # Create worktree — must succeed
@@ -154,20 +171,25 @@ def main():
 
     # Use -it only when stdin is a TTY (not when launched from watcher)
     tty_flags = ["-it"] if sys.stdin.isatty() else []
+    container_name = f"nightshift-{session_name}"
     docker_cmd = [
         "docker", "run", "--rm", *tty_flags,
-        "--name", f"nightshift-{short_id}",
+        "--name", container_name,
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
         "-v", f"{repo / '.git'}:/repo-git:rw",
-        # Mount WORKFLOW.md so container can read it
-        "-v", f"{repo / 'WORKFLOW.md'}:/workspace/WORKFLOW.md:ro",
+        # Mount workflow file so container can read it
+        "-v", f"{Path(args.workflow or repo / 'WORKFLOW.md').resolve()}:/workspace/WORKFLOW.md:ro",
         *auth_mounts,
         "-e", f"ISSUE_ID={issue_id}",
         "-e", f"SHORT_ID={short_id}",
         "-e", f"RESUME={'--resume' if args.resume else ''}",
         "-e", f"MAX_TURNS={max_turns}",
+        "-e", f"STEP={step or ''}",
+        "-e", f"CODER_SESSION={args.coder_session or ''}",
+        "-e", f"BASE_BRANCH={config.workspace.base_branch}",
+        "-e", f"AGENT_BRANCH={'agent/' + args.coder_session if args.coder_session else ''}",
         *notify_env,
         args.image,
     ]
@@ -180,11 +202,13 @@ def main():
         docker_cmd.insert(-1, "-e")
         docker_cmd.insert(-1, "SSH_AUTH_SOCK=/ssh-agent")
 
-    print(f"Launching container nightshift-{short_id}...")
+    print(f"Launching container {container_name}...")
     result = subprocess.run(docker_cmd)
 
     # Post-container: if agent finished, post proof-of-work to real tracker
-    _post_container(session_dir, config, repo, issue_id)
+    # (skip for review step — reviewer posts its own verdict)
+    if not step:
+        _post_container(session_dir, config, repo, issue_id)
 
     sys.exit(result.returncode)
 
