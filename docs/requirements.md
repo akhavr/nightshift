@@ -160,7 +160,7 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 
 | Test File | Requirements |
 |---|---|
-| test_accept_reject.py | REQ-006, REQ-007, REQ-020 |
+| test_accept_reject.py | REQ-006, REQ-007, REQ-012, REQ-020 |
 | test_assistant_text_logging.py | REQ-008, REQ-009 |
 | test_auto_start.py | REQ-011, REQ-018 |
 | test_cli_env.py | REQ-012, REQ-013 |
@@ -169,7 +169,7 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | test_notifier_prefix.py | REQ-010, REQ-019 |
 | test_post_container.py | REQ-005, REQ-021 |
 | test_review.py | REQ-005, REQ-008 |
-| test_review_step.py | REQ-008, REQ-009, REQ-011 |
+| test_review_step.py | REQ-005, REQ-008, REQ-009, REQ-011 |
 | test_static_tracker.py | REQ-016 |
 | test_stream_parser.py | REQ-014 |
 | test_worktree_git_fix.py | REQ-001, REQ-017 |
@@ -185,7 +185,9 @@ No orphan tests — all test files map to at least one requirement.
 
 ---
 
-## Untested Requirements
+## Partial Coverage
+
+Requirements with some test coverage but significant gaps remaining.
 
 | Requirement | Gap |
 |---|---|
@@ -195,6 +197,15 @@ No orphan tests — all test files map to at least one requirement.
 | REQ-010: Notifications via pluggable channels | Prefix behavior tested, but no tests for Telegram API calls, webhook delivery, or CompositeNotifier broadcast. |
 | REQ-011: Configuration via WORKFLOW.md | Config parsing tested for auto_start and review sections only. No tests for agent/tracker/workspace/notifications/merge/hooks config parsing or $VAR resolution. |
 | REQ-012: CLI for all operations | Only accept/reject and .env loading tested. No tests for init, start, resume, answer, status, logs, history, cleanup, or watcher commands. |
+
+---
+
+## Untested Requirements
+
+Requirements with no test coverage at all.
+
+| Requirement | Gap |
+|---|---|
 | REQ-022: Host watcher pause/unpause | No tests for container pause/unpause, waiting.json detection, answer.txt writing, or Telegram polling in the watcher. |
 | REQ-023: External cancellation | No tests for issue-closed detection during a running session. |
 | REQ-024: Workspace hooks | No tests for hook execution, fatal hook failure, or hook timeout. |
