@@ -15,13 +15,14 @@ log = logging.getLogger(__name__)
 
 _LOCK_RETRIES = 3
 _LOCK_RETRY_DELAY_S = 5
+_CMD_TIMEOUT_S = 30
 
 
 class GitBugTracker:
     def __init__(self, repo_dir: str | Path = "/workspace"):
         self.cwd = str(repo_dir)
 
-    def _run(self, *args: str, timeout: int = 30, ignore_rc: set[int] | None = None) -> str:
+    def _run(self, *args: str, timeout: int = _CMD_TIMEOUT_S, ignore_rc: set[int] | None = None) -> str:
         for attempt in range(_LOCK_RETRIES):
             try:
                 r = subprocess.run(

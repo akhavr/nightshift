@@ -8,6 +8,8 @@ from typing import Optional
 
 from core.protocols import WorkspaceManager, Workspace, TrackerIssue
 
+HOOK_TIMEOUT_S = 60
+
 log = logging.getLogger(__name__)
 
 
@@ -90,7 +92,7 @@ class GitWorktreeManager:
             return "none"
 
     def run_hook(self, workspace: Path, script: str | None,
-                 timeout_s: int = 60) -> bool:
+                 timeout_s: int = HOOK_TIMEOUT_S) -> bool:
         """Run a hook script in the workspace. Returns True on success."""
         if not script:
             return True

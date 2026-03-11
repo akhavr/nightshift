@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+RECENT_CONVERSATION_DEFAULT = 50
+CONVERSATION_PREVIEW_LEN = 500
+
 
 @dataclass
 class Checkpoint:
@@ -78,13 +81,13 @@ class StateManager:
     def append_raw(self, line: str):
         with open(self.raw_output_log, "a") as f: f.write(line + "\n")
 
-    def get_recent_conversation(self, n: int = 50) -> str:
+    def get_recent_conversation(self, n: int = RECENT_CONVERSATION_DEFAULT) -> str:
         if not self.conversation_log.exists(): return ""
         lines = self.conversation_log.read_text().strip().splitlines()
         parts = []
         for l in lines[-n:]:
             try:
-                e = json.loads(l); parts.append(f"[{e['role']}]: {e['content'][:500]}")
+                e = json.loads(l); parts.append(f"[{e['role']}]: {e['content'][:CONVERSATION_PREVIEW_LEN]}")
             except Exception: continue
         return "\n".join(parts)
 

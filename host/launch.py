@@ -14,6 +14,7 @@ from pathlib import Path
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
+from host.constants import SHORT_ID_LEN
 from host.env import load_all_dotenv
 from host.session_utils import get_repo_root, force_remove_dir
 
@@ -149,7 +150,7 @@ def _build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
 
 def _resolve_names(issue_id: str, step: str, config):
     """Derive session/branch/container names from issue_id and step."""
-    short_id = issue_id[:12]
+    short_id = issue_id[:SHORT_ID_LEN]
     is_review = step == "review"
     prefix = "review" if is_review else "agent"
     return {
@@ -277,7 +278,7 @@ def _post_container(session_dir, config, repo, issue_id):
         except Exception as e:
             print(f"Warning: remove_label failed: {e}", file=sys.stderr)
         tracker.sync()
-        print(f"Posted review summary to tracker for {issue_id[:12]}")
+        print(f"Posted review summary to tracker for {issue_id[:SHORT_ID_LEN]}")
     except Exception as e:
         print(f"Failed to post review summary: {e}", file=sys.stderr)
 

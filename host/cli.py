@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
+from host.constants import SHORT_ID_LEN
 from host.env import load_all_dotenv
 from host.session_utils import (
     get_repo_root,
@@ -33,14 +34,14 @@ def resolve_session(issue_id: str) -> str:
     if not sd.exists():
         print(f"No sessions directory found", file=sys.stderr)
         sys.exit(1)
-    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:12])]
+    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:SHORT_ID_LEN])]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         print(f"Ambiguous ID '{issue_id}' matches: {', '.join(matches)}", file=sys.stderr)
         sys.exit(1)
     # No match by session dir — return truncated (for start/new sessions)
-    return issue_id[:12]
+    return issue_id[:SHORT_ID_LEN]
 
 
 def cmd_start(a):
@@ -342,7 +343,7 @@ def _resolve_merge_ref(r: Path, branch: str, wt: Path) -> str:
             print(f"Branch {branch} not found and worktree HEAD unreadable.", file=sys.stderr)
             sys.exit(1)
         ref = wt_head.stdout.strip()
-        print(f"Branch {branch} gone, using worktree HEAD {ref[:12]}")
+        print(f"Branch {branch} gone, using worktree HEAD {ref[:SHORT_ID_LEN]}")
         return ref
     print(f"Branch {branch} not found and no worktree at {wt}.", file=sys.stderr)
     sys.exit(1)

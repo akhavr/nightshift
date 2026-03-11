@@ -36,6 +36,7 @@ from host.constants import (
     COMMAND_BACKOFF_BASE_S, COMMAND_BACKOFF_CAP_S, COMMAND_BACKOFF_CAP_CYCLES,
     TG_LONG_POLL_TIMEOUT_S, TG_HTTP_TIMEOUT_S, TG_POST_TIMEOUT_S,
     TG_MESSAGE_SOFT_LIMIT, TG_TRUNCATION_POINT,
+    SHORT_ID_LEN,
 )
 from core.config import load_workflow, create_tracker
 from core.review import (
@@ -211,7 +212,7 @@ class HostWatcher:
                     # Forward question to Telegram if not already sent by container
                     if self.tg_enabled and data.get("question"):
                         msg_id = self._tg_send_question(
-                            sid, data["question"], data.get("issue_id", "")[:12]
+                            sid, data["question"], data.get("issue_id", "")[:SHORT_ID_LEN]
                         )
                         self._paused[sid]["tg_msg_id"] = msg_id
                 else:
@@ -740,7 +741,7 @@ class HostWatcher:
                 break
 
             self._known_issue_ids.add(issue.id)
-            sid = issue.id[:12]
+            sid = issue.id[:SHORT_ID_LEN]
             self._recently_launched[sid] = time.time()
             active_count += 1
             log.info(f"Auto-start: launching {issue.identifier} — {issue.title[:60]}")
@@ -759,7 +760,7 @@ class HostWatcher:
             tracker = self._get_tracker()
             comment_body = f"Review from {author} via Telegram:\n\n{text}"
             tracker.add_comment(issue_id, comment_body)
-            log.info(f"Posted Telegram review to tracker for {issue_id[:12]}")
+            log.info(f"Posted Telegram review to tracker for {issue_id[:SHORT_ID_LEN]}")
         except Exception as e:
             log.warning(f"Failed to post Telegram review to tracker: {e}")
 

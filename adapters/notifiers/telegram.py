@@ -8,7 +8,7 @@ import time
 from typing import Optional
 
 import requests
-from core.protocols import Notifier, IssueTracker
+from core.protocols import Notifier, IssueTracker, SHORT_ID_LEN
 from adapters.notifiers._utils import project_prefix
 
 log = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class TelegramNotifier:
                 json={
                     "chat_id": self.chat_id,
                     "text": project_prefix(
-                        f"❓ *Question*\n*Issue:* `{short_id or issue_id[:12]}`\n"
+                        f"❓ *Question*\n*Issue:* `{short_id or issue_id[:SHORT_ID_LEN]}`\n"
                         f"*Q:* {question}\n\n_Reply to answer._"),
                     "parse_mode": "Markdown",
                     "reply_markup": {"force_reply": True, "selective": True,

@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 
 READ_TIMEOUT_S = 10.0
 STALL_TIMEOUT_S = 300.0
+TOOL_RESULT_PREVIEW_LEN = 500
+TOOL_INPUT_PREVIEW_LEN = 300
 
 
 class ClaudeCodeAgent:
@@ -127,7 +129,7 @@ class ClaudeCodeAgent:
                     )
                 return AgentEvent(
                     type=AgentEventType.TOOL_RESULT,
-                    content=str(result_content)[:500], raw=raw)
+                    content=str(result_content)[:TOOL_RESULT_PREVIEW_LEN], raw=raw)
         return None
 
     def _parse(self, raw: str) -> Optional[AgentEvent]:
@@ -190,7 +192,7 @@ class ClaudeCodeAgent:
                         type=AgentEventType.TEXT, content=text, raw=raw)
             elif pt == "tool_use":
                 name = part.get("name", "?")
-                inp = str(part.get("input", ""))[:300]
+                inp = str(part.get("input", ""))[:TOOL_INPUT_PREVIEW_LEN]
                 yield AgentEvent(
                     type=AgentEventType.TOOL_CALL,
                     content=f"{name}: {inp}", raw=raw)

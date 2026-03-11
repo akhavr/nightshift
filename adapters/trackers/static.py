@@ -14,6 +14,8 @@ from core.protocols import IssueTracker, TrackerIssue, TrackerComment, SHORT_ID_
 
 log = logging.getLogger(__name__)
 
+LOG_BODY_PREVIEW_LEN = 80
+
 
 def _issue_from_dict(d: dict) -> TrackerIssue:
     return TrackerIssue(
@@ -74,7 +76,7 @@ class StaticTracker:
         return []  # Comments not available in static mode
 
     def add_comment(self, issue_id: str, body: str) -> None:
-        log.info(f"[static] Comment on {issue_id[:SHORT_ID_LEN]}: {body[:80]}")
+        log.info(f"[static] Comment on {issue_id[:SHORT_ID_LEN]}: {body[:LOG_BODY_PREVIEW_LEN]}")
 
     def set_status(self, issue_id: str, status: str) -> None:
         log.info(f"[static] Status {issue_id[:SHORT_ID_LEN]} -> {status}")

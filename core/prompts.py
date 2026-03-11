@@ -5,6 +5,8 @@ from typing import Callable
 from core.state import StateManager
 from core.protocols import TrackerIssue
 
+RECENT_CONVERSATION_LINES = 50
+
 
 def render_template(
     template: str,
@@ -84,7 +86,7 @@ def build_resume_prompt(
     qa = "\n".join(f"Q: {q.question}\nA: {q.answer}"
                    for q in state.human_answers) or "None"
     diff = diff_fn() if diff_fn else "N/A"
-    recent = state_mgr.get_recent_conversation(50)
+    recent = state_mgr.get_recent_conversation(RECENT_CONVERSATION_LINES)
 
     ticks = "```"
     prompt = (

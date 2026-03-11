@@ -23,6 +23,9 @@ RECONCILE_S = 60
 ANSWER_POLL_S = 1
 QUESTION_WAIT_TIMEOUT_S = 30  # OQ-4: fallback if @@WAITING@@ never arrives
 MAX_RESUMES = 10  # prevent infinite context-limit loops
+DEFAULT_HOOK_TIMEOUT_S = 60
+TRACKER_SYNC_INTERVAL = 30   # polls between tracker syncs in answer collection
+COMMIT_DESC_MAX_LEN = 60     # max description length in checkpoint commit messages
 
 
 class SessionRunner:
@@ -116,7 +119,7 @@ class SessionRunner:
         if not self._workspace:
             return True
         log.info(f"Running {name} hook...")
-        timeout = self.hooks_config.timeout_s if self.hooks_config else 60
+        timeout = self.hooks_config.timeout_s if self.hooks_config else DEFAULT_HOOK_TIMEOUT_S
         # Use workspace manager's hook runner if available, else subprocess
         if hasattr(self.workspace_mgr, "run_hook"):
             ok = self.workspace_mgr.run_hook(self._workspace.path, script, timeout)
@@ -334,7 +337,7 @@ class SessionRunner:
                 return a
             # Source 3: tracker comments
             gb_counter += 1
-            if gb_counter >= 30:
+            if gb_counter >= TRACKER_SYNC_INTERVAL:
                 gb_counter = 0; self.tracker.sync()
                 comments = self.tracker.get_comments(self.issue.id)
                 if len(comments) > last_count:
@@ -439,7 +442,7 @@ class SessionRunner:
         if self._workspace:
             self.workspace_mgr.commit(
                 self._workspace.path,
-                f"checkpoint({step}): {desc[:60]} [{self.issue.identifier}]")
+                f"checkpoint({step}): {desc[:COMMIT_DESC_MAX_LEN]} [{self.issue.identifier}]")
             return self.workspace_mgr.get_current_commit(self._workspace.path)
         return "none"
 
