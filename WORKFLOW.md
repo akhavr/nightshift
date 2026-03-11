@@ -34,6 +34,12 @@ hooks:
 
 terminal_statuses:
   - closed
+
+auto_start:
+  enabled: true
+  label: nightshift
+  poll_interval_s: 30
+  max_concurrent: 4
 ---
 
 You are working on the following issue:
