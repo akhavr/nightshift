@@ -1,10 +1,7 @@
 """Tests for PROJECT_NAME prefix in notifiers."""
 
 import os
-import threading
 from unittest.mock import patch, MagicMock
-
-import pytest
 
 from adapters.notifiers._utils import project_prefix
 
