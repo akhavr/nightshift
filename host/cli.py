@@ -460,8 +460,8 @@ def cmd_accept(a):
                 state = json.loads(state_file.read_text())
                 state["status"] = "error:merge-conflict"
                 state_file.write_text(json.dumps(state, indent=2))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Failed to update session state: {e}", file=sys.stderr)
         sys.exit(1)
 
     _remove_worktree(r, wt, branch)
@@ -511,6 +511,8 @@ def _check_conflict_markers(repo: Path, base: str) -> list[str]:
         capture_output=True, text=True, cwd=str(repo),
     )
     if diff_result.returncode != 0:
+        print(f"Warning: git diff --name-only failed (rc={diff_result.returncode}), "
+              f"skipping conflict marker check", file=sys.stderr)
         return []
     changed_files = [f for f in diff_result.stdout.strip().splitlines() if f]
     if not changed_files:
@@ -523,7 +525,8 @@ def _check_conflict_markers(repo: Path, base: str) -> list[str]:
             continue
         try:
             content = fpath.read_text(errors="replace")
-        except Exception:
+        except Exception as e:
+            print(f"Warning: cannot read {fname}: {e}", file=sys.stderr)
             continue
         if "\n<<<<<<<" in content or content.startswith("<<<<<<<"):
             conflict_files.append(fname)
