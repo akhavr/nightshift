@@ -114,7 +114,7 @@ def test_check_conflict_markers_detects_markers(tmp_path):
     # Merge (this simulates a merge that succeeds but has markers in content)
     run("git", "merge", "--no-ff", "agent/test123", "-m", "Merge agent/test123")
 
-    result = _check_conflict_markers(repo, "main")
+    result = _check_conflict_markers(repo)
     assert "file.txt" in result
 
 
@@ -131,7 +131,7 @@ def test_check_conflict_markers_clean_merge(tmp_path):
 
     run("git", "merge", "--no-ff", "agent/test456", "-m", "Merge agent/test456")
 
-    result = _check_conflict_markers(repo, "main")
+    result = _check_conflict_markers(repo)
     assert result == []
 
 

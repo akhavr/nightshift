@@ -440,7 +440,7 @@ def cmd_accept(a):
     print(f"Merged into {base}")
 
     # Post-merge: detect unresolved conflict markers in changed files
-    conflict_files = _check_conflict_markers(r, base)
+    conflict_files = _check_conflict_markers(r)
     if conflict_files:
         file_list = "\n".join(conflict_files[:20])
         print(f"Conflict markers found after merge — aborting:\n{file_list}",
@@ -500,7 +500,7 @@ def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
         print(f"Cleaned up review session for {coder_sid}")
 
 
-def _check_conflict_markers(repo: Path, base: str) -> list[str]:
+def _check_conflict_markers(repo: Path) -> list[str]:
     """Check files changed by the merge commit for conflict markers.
 
     Returns list of files containing markers, or empty list if clean.
