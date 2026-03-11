@@ -38,6 +38,7 @@ except ImportError:
 
 # How often to poll tracker for review commands (seconds)
 REVIEW_POLL_INTERVAL_S = 30
+_ACTIVE_STATUSES = ("working", "starting", "waiting:answer")
 
 
 class HostWatcher:
@@ -760,11 +761,13 @@ class HostWatcher:
                 log.warning(f"Auto-start: failed to read state for {session_dir.name}: {e}")
         return results
 
-    def _count_active_sessions(self) -> int:
+    def _count_active_sessions(self, states=None) -> int:
         """Count sessions that are currently working or starting."""
+        if states is None:
+            states = self._iter_session_states()
         return sum(
-            1 for _, state in self._iter_session_states()
-            if state.get("status") in ("working", "starting", "waiting:answer")
+            1 for _, state in states
+            if state.get("status") in _ACTIVE_STATUSES
         )
 
     def _check_new_issues(self):
@@ -792,10 +795,7 @@ class HostWatcher:
         existing_issue_ids: set[str] = {
             state.get("issue_id", "") for _, state in all_states
         }
-        active_count = sum(
-            1 for _, state in all_states
-            if state.get("status") in ("working", "starting", "waiting:answer")
-        )
+        active_count = self._count_active_sessions(states=all_states)
 
         for issue in issues:
             if issue.id in existing_issue_ids or issue.id in self._known_issue_ids:
