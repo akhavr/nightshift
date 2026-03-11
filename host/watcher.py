@@ -58,6 +58,7 @@ class HostWatcher:
         self.sessions_dir = sessions_dir
         self.repo_dir = repo_dir
         self.auto_start = auto_start
+        self._auto_start_config = None  # Lazy-loaded from WORKFLOW.md
 
         # Telegram config (optional)
         self.tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -99,6 +100,15 @@ class HostWatcher:
             self._tracker = create_tracker(self._config, repo_dir=str(self.repo_dir))
         return self._tracker
 
+    def _get_auto_start_config(self):
+        """Lazy-load auto_start config from WORKFLOW.md."""
+        if self._auto_start_config is None:
+            from core.config import load_workflow
+            if self._config is None:
+                self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            self._auto_start_config = self._config.auto_start
+        return self._auto_start_config
+
     def run(self):
         log.info(f"Watching {self.sessions_dir}")
         if self.tg_enabled:
@@ -106,7 +116,14 @@ class HostWatcher:
         else:
             log.info("Telegram not configured — answers via CLI only")
         if self.auto_start:
-            log.info("Auto-start enabled — polling tracker for new issues")
+            asc = self._get_auto_start_config()
+            if asc.enabled:
+                log.info(f"Auto-start enabled — label={asc.label!r}, "
+                         f"poll={asc.poll_interval_s}s, max_concurrent={asc.max_concurrent}")
+            else:
+                log.info("Auto-start: enabled via CLI but disabled in WORKFLOW.md config "
+                         "(set auto_start.enabled: true)")
+                self.auto_start = False
         else:
             log.info("Auto-start disabled")
 
@@ -725,10 +742,30 @@ class HostWatcher:
 
     # --- Auto-start ---
 
+    def _count_active_sessions(self) -> int:
+        """Count sessions that are currently working or starting."""
+        count = 0
+        if not self.sessions_dir.exists():
+            return 0
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            state_file = session_dir / "state.json"
+            if not state_file.exists():
+                continue
+            try:
+                state = json.loads(state_file.read_text())
+                if state.get("status") in ("working", "starting", "waiting:answer"):
+                    count += 1
+            except (json.JSONDecodeError, OSError):
+                pass
+        return count
+
     def _check_new_issues(self):
-        """Poll tracker for open issues and start sessions for new ones."""
+        """Poll tracker for open issues matching the auto-start label and start sessions."""
+        asc = self._get_auto_start_config()
         now = time.time()
-        if now - self._last_auto_start_poll < REVIEW_POLL_INTERVAL_S:
+        if now - self._last_auto_start_poll < asc.poll_interval_s:
             return
         self._last_auto_start_poll = now
 
@@ -739,25 +776,40 @@ class HostWatcher:
             log.warning(f"Auto-start: tracker poll failed: {e}")
             return
 
+        # Filter by label
+        label = asc.label
+        if label:
+            issues = [i for i in issues if label in i.labels]
+
         # Build set of issue IDs that already have sessions
-        existing_sids = set()
+        existing_issue_ids: set[str] = set()
         if self.sessions_dir.exists():
             for session_dir in self.sessions_dir.iterdir():
                 if session_dir.is_dir() and (session_dir / "state.json").exists():
                     try:
                         state = json.loads((session_dir / "state.json").read_text())
-                        existing_sids.add(state.get("issue_id", ""))
+                        existing_issue_ids.add(state.get("issue_id", ""))
                     except (json.JSONDecodeError, OSError):
                         pass
 
+        # Check max concurrent before launching
+        active_count = self._count_active_sessions()
+
         for issue in issues:
-            if issue.id in existing_sids or issue.id in self._known_issue_ids:
+            if issue.id in existing_issue_ids or issue.id in self._known_issue_ids:
                 continue
+
+            if active_count >= asc.max_concurrent:
+                log.info(f"Auto-start: at max concurrent ({asc.max_concurrent}), "
+                         f"deferring {issue.identifier}")
+                break
 
             self._known_issue_ids.add(issue.id)
             sid = issue.id[:12]
             self._recently_launched[sid] = time.time()
-            log.info(f"Auto-start: new issue {issue.identifier} — {issue.title[:60]}")
+            active_count += 1
+            log.info(f"Auto-start: launching {issue.identifier} — {issue.title[:60]}")
+            self._tg_notify(f"🚀 Auto-starting `{issue.identifier}`: {issue.title[:60]}")
 
             cmd = [
                 sys.executable,

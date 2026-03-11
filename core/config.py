@@ -48,6 +48,14 @@ class MergeConfig:
 
 
 @dataclass
+class AutoStartConfig:
+    enabled: bool = False
+    label: str = "nightshift"
+    poll_interval_s: int = 30
+    max_concurrent: int = 4
+
+
+@dataclass
 class HooksConfig:
     after_create: str | None = None
     before_run: str | None = None
@@ -70,6 +78,7 @@ class WorkflowConfig:
     merge: MergeConfig = field(default_factory=MergeConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
     review: ReviewConfig = field(default_factory=ReviewConfig)
+    auto_start: AutoStartConfig = field(default_factory=AutoStartConfig)
     terminal_statuses: list[str] = field(default_factory=lambda: ["closed"])
     prompt_template: str = ""
 
@@ -161,6 +170,16 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
         rv = raw["review"]
         config.review = ReviewConfig(
             max_rounds=int(rv.get("max_rounds", 3)),
+        )
+
+    # Auto-start
+    if "auto_start" in raw:
+        asc = raw["auto_start"]
+        config.auto_start = AutoStartConfig(
+            enabled=bool(asc.get("enabled", False)),
+            label=str(asc.get("label", "nightshift")),
+            poll_interval_s=int(asc.get("poll_interval_s", 30)),
+            max_concurrent=int(asc.get("max_concurrent", 4)),
         )
 
     # Terminal statuses

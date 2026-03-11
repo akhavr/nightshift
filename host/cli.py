@@ -145,6 +145,12 @@ merge:
   review_label: reviewed
   auto_merge_label: auto-merge
 
+auto_start:
+  enabled: false
+  label: nightshift
+  poll_interval_s: 30
+  max_concurrent: 4
+
 hooks:
   after_create: |
     echo "Workspace created"
