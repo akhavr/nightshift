@@ -439,6 +439,31 @@ def cmd_accept(a):
 
     print(f"Merged into {base}")
 
+    # Post-merge: detect unresolved conflict markers in changed files
+    conflict_files = _check_conflict_markers(r, base)
+    if conflict_files:
+        file_list = "\n".join(conflict_files[:20])
+        print(f"Conflict markers found after merge — aborting:\n{file_list}",
+              file=sys.stderr)
+        # Undo the merge commit
+        subprocess.run(["git", "reset", "--hard", "HEAD~1"],
+                       capture_output=True, cwd=str(r))
+        msg = (f"Merge aborted: conflict markers (`<<<<<<<`) found in "
+               f"{len(conflict_files)} file(s) after rebase+merge:\n"
+               f"```\n{file_list}\n```\n"
+               f"Manual conflict resolution required.")
+        _report_accept_failure(config, r, a.issue_id, msg)
+        # Update session status
+        state_file = sessions_dir() / sid / "state.json"
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text())
+                state["status"] = "error:merge-conflict"
+                state_file.write_text(json.dumps(state, indent=2))
+            except Exception:
+                pass
+        sys.exit(1)
+
     _remove_worktree(r, wt, branch)
 
     # Clean up any lingering review session
@@ -473,6 +498,36 @@ def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
         import shutil
         shutil.rmtree(review_session, ignore_errors=True)
         print(f"Cleaned up review session for {coder_sid}")
+
+
+def _check_conflict_markers(repo: Path, base: str) -> list[str]:
+    """Check files changed by the merge commit for conflict markers.
+
+    Returns list of files containing markers, or empty list if clean.
+    """
+    # Get files changed in the merge commit vs its first parent (the base branch)
+    diff_result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD^1..HEAD"],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    if diff_result.returncode != 0:
+        return []
+    changed_files = [f for f in diff_result.stdout.strip().splitlines() if f]
+    if not changed_files:
+        return []
+
+    conflict_files = []
+    for fname in changed_files:
+        fpath = repo / fname
+        if not fpath.is_file():
+            continue
+        try:
+            content = fpath.read_text(errors="replace")
+        except Exception:
+            continue
+        if "\n<<<<<<<" in content or content.startswith("<<<<<<<"):
+            conflict_files.append(fname)
+    return conflict_files
 
 
 def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
