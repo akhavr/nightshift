@@ -651,10 +651,15 @@ class HostWatcher:
 
     # --- Telegram (self-contained) ---
 
+    @property
+    def _project_name(self) -> str:
+        return self.repo_dir.name
+
     def _tg_notify(self, text: str):
         """Send a plain notification to Telegram (no reply expected)."""
         if not self.tg_enabled:
             return
+        text = f"[{self._project_name}] {text}"
         # Telegram limit is 4096 chars
         if len(text) > 4000:
             text = text[:3950] + "\n\n… (truncated, see watcher.log)"
@@ -678,7 +683,7 @@ class HostWatcher:
                 json={
                     "chat_id": self.tg_chat,
                     "text": (
-                        f"❓ *Question*\n"
+                        f"[{self._project_name}] ❓ *Question*\n"
                         f"*Issue:* `{short_id}`\n"
                         f"*Q:* {question}\n\n"
                         f"_Reply to answer._"
@@ -702,7 +707,7 @@ class HostWatcher:
                 f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
                 json={
                     "chat_id": self.tg_chat,
-                    "text": f"✅ Received for `{sid}`.",
+                    "text": f"[{self._project_name}] ✅ Received for `{sid}`.",
                     "parse_mode": "Markdown",
                     "reply_to_message_id": reply_to,
                 }, timeout=10,
