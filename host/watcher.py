@@ -27,6 +27,9 @@ from host.session_utils import (
     get_repo_root, read_state, write_state, update_status as _update_status,
     force_remove_dir, remove_worktree,
 )
+from host.docker_utils import (
+    docker_pause, docker_unpause, docker_stop, docker_container_status,
+)
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, PRE_PAUSE_DELAY_S,
     STILL_WAITING_LOG_INTERVAL_S, ORPHAN_GRACE_PERIOD_S,
@@ -195,7 +198,7 @@ class HostWatcher:
                 # Brief delay to let container finish writing state
                 time.sleep(PRE_PAUSE_DELAY_S)
 
-                if self._docker_pause(container):
+                if docker_pause(container):
                     self._paused[sid] = {
                         "question": data.get("question", ""),
                         "issue_id": data.get("issue_id", ""),
@@ -224,7 +227,7 @@ class HostWatcher:
             # Check if someone wrote answer.txt directly (via CLI)
             if answer_file.exists():
                 log.info(f"[{sid}] answer.txt found (via CLI). Unpausing.")
-                self._docker_unpause(info["container"])
+                docker_unpause(info["container"])
                 del self._paused[sid]
                 continue
 
@@ -233,7 +236,7 @@ class HostWatcher:
                 answer = tg_replies[sid]
                 log.info(f"[{sid}] Telegram reply: {answer[:60]}")
                 answer_file.write_text(answer)
-                self._docker_unpause(info["container"])
+                docker_unpause(info["container"])
                 log.info(f"[{sid}] Unpaused.")
                 del self._paused[sid]
                 continue
@@ -252,69 +255,59 @@ class HostWatcher:
 
         review_md = self.repo_dir / "REVIEW.md"
         if not review_md.exists():
-            return  # No REVIEW.md → skip automated review
+            return
 
         for session_dir in self.sessions_dir.iterdir():
-            if not session_dir.is_dir():
+            if not session_dir.is_dir() or session_dir.name.startswith("review-"):
                 continue
             sid = session_dir.name
-
-            # Only process coder sessions (not review-* sessions)
-            if sid.startswith("review-"):
+            if not (session_dir / "state.json").exists():
                 continue
-
-            state_file = session_dir / "state.json"
-            if not state_file.exists():
-                continue
-
             try:
                 state = read_state(session_dir)
             except (json.JSONDecodeError, OSError):
                 continue
-
             if state.get("status") != "waiting:review":
                 continue
-
             issue_id = state.get("issue_id", "")
-            if not issue_id:
-                continue
+            if issue_id:
+                self._maybe_launch_review(sid, session_dir, issue_id, review_md)
 
-            # Check max_rounds before launching another review
-            try:
-                from core.config import load_workflow
-                review_config = load_workflow(review_md)
-                max_rounds = review_config.review.max_rounds
-            except Exception:
-                max_rounds = 3
+    def _maybe_launch_review(self, sid: str, session_dir: Path,
+                              issue_id: str, review_md: Path):
+        """Launch a review session for sid, or escalate if max rounds reached."""
+        try:
+            from core.config import load_workflow
+            review_config = load_workflow(review_md)
+            max_rounds = review_config.review.max_rounds
+        except Exception:
+            max_rounds = 3
 
-            rounds = self._review_rounds.get(sid, 0)
-            if rounds >= max_rounds:
-                log.info(f"[{sid}] Max review rounds ({max_rounds}) reached — escalating to human")
-                _update_status(session_dir, "waiting:human-review")
-                self._tg_notify(
-                    f"⚠️ `{sid}` hit max review rounds ({max_rounds}). "
-                    f"Escalating to human review.\n"
-                    f"`nightshift accept/reject/revise {issue_id}`")
-                continue
+        rounds = self._review_rounds.get(sid, 0)
+        if rounds >= max_rounds:
+            log.info(f"[{sid}] Max review rounds ({max_rounds}) reached — escalating")
+            _update_status(session_dir, "waiting:human-review")
+            self._tg_notify(
+                f"⚠️ `{sid}` hit max review rounds ({max_rounds}). "
+                f"Escalating to human review.\n"
+                f"`nightshift accept/reject/revise {issue_id}`")
+            return
 
-            # Transition coder to reviewing
-            _update_status(session_dir, "reviewing")
+        _update_status(session_dir, "reviewing")
+        review_sid = f"review-{sid}"
+        self._recently_launched[review_sid] = time.time()
+        self._review_rounds[sid] = rounds + 1
 
-            review_sid = f"review-{sid}"
-            self._recently_launched[review_sid] = time.time()
-            self._review_rounds[sid] = rounds + 1
-
-            log.info(f"[{sid}] Launching automated review (round {rounds + 1}/{max_rounds})")
-
-            cmd = [
-                sys.executable,
-                str(Path(__file__).parent / "launch.py"),
-                issue_id,
-                "--workflow", str(review_md),
-                "--step", "review",
-                "--coder-session", sid,
-            ]
-            self._launch_background(cmd, review_sid)
+        log.info(f"[{sid}] Launching automated review (round {rounds + 1}/{max_rounds})")
+        cmd = [
+            sys.executable,
+            str(Path(__file__).parent / "launch.py"),
+            issue_id,
+            "--workflow", str(review_md),
+            "--step", "review",
+            "--coder-session", sid,
+        ]
+        self._launch_background(cmd, review_sid)
 
     def _check_reviewer_done(self):
         """Check if reviewer sessions have finished, handle approve/revise verdict."""
@@ -419,51 +412,49 @@ class HostWatcher:
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to handle reviewer approve: {e}")
 
+    def _collect_reviewer_feedback(self, coder_sid: str, issue_id: str,
+                                    review_dir: Path) -> list[str]:
+        """Collect revision feedback from reviewer conversation and tracker."""
+        parts = []
+        conv_log = review_dir / "conversation.jsonl"
+        if conv_log.exists():
+            for line in conv_log.read_text().strip().splitlines():
+                try:
+                    entry = json.loads(line)
+                    text = entry.get("content", "")
+                    if "@nightshift" in text.lower() and "revise" in text.lower():
+                        cleaned = strip_nightshift_command(text)
+                        if cleaned:
+                            parts.append(cleaned)
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+        try:
+            tracker = self._get_tracker()
+            comments = tracker.get_comments(issue_id)
+            for comment in reversed(comments[-5:] if len(comments) > 5 else comments):
+                cmd = parse_nightshift_command(comment.body)
+                if cmd == "revise":
+                    cleaned = strip_nightshift_command(comment.body)
+                    if cleaned:
+                        parts.append(cleaned)
+                    break
+        except Exception as e:
+            log.warning(f"[{coder_sid}] Tracker poll for review feedback failed: {e}")
+
+        return parts or ["Reviewer requested revisions but did not provide specific feedback."]
+
     def _handle_reviewer_revise(self, coder_sid: str, coder_dir: Path,
                                 issue_id: str, review_dir: Path):
         """Reviewer requested revisions — resume coder with feedback."""
         try:
-            # Collect reviewer's feedback from its conversation
-            feedback_parts = []
-            conv_log = review_dir / "conversation.jsonl"
-            if conv_log.exists():
-                for line in conv_log.read_text().strip().splitlines():
-                    try:
-                        entry = json.loads(line)
-                        text = entry.get("content", "")
-                        if "@nightshift" in text.lower() and "revise" in text.lower():
-                            # Extract the feedback (everything except the command)
-                            cleaned = strip_nightshift_command(text)
-                            if cleaned:
-                                feedback_parts.append(cleaned)
-                    except (json.JSONDecodeError, KeyError):
-                        continue
-
-            # Also collect from tracker comments
-            try:
-                tracker = self._get_tracker()
-                comments = tracker.get_comments(issue_id)
-                for comment in reversed(comments[-5:] if len(comments) > 5 else comments):
-                    cmd = parse_nightshift_command(comment.body)
-                    if cmd == "revise":
-                        cleaned = strip_nightshift_command(comment.body)
-                        if cleaned:
-                            feedback_parts.append(cleaned)
-                        break
-            except Exception as e:
-                log.warning(f"[{coder_sid}] Tracker poll for review feedback failed: {e}")
-
-            if not feedback_parts:
-                feedback_parts = ["Reviewer requested revisions but did not provide specific feedback."]
-
-            feedback = build_revise_prompt([], inline_feedback="\n".join(feedback_parts))
+            parts = self._collect_reviewer_feedback(coder_sid, issue_id, review_dir)
+            feedback = build_revise_prompt([], inline_feedback="\n".join(parts))
             (coder_dir / "resume-prompt.md").write_text(feedback)
 
             _update_status(coder_dir, "working")
-
             self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions — resuming coder")
-
             self._tg_notify(f"🔄 Reviewer requested revisions for `{coder_sid}`. Coder resuming.")
 
             cmd = [
@@ -472,7 +463,6 @@ class HostWatcher:
                 issue_id, "--resume",
             ]
             self._launch_background(cmd, coder_sid)
-
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e}")
 
@@ -518,58 +508,52 @@ class HostWatcher:
             sid = session_dir.name
             if not (session_dir / "state.json").exists():
                 continue
-
             try:
                 state = read_state(session_dir)
             except (json.JSONDecodeError, OSError):
                 continue
-
             if state.get("status") not in ("waiting:review", "waiting:human-review"):
-                # Clean up tracking for non-review sessions
                 self._review_comment_counts.pop(sid, None)
                 continue
-
             issue_id = state.get("issue_id", "")
             if not issue_id:
                 continue
 
-            # Post Telegram review reply as tracker comment first
             if sid in tg_review_replies:
                 tg_text, tg_author = tg_review_replies[sid]
                 self._post_telegram_review_to_tracker(issue_id, tg_text, tg_author)
 
-            # Poll tracker for new comments with @nightshift command
-            try:
-                tracker = self._get_tracker()
-                comments = tracker.get_comments(issue_id)
-            except Exception as e:
-                log.warning(f"[{sid}] Tracker poll failed: {e}")
-                continue
+            self._poll_review_comments(sid, issue_id, session_dir)
 
-            last_count = self._review_comment_counts.get(sid, 0)
-            if len(comments) <= last_count:
-                continue
+    def _poll_review_comments(self, sid: str, issue_id: str, session_dir: Path):
+        """Check tracker for new @nightshift commands on a review session."""
+        try:
+            tracker = self._get_tracker()
+            comments = tracker.get_comments(issue_id)
+        except Exception as e:
+            log.warning(f"[{sid}] Tracker poll failed: {e}")
+            return
 
-            self._review_comment_counts[sid] = len(comments)
+        last_count = self._review_comment_counts.get(sid, 0)
+        if len(comments) <= last_count:
+            return
 
-            # On first scan, check the last comment for a pending command
-            # (handles commands posted before watcher started)
-            if last_count == 0:
-                if comments:
-                    cmd = parse_nightshift_command(comments[-1].body)
-                    if cmd:
-                        log.info(f"[{sid}] Found pending @nightshift {cmd} from {comments[-1].author}")
-                        self._handle_review_command(sid, issue_id, cmd, session_dir)
-                continue
+        self._review_comment_counts[sid] = len(comments)
 
-            # Check new comments for @nightshift commands
-            new_comments = comments[last_count:]
-            for comment in new_comments:
-                cmd = parse_nightshift_command(comment.body)
+        if last_count == 0:
+            if comments:
+                cmd = parse_nightshift_command(comments[-1].body)
                 if cmd:
-                    log.info(f"[{sid}] Found @nightshift {cmd} from {comment.author}")
+                    log.info(f"[{sid}] Found pending @nightshift {cmd} from {comments[-1].author}")
                     self._handle_review_command(sid, issue_id, cmd, session_dir)
-                    break  # one command per poll cycle
+            return
+
+        for comment in comments[last_count:]:
+            cmd = parse_nightshift_command(comment.body)
+            if cmd:
+                log.info(f"[{sid}] Found @nightshift {cmd} from {comment.author}")
+                self._handle_review_command(sid, issue_id, cmd, session_dir)
+                break
 
     # --- Orphan detection ---
 
@@ -608,11 +592,8 @@ class HostWatcher:
 
             # Skip if container is still running
             container = f"nightshift-{sid}"
-            result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Status}}", container],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0 and result.stdout.strip() in ("running", "paused"):
+            container_state = docker_container_status(container)
+            if container_state in ("running", "paused"):
                 continue
 
             # Container is gone but status is working — orphaned
@@ -675,7 +656,7 @@ class HostWatcher:
 
             # Stop running container if any
             container = f"nightshift-{sid}"
-            subprocess.run(["docker", "stop", container], capture_output=True)
+            docker_stop(container)
 
             log.info(f"[{sid}] Issue closed — cleaning up worktree and session")
             self._cleanup_session(sid, issue_id, session_dir)
@@ -869,12 +850,7 @@ class HostWatcher:
             log.error(f"[{sid}] {command} failed: {e}")
 
     def _poll_telegram_all(self) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
-        """Single Telegram poll — routes messages to Q&A answers or review commands.
-
-        Returns (qa_replies, review_replies) where:
-        - qa_replies: {session_id: answer_text} for paused Q&A sessions
-        - review_replies: {session_id: (text, author)} for waiting:review sessions
-        """
+        """Single Telegram poll — routes messages to Q&A answers or review commands."""
         qa: dict[str, str] = {}
         reviews: dict[str, tuple[str, str]] = {}
         try:
@@ -887,46 +863,45 @@ class HostWatcher:
                 self._tg_offset = u["update_id"] + 1
                 msg = u.get("message", {})
                 text = msg.get("text", "").strip()
-                rt = msg.get("reply_to_message", {})
-
                 if not text:
                     continue
                 if str(msg.get("chat", {}).get("id")) != str(self.tg_chat):
                     continue
-
-                reply_msg_id = rt.get("message_id") if rt else None
-                author = msg.get("from", {}).get("first_name", "Unknown")
-
-                # Route 1: reply to a paused Q&A session
-                if reply_msg_id:
-                    for sid, info in self._paused.items():
-                        if info.get("tg_msg_id") == reply_msg_id:
-                            qa[sid] = text
-                            self._tg_ack(msg.get("message_id"), sid)
-                            break
-                    else:
-                        # Route 2: reply with @nightshift command (review)
-                        cmd = parse_nightshift_command(text)
-                        if cmd:
-                            rt_text = rt.get("text", "")
-                            matched_sid = self._match_session_from_text(rt_text)
-                            if matched_sid:
-                                reviews[matched_sid] = (text, author)
-                                self._tg_ack(msg.get("message_id"), matched_sid)
-                else:
-                    # Non-reply message with @nightshift command
-                    cmd = parse_nightshift_command(text)
-                    if cmd:
-                        # Try to match from message text itself
-                        matched_sid = self._match_session_from_text(text)
-                        if matched_sid:
-                            reviews[matched_sid] = (text, author)
-                            self._tg_ack(msg.get("message_id"), matched_sid)
-
+                self._route_tg_message(msg, text, qa, reviews)
         except Exception as e:
             log.debug(f"Telegram poll: {e}")
-
         return qa, reviews
+
+    def _route_tg_message(self, msg: dict, text: str,
+                           qa: dict[str, str],
+                           reviews: dict[str, tuple[str, str]]):
+        """Route a single Telegram message to Q&A or review."""
+        rt = msg.get("reply_to_message", {})
+        reply_msg_id = rt.get("message_id") if rt else None
+        author = msg.get("from", {}).get("first_name", "Unknown")
+        msg_id = msg.get("message_id")
+
+        if reply_msg_id:
+            # Check if reply is to a paused Q&A question
+            for sid, info in self._paused.items():
+                if info.get("tg_msg_id") == reply_msg_id:
+                    qa[sid] = text
+                    self._tg_ack(msg_id, sid)
+                    return
+            # Otherwise check for @nightshift review command
+            cmd = parse_nightshift_command(text)
+            if cmd:
+                matched_sid = self._match_session_from_text(rt.get("text", ""))
+                if matched_sid:
+                    reviews[matched_sid] = (text, author)
+                    self._tg_ack(msg_id, matched_sid)
+        else:
+            cmd = parse_nightshift_command(text)
+            if cmd:
+                matched_sid = self._match_session_from_text(text)
+                if matched_sid:
+                    reviews[matched_sid] = (text, author)
+                    self._tg_ack(msg_id, matched_sid)
 
     def _match_session_from_text(self, text: str) -> Optional[str]:
         """Find a session ID mentioned in text."""
@@ -936,18 +911,6 @@ class HostWatcher:
             if session_dir.is_dir() and session_dir.name in text:
                 return session_dir.name
         return None
-
-    # --- Docker ---
-
-    def _docker_pause(self, container: str) -> bool:
-        return subprocess.run(
-            ["docker", "pause", container], capture_output=True,
-        ).returncode == 0
-
-    def _docker_unpause(self, container: str) -> bool:
-        return subprocess.run(
-            ["docker", "unpause", container], capture_output=True,
-        ).returncode == 0
 
     # --- Telegram (self-contained) ---
 
