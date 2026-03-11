@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -22,6 +23,17 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from host.env import load_all_dotenv
+from host.session_utils import (
+    get_repo_root, read_state, write_state, update_status as _update_status,
+    force_remove_dir, remove_worktree,
+)
+from host.constants import (
+    REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, PRE_PAUSE_DELAY_S,
+    STILL_WAITING_LOG_INTERVAL_S, ORPHAN_GRACE_PERIOD_S,
+    COMMAND_BACKOFF_BASE_S, COMMAND_BACKOFF_CAP_S, COMMAND_BACKOFF_CAP_CYCLES,
+    TG_LONG_POLL_TIMEOUT_S, TG_HTTP_TIMEOUT_S, TG_POST_TIMEOUT_S,
+    TG_MESSAGE_SOFT_LIMIT, TG_TRUNCATION_POINT,
+)
 from core.review import (
     parse_nightshift_command, strip_nightshift_command,
     collect_review_feedback, build_revise_prompt,
@@ -36,8 +48,6 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
-# How often to poll tracker for review commands (seconds)
-REVIEW_POLL_INTERVAL_S = 30
 _ACTIVE_STATUSES = ("working", "starting", "waiting:answer")
 
 
@@ -142,7 +152,7 @@ class HostWatcher:
             self._check_closed_issues()
             if self.auto_start:
                 self._check_new_issues()
-            time.sleep(2)
+            time.sleep(MAIN_LOOP_SLEEP_S)
 
     def _maybe_sync_tracker(self):
         """Sync tracker at most once per review poll interval."""
@@ -183,7 +193,7 @@ class HostWatcher:
                 container = f"nightshift-{sid}"
 
                 # Brief delay to let container finish writing state
-                time.sleep(1)
+                time.sleep(PRE_PAUSE_DELAY_S)
 
                 if self._docker_pause(container):
                     self._paused[sid] = {
@@ -230,7 +240,7 @@ class HostWatcher:
 
             # Log periodic status
             elapsed = time.time() - info["paused_at"]
-            if int(elapsed) % 300 == 0 and int(elapsed) > 0:
+            if int(elapsed) % STILL_WAITING_LOG_INTERVAL_S == 0 and int(elapsed) > 0:
                 log.info(f"[{sid}] Still waiting ({elapsed/60:.0f}m)")
 
     # --- Automated review step ---
@@ -258,7 +268,7 @@ class HostWatcher:
                 continue
 
             try:
-                state = json.loads(state_file.read_text())
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -280,8 +290,7 @@ class HostWatcher:
             rounds = self._review_rounds.get(sid, 0)
             if rounds >= max_rounds:
                 log.info(f"[{sid}] Max review rounds ({max_rounds}) reached — escalating to human")
-                state["status"] = "waiting:human-review"
-                (state_file).write_text(json.dumps(state, indent=2))
+                _update_status(session_dir, "waiting:human-review")
                 self._tg_notify(
                     f"⚠️ `{sid}` hit max review rounds ({max_rounds}). "
                     f"Escalating to human review.\n"
@@ -289,8 +298,7 @@ class HostWatcher:
                 continue
 
             # Transition coder to reviewing
-            state["status"] = "reviewing"
-            state_file.write_text(json.dumps(state, indent=2))
+            _update_status(session_dir, "reviewing")
 
             review_sid = f"review-{sid}"
             self._recently_launched[review_sid] = time.time()
@@ -322,12 +330,11 @@ class HostWatcher:
             if not sid.startswith("review-"):
                 continue
 
-            state_file = session_dir / "state.json"
-            if not state_file.exists():
+            if not (session_dir / "state.json").exists():
                 continue
 
             try:
-                state = json.loads(state_file.read_text())
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -392,9 +399,7 @@ class HostWatcher:
     def _handle_reviewer_approve(self, coder_sid: str, coder_dir: Path, issue_id: str):
         """Reviewer approved — transition coder to waiting:human-review."""
         try:
-            state = json.loads((coder_dir / "state.json").read_text())
-            state["status"] = "waiting:human-review"
-            (coder_dir / "state.json").write_text(json.dumps(state, indent=2))
+            _update_status(coder_dir, "waiting:human-review")
             log.info(f"[{coder_sid}] Reviewer approved → waiting:human-review")
 
             self._tg_notify(
@@ -454,9 +459,7 @@ class HostWatcher:
             feedback = build_revise_prompt([], inline_feedback="\n".join(feedback_parts))
             (coder_dir / "resume-prompt.md").write_text(feedback)
 
-            state = json.loads((coder_dir / "state.json").read_text())
-            state["status"] = "working"
-            (coder_dir / "state.json").write_text(json.dumps(state, indent=2))
+            _update_status(coder_dir, "working")
 
             self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions — resuming coder")
@@ -486,24 +489,8 @@ class HostWatcher:
             wt = self.repo_dir / config.workspace.root / f"review-{coder_sid}"
             branch = f"review/{coder_sid}"
 
-            if wt.exists():
-                result = subprocess.run(
-                    ["git", "worktree", "remove", str(wt), "--force"],
-                    capture_output=True, cwd=str(self.repo_dir),
-                )
-                if result.returncode != 0:
-                    import shutil
-                    try:
-                        shutil.rmtree(wt)
-                    except (PermissionError, FileNotFoundError):
-                        pass
+            remove_worktree(self.repo_dir, wt, branch)
 
-            subprocess.run(["git", "worktree", "prune"],
-                           capture_output=True, cwd=str(self.repo_dir))
-            subprocess.run(["git", "branch", "-D", branch],
-                           capture_output=True, cwd=str(self.repo_dir))
-
-            import shutil
             shutil.rmtree(review_dir, ignore_errors=True)
 
             self._recently_launched.pop(review_sid, None)
@@ -529,12 +516,11 @@ class HostWatcher:
             if not session_dir.is_dir():
                 continue
             sid = session_dir.name
-            state_file = session_dir / "state.json"
-            if not state_file.exists():
+            if not (session_dir / "state.json").exists():
                 continue
 
             try:
-                state = json.loads(state_file.read_text())
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -601,12 +587,11 @@ class HostWatcher:
             if not session_dir.is_dir():
                 continue
             sid = session_dir.name
-            state_file = session_dir / "state.json"
-            if not state_file.exists():
+            if not (session_dir / "state.json").exists():
                 continue
 
             try:
-                state = json.loads(state_file.read_text())
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -616,7 +601,7 @@ class HostWatcher:
 
             # Skip if recently launched (give it time to start)
             if sid in self._recently_launched:
-                if now - self._recently_launched[sid] < 120:  # 2 min grace
+                if now - self._recently_launched[sid] < ORPHAN_GRACE_PERIOD_S:
                     continue
                 else:
                     del self._recently_launched[sid]
@@ -662,12 +647,11 @@ class HostWatcher:
             if not session_dir.is_dir():
                 continue
             sid = session_dir.name
-            state_file = session_dir / "state.json"
-            if not state_file.exists():
+            if not (session_dir / "state.json").exists():
                 continue
 
             try:
-                state = json.loads(state_file.read_text())
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError):
                 continue
 
@@ -704,33 +688,8 @@ class HostWatcher:
             wt = self.repo_dir / config.workspace.root / f"agent-{sid}"
             branch = f"agent/{sid}"
 
-            # Remove worktree
-            if wt.exists():
-                result = subprocess.run(
-                    ["git", "worktree", "remove", str(wt), "--force"],
-                    capture_output=True, cwd=str(self.repo_dir),
-                )
-                if result.returncode != 0:
-                    import shutil
-                    try:
-                        shutil.rmtree(wt)
-                    except PermissionError:
-                        subprocess.run(["docker", "run", "--rm",
-                                        "-v", f"{wt}:/cleanup:rw",
-                                        "ubuntu:24.04", "rm", "-rf", "/cleanup"],
-                                       capture_output=True)
-                        try:
-                            shutil.rmtree(wt)
-                        except FileNotFoundError:
-                            pass
+            remove_worktree(self.repo_dir, wt, branch)
 
-            subprocess.run(["git", "worktree", "prune"],
-                           capture_output=True, cwd=str(self.repo_dir))
-            subprocess.run(["git", "branch", "-D", branch],
-                           capture_output=True, cwd=str(self.repo_dir))
-
-            # Remove session dir
-            import shutil
             shutil.rmtree(session_dir)
 
             # Clean up tracking state
@@ -751,11 +710,10 @@ class HostWatcher:
         for session_dir in self.sessions_dir.iterdir():
             if not session_dir.is_dir():
                 continue
-            state_file = session_dir / "state.json"
-            if not state_file.exists():
+            if not (session_dir / "state.json").exists():
                 continue
             try:
-                state = json.loads(state_file.read_text())
+                state = read_state(session_dir)
                 results.append((session_dir, state))
             except (json.JSONDecodeError, OSError) as e:
                 log.warning(f"Auto-start: failed to read state for {session_dir.name}: {e}")
@@ -835,7 +793,7 @@ class HostWatcher:
         # Backoff on repeated failures: wait 2^attempts minutes (max 30 min)
         if sid in self._command_failures:
             last_time, attempts = self._command_failures[sid]
-            backoff_s = min(60 * (2 ** attempts), 1800)
+            backoff_s = min(COMMAND_BACKOFF_BASE_S * (2 ** attempts), COMMAND_BACKOFF_CAP_S)
             if time.time() - last_time < backoff_s:
                 return  # still in cooldown
 
@@ -863,9 +821,7 @@ class HostWatcher:
             feedback = build_revise_prompt(review_comments)
             (session_dir / "resume-prompt.md").write_text(feedback)
 
-            state = json.loads((session_dir / "state.json").read_text())
-            state["status"] = "working"
-            (session_dir / "state.json").write_text(json.dumps(state, indent=2))
+            _update_status(session_dir, "working")
 
             # Reset comment count tracking and mark as recently launched
             self._review_comment_counts.pop(sid, None)
@@ -898,7 +854,7 @@ class HostWatcher:
                 _, attempts = self._command_failures.get(sid, (0, 0))
                 attempts += 1
                 self._command_failures[sid] = (time.time(), attempts)
-                backoff_m = min(2 ** attempts, 30)
+                backoff_m = min(2 ** attempts, COMMAND_BACKOFF_CAP_CYCLES)
                 log.error(f"[{sid}] nightshift {command} failed (attempt {attempts}, "
                           f"retry in {backoff_m}m): {error_msg}")
                 self._tg_notify(f"⚠️ `nightshift {command}` failed for `{sid}` "
@@ -924,7 +880,8 @@ class HostWatcher:
         try:
             resp = requests.get(
                 f"https://api.telegram.org/bot{self.tg_token}/getUpdates",
-                params={"offset": self._tg_offset, "timeout": 1}, timeout=5,
+                params={"offset": self._tg_offset, "timeout": TG_LONG_POLL_TIMEOUT_S},
+                timeout=TG_HTTP_TIMEOUT_S,
             )
             for u in resp.json().get("result", []):
                 self._tg_offset = u["update_id"] + 1
@@ -1003,9 +960,8 @@ class HostWatcher:
         if not self.tg_enabled:
             return
         text = f"[{self._project_name}] {text}"
-        # Telegram limit is 4096 chars
-        if len(text) > 4000:
-            text = text[:3950] + "\n\n… (truncated, see watcher.log)"
+        if len(text) > TG_MESSAGE_SOFT_LIMIT:
+            text = text[:TG_TRUNCATION_POINT] + "\n\n… (truncated, see watcher.log)"
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
@@ -1013,7 +969,7 @@ class HostWatcher:
                     "chat_id": self.tg_chat,
                     "text": text,
                     "parse_mode": "Markdown",
-                }, timeout=10,
+                }, timeout=TG_POST_TIMEOUT_S,
             )
         except Exception as e:
             log.warning(f"Telegram notify failed: {e}")

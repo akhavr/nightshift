@@ -4,8 +4,10 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,13 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from host.env import load_all_dotenv
-
-
-def get_repo_root() -> Path:
-    return Path(subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip())
+from host.session_utils import get_repo_root, force_remove_dir
 
 
 def main():
@@ -71,18 +67,7 @@ def main():
 
             # Clean up stale worktree path if it exists
             if wt_path.exists():
-                import shutil
-                try:
-                    shutil.rmtree(wt_path)
-                except PermissionError:
-                    subprocess.run(["docker", "run", "--rm",
-                                    "-v", f"{wt_path}:/cleanup:rw",
-                                    "ubuntu:24.04", "rm", "-rf", "/cleanup"],
-                                   capture_output=True)
-                    try:
-                        shutil.rmtree(wt_path)
-                    except FileNotFoundError:
-                        pass
+                force_remove_dir(wt_path)
             subprocess.run(["git", "worktree", "prune"],
                            capture_output=True, cwd=str(repo))
 
@@ -103,7 +88,6 @@ def main():
             gitignore_src = repo / ".gitignore"
             gitignore_dst = wt_path / ".gitignore"
             if gitignore_src.exists() and not gitignore_dst.exists():
-                import shutil
                 shutil.copy2(str(gitignore_src), str(gitignore_dst))
 
             # Verify worktree has files (not just .git)
@@ -151,7 +135,6 @@ def main():
             print(f"Issue {issue_id} not found", file=sys.stderr)
             sys.exit(1)
         else:
-            from dataclasses import asdict
             issue_json.write_text(json.dumps(asdict(issue), indent=2))
 
             all_issues = tracker.list_issues()
@@ -225,7 +208,6 @@ def main():
 
 def _prepare_review_session(repo, review_session_dir, short_id, config):
     """Prepare review session: copy issue data and generate diff."""
-    import shutil
     coder_session = repo / ".nightshift" / "sessions" / short_id
 
     # Copy issue data from coder session (avoids git-bug lock contention)

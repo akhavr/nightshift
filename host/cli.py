@@ -3,24 +3,28 @@
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
+from core.review import collect_review_feedback, build_revise_prompt
 from host.env import load_all_dotenv
+from host.session_utils import (
+    get_repo_root, sessions_dir as _sessions_dir,
+    read_state, write_state, update_status,
+    force_remove_dir, remove_worktree,
+)
 
 
 def repo_root() -> Path:
-    return Path(subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip())
+    return get_repo_root()
 
 
 def sessions_dir() -> Path:
-    return repo_root() / ".nightshift" / "sessions"
+    return _sessions_dir()
 
 
 def resolve_session(issue_id: str) -> str:
@@ -460,12 +464,10 @@ def cmd_accept(a):
                f"Manual conflict resolution required.")
         _report_accept_failure(config, r, a.issue_id, msg)
         # Update session status
-        state_file = sessions_dir() / sid / "state.json"
-        if state_file.exists():
+        sd = sessions_dir() / sid
+        if (sd / "state.json").exists():
             try:
-                state = json.loads(state_file.read_text())
-                state["status"] = "error:merge-conflict"
-                state_file.write_text(json.dumps(state, indent=2))
+                update_status(sd, "error:merge-conflict")
             except Exception as e:
                 print(f"Failed to update session state: {e}", file=sys.stderr)
         sys.exit(1)
@@ -494,14 +496,13 @@ def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
     review_session = repo / ".nightshift" / "sessions" / f"review-{coder_sid}"
 
     if review_wt.exists():
-        _remove_worktree(repo, review_wt, review_branch)
+        remove_worktree(repo, review_wt, review_branch)
     else:
         # Still try to clean branch
         subprocess.run(["git", "branch", "-D", review_branch],
                        capture_output=True, cwd=str(repo))
 
     if review_session.exists():
-        import shutil
         shutil.rmtree(review_session, ignore_errors=True)
         print(f"Cleaned up review session for {coder_sid}")
 
@@ -549,36 +550,6 @@ def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
         print(f"Warning: failed to post failure to tracker: {e}", file=sys.stderr)
 
 
-def _force_remove_dir(path: Path):
-    """Remove a directory, handling root-owned files from Docker."""
-    import shutil
-    try:
-        shutil.rmtree(path)
-    except PermissionError:
-        # Docker may have created files as root
-        subprocess.run(["docker", "run", "--rm",
-                        "-v", f"{path}:/cleanup:rw",
-                        "ubuntu:24.04", "rm", "-rf", "/cleanup"],
-                       capture_output=True)
-        # Now try again — the mount point itself should be removable
-        try:
-            shutil.rmtree(path)
-        except FileNotFoundError:
-            pass
-
-
-def _remove_worktree(repo: Path, wt: Path, branch: str):
-    """Remove worktree and branch, handling broken .git and root-owned files."""
-    if wt.exists():
-        result = subprocess.run(
-            ["git", "worktree", "remove", str(wt), "--force"],
-            capture_output=True, cwd=str(repo),
-        )
-        if result.returncode != 0:
-            # Worktree remove failed (e.g. .git file missing) — force remove dir
-            _force_remove_dir(wt)
-    subprocess.run(["git", "worktree", "prune"], capture_output=True, cwd=str(repo))
-    subprocess.run(["git", "branch", "-D", branch], capture_output=True, cwd=str(repo))
 
 
 def cmd_reject(a):
@@ -597,7 +568,7 @@ def cmd_reject(a):
         print(f"Discarding commits:\n{result.stdout.strip()}")
 
     wt = r / config.workspace.root / f"agent-{sid}"
-    _remove_worktree(r, wt, branch)
+    remove_worktree(r, wt, branch)
 
     # Clean up any review artifacts
     _cleanup_review_artifacts(r, sid, config)
@@ -605,7 +576,6 @@ def cmd_reject(a):
     # Remove session
     ss = sessions_dir() / sid
     if ss.exists():
-        import shutil
         shutil.rmtree(ss)
 
     # Close issue in tracker
@@ -620,9 +590,6 @@ def cmd_reject(a):
     print(f"Rejected and cleaned up {sid}")
 
 
-from core.review import collect_review_feedback, build_revise_prompt
-
-
 def cmd_revise(a):
     """Resume agent with review feedback."""
     r = repo_root()
@@ -633,7 +600,7 @@ def cmd_revise(a):
         print(f"No session found for {sid}", file=sys.stderr)
         sys.exit(1)
 
-    state = json.loads((sd / "state.json").read_text())
+    state = read_state(sd)
     if state.get("status") not in ("waiting:review", "waiting:human-review"):
         print(f"Session {sid} is not awaiting review (status: {state.get('status')})",
               file=sys.stderr)
@@ -655,8 +622,7 @@ def cmd_revise(a):
 
     # Write resume prompt and update state
     (sd / "resume-prompt.md").write_text(feedback)
-    state["status"] = "working"
-    (sd / "state.json").write_text(json.dumps(state, indent=2))
+    update_status(sd, "working")
 
     print(f"Revising {sid} with {len(review_comments)} comment(s)" +
           (f" + inline feedback" if inline else ""))
@@ -675,11 +641,10 @@ def cmd_cleanup(a):
     config = load_workflow(r / "WORKFLOW.md")
 
     wt = r / config.workspace.root / f"agent-{sid}"
-    _remove_worktree(r, wt, f"agent/{sid}")
+    remove_worktree(r, wt, f"agent/{sid}")
 
     ss = sessions_dir() / sid
     if ss.exists() and not a.keep_session:
-        import shutil
         shutil.rmtree(ss)
     print(f"Cleaned up {sid}")
 
