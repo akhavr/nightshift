@@ -14,6 +14,12 @@ class WebhookNotifier:
     def __init__(self, url: str | None = None):
         self.url = url or os.environ.get("NOTIFY_WEBHOOK_URL", "")
 
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
     def notify(self, message: str) -> None:
         if self.url:
             try: requests.post(self.url, json={"text": project_prefix(message)}, timeout=10)

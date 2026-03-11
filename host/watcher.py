@@ -992,7 +992,7 @@ class HostWatcher:
                         "force_reply": True, "selective": True,
                         "input_field_placeholder": "Answer...",
                     },
-                }, timeout=10,
+                }, timeout=TG_POST_TIMEOUT_S,
             )
             d = resp.json()
             return d["result"]["message_id"] if d.get("ok") else None
@@ -1009,7 +1009,7 @@ class HostWatcher:
                     "text": f"[{self._project_name}] ✅ Received for `{sid}`.",
                     "parse_mode": "Markdown",
                     "reply_to_message_id": reply_to,
-                }, timeout=10,
+                }, timeout=TG_POST_TIMEOUT_S,
             )
         except Exception as e:
             log.warning(f"Telegram ack failed: {e}")
@@ -1036,10 +1036,7 @@ def main():
 
     # Load .env from repo root (does not override existing env vars)
     try:
-        repo = Path(subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip())
+        repo = get_repo_root()
         load_all_dotenv(repo / ".env")
     except subprocess.CalledProcessError:
         repo = Path.cwd()

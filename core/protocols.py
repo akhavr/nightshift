@@ -55,8 +55,6 @@ class AgentEventType(Enum):
     TOOL_CALL = auto()
     TOOL_RESULT = auto()
     SYSTEM = auto()
-    TURN_COMPLETED = auto()
-    TURN_FAILED = auto()
     PROCESS_EXIT = auto()
     STALL = auto()
     UNKNOWN = auto()
@@ -112,6 +110,8 @@ class WorkspaceManager(Protocol):
 
 @runtime_checkable
 class Notifier(Protocol):
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
     def notify(self, message: str) -> None: ...
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool: ...
     def check_answer(self, issue_id: str) -> Optional[str]: ...

@@ -13,7 +13,7 @@ from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
 from host.env import load_all_dotenv
 from host.session_utils import (
-    get_repo_root, sessions_dir as _sessions_dir,
+    get_repo_root,
     read_state, write_state, update_status,
     force_remove_dir, remove_worktree,
 )
@@ -24,7 +24,7 @@ def repo_root() -> Path:
 
 
 def sessions_dir() -> Path:
-    return _sessions_dir()
+    return repo_root() / ".nightshift" / "sessions"
 
 
 def resolve_session(issue_id: str) -> str:
@@ -472,7 +472,7 @@ def cmd_accept(a):
                 print(f"Failed to update session state: {e}", file=sys.stderr)
         sys.exit(1)
 
-    _remove_worktree(r, wt, branch)
+    remove_worktree(r, wt, branch)
 
     # Clean up any lingering review session
     _cleanup_review_artifacts(r, sid, config)
