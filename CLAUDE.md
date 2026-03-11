@@ -73,6 +73,13 @@ Key core modules:
 
 - **CRITICAL — Never silently catch exceptions.** This is the #1 rule. `except Exception: pass`, `except: continue`, and any catch block that discards the error without logging is FORBIDDEN. Every `except` block MUST log or print the error with enough context to diagnose (the operation, the input, the exception). Use `logging.warning`/`logging.error` or `print(..., file=sys.stderr)`. Code that violates this rule will be rejected in review. No exceptions to this rule.
 - **Rebuild Docker image after code changes.** Any change to files that run inside the container (`core/`, `adapters/`, `entrypoint.py`, `docker-entrypoint.sh`, `Dockerfile`) requires rebuilding: `sg docker "docker build -t nightshift:latest ."`
+- **Test coverage target: 80%.** Run `coverage run -m pytest tests/ && coverage report` to check. Every new code path must have tests. Current: 66% (2025-03-11).
+- **No magic numbers.** Timeouts, thresholds, and retry counts must be named constants, not bare literals.
+- **Imports at module top.** No `import shutil` inside functions. No late imports except to break circular dependencies (and those must have a comment explaining why).
+- **Functions under 50 lines.** If a function exceeds 50 lines, extract helpers. Long functions are a review blocker.
+- **No God objects.** A class should have one responsibility. If it has 5+ unrelated methods, split it.
+- **DRY.** If the same pattern appears in 2+ places, extract a shared helper. Duplicated session-state I/O, subprocess calls, and path construction are the most common violations.
+- **Requirements traceability.** Every code change and git-bug issue must map to a requirement in `docs/requirements.md`. Before starting work, identify which REQ-xxx it falls under. If no existing requirement covers the change, ask the human whether to add a new REQ-xxx. New tests must be referenced in the traceability matrix. When a change modifies behavior covered by an existing requirement, update the requirement's test list and status if needed. Do not add, remove, or modify requirements without human approval.
 
 ## Key Design Patterns
 
@@ -87,9 +94,18 @@ Key core modules:
 
 ## Testing
 
+**Target: 80% line coverage.** Check with: `.venv/bin/python -m coverage run -m pytest tests/ && .venv/bin/python -m coverage report`
+
 Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). Test directories exist for `tests/adapters/` and `tests/integration/` but have no test files yet.
 
 Current test files: `test_stream_parser.py` (Claude Code stream-json parsing), `test_marker_reliability.py` (marker failure modes), `oq1_stdin_test.py` (CLI behavior verification), `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py` (automated review), `test_auto_start.py` (auto-start config and watcher logic).
+
+Coverage gaps (prioritized):
+- `host/cli.py` (23%) — cmd_accept, cmd_reject, cmd_init, cmd_revise need tests
+- `host/launch.py` (25%) — Docker command construction, worktree setup
+- `host/watcher.py` (35%) — review orchestration, container lifecycle, auto-start polling
+- `adapters/trackers/git_bug.py` (41%) — git-bug CLI interaction
+- `adapters/notifiers/telegram.py` (55%) — Telegram API calls
 
 ## Docker
 
