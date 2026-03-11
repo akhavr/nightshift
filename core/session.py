@@ -193,6 +193,11 @@ class SessionRunner:
             self._on_waiting()
 
     def _handle_text(self, text: str) -> str | None:
+        # Record the full assistant text block so that commands like
+        # @nightshift approve/revise are captured in conversation.jsonl
+        # (not just marker-extracted content).
+        self.state_mgr.append_conversation("assistant", text)
+
         # Extract multiline question content: everything between
         # @@QUESTION@@ and the next marker (@@WAITING@@, @@DONE@@, etc.)
         question_content = self._extract_question(text)
@@ -416,8 +421,8 @@ class SessionRunner:
             summary = " ".join(summary_parts).strip()
             if summary:
                 self._build_resume(checkpoint_summary=summary)
-        except Exception:
-            pass  # non-critical — raw checkpoints are fine
+        except Exception as e:
+            log.warning(f"Checkpoint summarization failed: {e}")
 
     def _issue_is_terminal(self) -> bool:
         self.tracker.sync()

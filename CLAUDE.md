@@ -12,18 +12,18 @@ Nightshift is an autonomous coding agent runner. It launches a coding agent (e.g
 # Build Docker image
 docker build -t nightshift:latest .
 
-# CLI commands
-python host/cli.py init                          # scaffold WORKFLOW.md, .env.example, .nightshift/
-python host/cli.py start <issue-id>              # create worktree + session, launch container
-python host/cli.py resume <issue-id>             # resume a suspended session
-python host/cli.py answer <issue-id> "your answer"
-python host/cli.py status                        # show all session statuses
-python host/cli.py logs <issue-id>               # tail raw agent output
-python host/cli.py history <issue-id>            # conversation timeline
-python host/cli.py accept <issue-id>             # merge agent branch into base, clean up
-python host/cli.py reject <issue-id>             # discard agent work, remove worktree + session
-python host/cli.py cleanup <issue-id>            # remove worktree (optionally keep session)
-python host/cli.py watcher                       # start host watcher (pause/unpause, Telegram)
+# CLI commands (use `nightshift` if installed, otherwise `python host/cli.py`)
+nightshift init                          # scaffold WORKFLOW.md, .env.example, .nightshift/
+nightshift start <issue-id>              # create worktree + session, launch container
+nightshift resume <issue-id>             # resume a suspended session
+nightshift answer <issue-id> "your answer"
+nightshift status                        # show all session statuses
+nightshift logs <issue-id>               # tail raw agent output
+nightshift history <issue-id>            # conversation timeline
+nightshift accept <issue-id>             # merge agent branch into base, clean up
+nightshift reject <issue-id>             # discard agent work, remove worktree + session
+nightshift cleanup <issue-id>            # remove worktree (optionally keep session)
+nightshift watcher                       # start host watcher (pause/unpause, Telegram)
 
 # Direct launch (cli.py start wraps this)
 python host/launch.py <issue-id>

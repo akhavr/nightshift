@@ -6,6 +6,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from adapters.notifiers._utils import project_prefix
+
 
 class FakeTracker:
     def add_comment(self, *a, **kw): pass
@@ -17,21 +19,19 @@ class FakeTracker:
     def sync(self): pass
 
 
-class TestTelegramPrefix:
+class TestProjectPrefix:
     def test_prefix_set(self):
         with patch.dict(os.environ, {"PROJECT_NAME": "myrepo"}, clear=False):
-            from adapters.notifiers.telegram import TelegramNotifier
-            n = TelegramNotifier(FakeTracker(), token="t", chat_id="1")
-            assert n._prefix("hello") == "[myrepo] hello"
+            assert project_prefix("hello") == "[myrepo] hello"
 
     def test_prefix_empty(self):
         env = os.environ.copy()
         env.pop("PROJECT_NAME", None)
         with patch.dict(os.environ, env, clear=True):
-            from adapters.notifiers.telegram import TelegramNotifier
-            n = TelegramNotifier(FakeTracker(), token="t", chat_id="1")
-            assert n._prefix("hello") == "hello"
+            assert project_prefix("hello") == "hello"
 
+
+class TestTelegramPrefix:
     @patch("adapters.notifiers.telegram.requests.post")
     def test_notify_includes_prefix(self, mock_post):
         with patch.dict(os.environ, {"PROJECT_NAME": "myrepo"}, clear=False):

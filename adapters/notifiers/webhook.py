@@ -5,6 +5,7 @@ import os
 from typing import Optional
 import requests
 from core.protocols import Notifier
+from adapters.notifiers._utils import project_prefix
 
 log = logging.getLogger(__name__)
 
@@ -12,16 +13,10 @@ log = logging.getLogger(__name__)
 class WebhookNotifier:
     def __init__(self, url: str | None = None):
         self.url = url or os.environ.get("NOTIFY_WEBHOOK_URL", "")
-        self._project = os.environ.get("PROJECT_NAME", "")
-
-    def _prefix(self, text: str) -> str:
-        if self._project:
-            return f"[{self._project}] {text}"
-        return text
 
     def notify(self, message: str) -> None:
         if self.url:
-            try: requests.post(self.url, json={"text": self._prefix(message)}, timeout=10)
+            try: requests.post(self.url, json={"text": project_prefix(message)}, timeout=10)
             except Exception as e:
                 log.warning(f"Webhook notify failed: {e}")
 

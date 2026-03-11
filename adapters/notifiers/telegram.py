@@ -9,6 +9,7 @@ from typing import Optional
 
 import requests
 from core.protocols import Notifier, IssueTracker
+from adapters.notifiers._utils import project_prefix
 
 log = logging.getLogger(__name__)
 
@@ -20,17 +21,10 @@ class TelegramNotifier:
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
         self.enabled = bool(self.token and self.chat_id)
-        self._project = os.environ.get("PROJECT_NAME", "")
         self._pending: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._offset = 0
         self._running = False
-
-    def _prefix(self, text: str) -> str:
-        """Prefix message with [project] if PROJECT_NAME is set."""
-        if self._project:
-            return f"[{self._project}] {text}"
-        return text
 
     def start(self):
         if not self.enabled: return
@@ -46,7 +40,7 @@ class TelegramNotifier:
             requests.post(
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
                 json={"chat_id": self.chat_id,
-                      "text": self._prefix(f"🤖 {message}"),
+                      "text": project_prefix(f"🤖 {message}"),
                       "parse_mode": "Markdown"}, timeout=10)
         except requests.RequestException as e:
             log.warning(f"Telegram notify failed: {e}")
@@ -58,7 +52,7 @@ class TelegramNotifier:
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
                 json={
                     "chat_id": self.chat_id,
-                    "text": self._prefix(
+                    "text": project_prefix(
                         f"❓ *Question*\n*Issue:* `{short_id or issue_id[:12]}`\n"
                         f"*Q:* {question}\n\n_Reply to answer._"),
                     "parse_mode": "Markdown",
