@@ -944,6 +944,9 @@ class HostWatcher:
         """Send a plain notification to Telegram (no reply expected)."""
         if not self.tg_enabled:
             return
+        # Prefix with project name so user knows which repo this is about
+        project = self.repo_dir.name
+        text = f"[{project}] {text}"
         # Telegram limit is 4096 chars
         if len(text) > 4000:
             text = text[:3950] + "\n\n… (truncated, see watcher.log)"
@@ -967,7 +970,7 @@ class HostWatcher:
                 json={
                     "chat_id": self.tg_chat,
                     "text": (
-                        f"❓ *Question*\n"
+                        f"❓ *Question* [{self.repo_dir.name}]\n"
                         f"*Issue:* `{short_id}`\n"
                         f"*Q:* {question}\n\n"
                         f"_Reply to answer._"
@@ -991,7 +994,7 @@ class HostWatcher:
                 f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
                 json={
                     "chat_id": self.tg_chat,
-                    "text": f"✅ Received for `{sid}`.",
+                    "text": f"✅ [{self.repo_dir.name}] Received for `{sid}`.",
                     "parse_mode": "Markdown",
                     "reply_to_message_id": reply_to,
                 }, timeout=10,

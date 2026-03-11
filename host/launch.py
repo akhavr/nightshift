@@ -40,7 +40,8 @@ def main():
     # Load .env BEFORE config so $VAR references in WORKFLOW.md resolve correctly
     load_all_dotenv(repo / ".env")
 
-    config = load_workflow(args.workflow or repo / "WORKFLOW.md")
+    workflow_path = args.workflow or repo / "WORKFLOW.md"
+    config = load_workflow(workflow_path)
 
     issue_id = args.issue_id
     short_id = issue_id[:12]
