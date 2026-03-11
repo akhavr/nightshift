@@ -1001,8 +1001,8 @@ class HostWatcher:
                     "reply_to_message_id": reply_to,
                 }, timeout=10,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Telegram ack failed: {e}")
 
 
 def main():
