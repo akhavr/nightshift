@@ -3,7 +3,7 @@
 import json
 import textwrap
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -236,6 +236,22 @@ class TestWatcherAutoStart:
 
         # Empty label means no filtering
         assert sorted(launched) == ["id-1", "id-2"]
+
+    def test_tracker_poll_failure_handled_gracefully(self, tmp_path):
+        """Tracker poll failure logs warning and does not crash or launch."""
+        watcher = self._make_watcher(tmp_path, label="nightshift")
+        tracker = MagicMock()
+        tracker.list_issues.side_effect = RuntimeError("connection refused")
+        watcher._tracker = tracker
+        watcher._config = MagicMock()
+
+        launched = []
+        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+
+        # Should not raise
+        watcher._check_new_issues()
+
+        assert launched == []
 
     def test_telegram_notification_on_launch(self, tmp_path):
         """Telegram notification is sent when auto-starting."""

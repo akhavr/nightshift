@@ -787,13 +787,15 @@ class HostWatcher:
         if label:
             issues = [i for i in issues if label in i.labels]
 
-        # Build set of issue IDs that already have sessions
+        # Build set of existing issue IDs and count active sessions in one pass
+        all_states = self._iter_session_states()
         existing_issue_ids: set[str] = {
-            state.get("issue_id", "") for _, state in self._iter_session_states()
+            state.get("issue_id", "") for _, state in all_states
         }
-
-        # Check max concurrent before launching
-        active_count = self._count_active_sessions()
+        active_count = sum(
+            1 for _, state in all_states
+            if state.get("status") in ("working", "starting", "waiting:answer")
+        )
 
         for issue in issues:
             if issue.id in existing_issue_ids or issue.id in self._known_issue_ids:
