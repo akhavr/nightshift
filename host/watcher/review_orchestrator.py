@@ -293,7 +293,7 @@ class ReviewOrchestrator:
             cmd = parse_nightshift_command(comment.body)
             if cmd:
                 log.info(f"[{sid}] Found @nightshift {cmd} from {comment.author}")
-                self._dispatch_review_command(sid, issue_id, cmd, session_dir)
+                self.handle_review_command(sid, issue_id, cmd, session_dir)
                 break
 
     def _handle_first_poll(self, sid: str, issue_id: str,
@@ -303,7 +303,7 @@ class ReviewOrchestrator:
             cmd = parse_nightshift_command(comments[-1].body)
             if cmd:
                 log.info(f"[{sid}] Found pending @nightshift {cmd} from {comments[-1].author}")
-                self._dispatch_review_command(sid, issue_id, cmd, session_dir)
+                self.handle_review_command(sid, issue_id, cmd, session_dir)
 
     def _dispatch_review_command(self, sid: str, issue_id: str,
                                   cmd: str, session_dir: Path):
@@ -312,10 +312,10 @@ class ReviewOrchestrator:
             return
 
         if cmd == "revise":
-            self.commands.do_revise(sid, issue_id, session_dir)
+            self.do_revise(sid, issue_id, session_dir)
         elif cmd == "accept":
-            self.commands.do_cli_command(sid, "accept", issue_id)
+            self.do_cli_command(sid, "accept", issue_id)
         elif cmd == "reject":
-            self.commands.do_cli_command(sid, "reject", issue_id)
+            self.do_cli_command(sid, "reject", issue_id)
         elif cmd == "approve":
-            self.verdicts.handle_reviewer_approve(sid, session_dir, issue_id)
+            self.handle_reviewer_approve(sid, session_dir, issue_id)
