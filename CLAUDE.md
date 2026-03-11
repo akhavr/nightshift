@@ -79,6 +79,7 @@ Key core modules:
 - **Functions under 50 lines.** If a function exceeds 50 lines, extract helpers. Long functions are a review blocker.
 - **No God objects.** A class should have one responsibility. If it has 5+ unrelated methods, split it.
 - **DRY.** If the same pattern appears in 2+ places, extract a shared helper. Duplicated session-state I/O, subprocess calls, and path construction are the most common violations.
+- **Requirements traceability.** Every code change and git-bug issue must map to a requirement in `docs/requirements.md`. Before starting work, identify which REQ-xxx it falls under. If no existing requirement covers the change, ask the human whether to add a new REQ-xxx. New tests must be referenced in the traceability matrix. When a change modifies behavior covered by an existing requirement, update the requirement's test list and status if needed. Do not add, remove, or modify requirements without human approval.
 
 ## Key Design Patterns
 
