@@ -26,6 +26,9 @@ MAX_RESUMES = 10  # prevent infinite context-limit loops
 DEFAULT_HOOK_TIMEOUT_S = 60
 TRACKER_SYNC_INTERVAL = 30   # polls between tracker syncs in answer collection
 COMMIT_DESC_MAX_LEN = 60     # max description length in checkpoint commit messages
+ANSWER_PREVIEW_LEN = 200     # max chars of answer shown in tracker comments
+CHECKPOINT_SUMMARIZE_THRESHOLD = 10  # summarize when more than this many checkpoints
+CHECKPOINT_SUMMARY_COUNT = 5  # number of key decisions to keep in summary
 
 
 class SessionRunner:
@@ -280,7 +283,7 @@ class SessionRunner:
         self.state_mgr.clear_waiting()
         self.state_mgr.add_qa(question, answer)
         self.tracker.remove_label(self.issue.id, "needs-human-input")
-        self.tracker.add_comment(self.issue.id, f"💬 Answer: {answer[:200]}")
+        self.tracker.add_comment(self.issue.id, f"💬 Answer: {answer[:ANSWER_PREVIEW_LEN]}")
 
         # OQ-1: In -p mode, the agent exits after responding. It will not
         # be alive by the time we collect the answer. The answer is saved
@@ -398,16 +401,16 @@ class SessionRunner:
         return self.state_mgr.read_resume_prompt()
 
     def _maybe_summarize_checkpoints(self):
-        """Compress checkpoint history when it gets long (>10 entries)."""
+        """Compress checkpoint history when it gets long."""
         state = self.state_mgr.load_state()
-        if len(state.checkpoints) <= 10:
+        if len(state.checkpoints) <= CHECKPOINT_SUMMARIZE_THRESHOLD:
             return
         cp_text = "\n".join(
             f"Step {c.step}: {c.description}" for c in state.checkpoints
         )
         try:
             self.agent.start(
-                prompt=f"Summarize these checkpoints to 5 key decisions. "
+                prompt=f"Summarize these checkpoints to {CHECKPOINT_SUMMARY_COUNT} key decisions. "
                        f"Output only the summary:\n\n{cp_text}",
                 workspace=self._workspace.path if self._workspace else Path("/tmp"),
                 max_turns=1,

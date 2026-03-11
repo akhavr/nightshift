@@ -164,6 +164,41 @@ def _resolve_names(issue_id: str, step: str, config):
     }
 
 
+def _setup_workspace(config, repo: Path, names: dict, is_resume: bool,
+                     issue_id: str) -> str:
+    """Create worktree or validate resume, returning the workspace mount path."""
+    session_dir = repo / ".nightshift" / "sessions" / names["session_name"]
+    wt_path = repo / config.workspace.root / names["worktree_name"]
+
+    if not is_resume:
+        _create_worktree(repo, wt_path, names["branch"],
+                         names["base_branch"], session_dir, issue_id)
+        if names["is_review"]:
+            _prepare_review_session(repo, session_dir, names["short_id"], config)
+    else:
+        if not (session_dir / "state.json").exists():
+            print(f"No session state at {session_dir}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Resuming session for {names['session_name']}")
+
+    return str(wt_path)
+
+
+def _run_container(repo: Path, workspace_mount: str, session_dir: Path,
+                   names: dict, issue_id: str, max_turns: int,
+                   step: str, is_resume: bool, workflow_path: str,
+                   image: str) -> int:
+    """Build docker command, run the container, return its exit code."""
+    docker_cmd = _build_docker_cmd(
+        repo, workspace_mount, session_dir, names["container_name"],
+        names["worktree_name"], issue_id, names["short_id"], max_turns,
+        step, is_resume, workflow_path, image,
+    )
+    print(f"Launching container {names['container_name']}...")
+    result = subprocess.run(docker_cmd)
+    return result.returncode
+
+
 def main():
     parser = argparse.ArgumentParser(description="Launch agent worker")
     parser.add_argument("issue_id")
@@ -183,37 +218,23 @@ def main():
     workflow_path = args.workflow or repo / "WORKFLOW.md"
     config = load_workflow(workflow_path)
     max_turns = args.max_turns or config.agent.max_turns
-    n = _resolve_names(args.issue_id, args.step, config)
-    session_dir = repo / ".nightshift" / "sessions" / n["session_name"]
+    names = _resolve_names(args.issue_id, args.step, config)
+    session_dir = repo / ".nightshift" / "sessions" / names["session_name"]
 
-    if config.workspace.kind == "worktree":
-        wt_path = repo / config.workspace.root / n["worktree_name"]
-        if not args.resume:
-            _create_worktree(repo, wt_path, n["branch"], n["base_branch"], session_dir, args.issue_id)
-            if n["is_review"]:
-                _prepare_review_session(repo, session_dir, n["short_id"], config)
-        else:
-            if not (session_dir / "state.json").exists():
-                print(f"No session state at {session_dir}", file=sys.stderr)
-                sys.exit(1)
-            print(f"Resuming session for {n['session_name']}")
-        workspace_mount = str(wt_path)
+    workspace_mount = _setup_workspace(config, repo, names, args.resume, args.issue_id)
 
-    _dump_issue_data(config, repo, session_dir, args.issue_id, n["is_review"], args.resume)
+    _dump_issue_data(config, repo, session_dir, args.issue_id,
+                     names["is_review"], args.resume)
 
-    docker_cmd = _build_docker_cmd(
-        repo, workspace_mount, session_dir, n["container_name"],
-        n["worktree_name"], args.issue_id, n["short_id"], max_turns,
-        args.step, args.resume, str(workflow_path), args.image,
+    returncode = _run_container(
+        repo, workspace_mount, session_dir, names, args.issue_id,
+        max_turns, args.step, args.resume, str(workflow_path), args.image,
     )
 
-    print(f"Launching container {n['container_name']}...")
-    result = subprocess.run(docker_cmd)
-
-    if not n["is_review"]:
+    if not names["is_review"]:
         _post_container(session_dir, config, repo, args.issue_id)
 
-    sys.exit(result.returncode)
+    sys.exit(returncode)
 
 
 def _prepare_review_session(repo, review_session_dir, short_id, config):
