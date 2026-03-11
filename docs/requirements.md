@@ -127,8 +127,8 @@ When accepting agent work, the system detects unresolved conflict markers in mer
 ### REQ-021: Proof-of-work summary on completion
 When the agent finishes, the system posts a summary of checkpoints, Q&A exchanges, and a diff stat to the issue tracker.
 
-- **Tests:** test_post_container.py, test_marker_reliability.py
-- **Status:** covered
+- **Tests:** test_post_container.py
+- **Status:** partial
 
 ### REQ-022: Host watcher pause/unpause
 The host watcher monitors session directories, pauses idle containers (zero CPU), and unpauses them when answers arrive.
@@ -165,7 +165,7 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | test_auto_start.py | REQ-011, REQ-018 |
 | test_cli_env.py | REQ-012, REQ-013 |
 | test_dotenv.py | REQ-013 |
-| test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015, REQ-021 |
+| test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015 |
 | test_notifier_prefix.py | REQ-010, REQ-019 |
 | test_post_container.py | REQ-005, REQ-021 |
 | test_review.py | REQ-005, REQ-008 |
@@ -197,6 +197,7 @@ Requirements with some test coverage but significant gaps remaining.
 | REQ-010: Notifications via pluggable channels | Prefix behavior tested, but no tests for Telegram API calls, webhook delivery, or CompositeNotifier broadcast. |
 | REQ-011: Configuration via WORKFLOW.md | Config parsing tested for auto_start and review sections only. No tests for agent/tracker/workspace/notifications/merge/hooks config parsing or $VAR resolution. |
 | REQ-012: CLI for all operations | Only accept/reject and .env loading tested. No tests for init, start, resume, answer, status, logs, history, cleanup, or watcher commands. |
+| REQ-021: Proof-of-work summary on completion | Post-container summary posting is tested, but no tests for checkpoint summarization or Q&A exchange collection in the summary. |
 
 ---
 
