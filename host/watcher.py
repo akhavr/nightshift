@@ -742,11 +742,11 @@ class HostWatcher:
 
     # --- Auto-start ---
 
-    def _count_active_sessions(self) -> int:
-        """Count sessions that are currently working or starting."""
-        count = 0
+    def _iter_session_states(self) -> list[tuple[Path, dict]]:
+        """Read all session state.json files, returning (session_dir, state_dict) pairs."""
+        results = []
         if not self.sessions_dir.exists():
-            return 0
+            return results
         for session_dir in self.sessions_dir.iterdir():
             if not session_dir.is_dir():
                 continue
@@ -755,11 +755,17 @@ class HostWatcher:
                 continue
             try:
                 state = json.loads(state_file.read_text())
-                if state.get("status") in ("working", "starting", "waiting:answer"):
-                    count += 1
-            except (json.JSONDecodeError, OSError):
-                pass
-        return count
+                results.append((session_dir, state))
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"Auto-start: failed to read state for {session_dir.name}: {e}")
+        return results
+
+    def _count_active_sessions(self) -> int:
+        """Count sessions that are currently working or starting."""
+        return sum(
+            1 for _, state in self._iter_session_states()
+            if state.get("status") in ("working", "starting", "waiting:answer")
+        )
 
     def _check_new_issues(self):
         """Poll tracker for open issues matching the auto-start label and start sessions."""
@@ -782,15 +788,9 @@ class HostWatcher:
             issues = [i for i in issues if label in i.labels]
 
         # Build set of issue IDs that already have sessions
-        existing_issue_ids: set[str] = set()
-        if self.sessions_dir.exists():
-            for session_dir in self.sessions_dir.iterdir():
-                if session_dir.is_dir() and (session_dir / "state.json").exists():
-                    try:
-                        state = json.loads((session_dir / "state.json").read_text())
-                        existing_issue_ids.add(state.get("issue_id", ""))
-                    except (json.JSONDecodeError, OSError):
-                        pass
+        existing_issue_ids: set[str] = {
+            state.get("issue_id", "") for _, state in self._iter_session_states()
+        }
 
         # Check max concurrent before launching
         active_count = self._count_active_sessions()
