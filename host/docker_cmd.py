@@ -5,7 +5,6 @@ Builds the `docker run` command for launching the agent container.
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -39,11 +38,10 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         if val:
             notify_env += ["-e", f"{var}={val}"]
 
-    tty_flags = ["-it"] if sys.stdin.isatty() else []
     workflow_mount_path = str(Path(workflow_path).resolve())
 
     cmd = [
-        "docker", "run", "--rm", *tty_flags,
+        "docker", "run", "--rm",
         "--name", container_name,
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
