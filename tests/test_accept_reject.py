@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from host.cli import _check_conflict_markers
+from host.merge import check_conflict_markers as _check_conflict_markers
 
 
 def test_cli_has_accept_command():
@@ -135,11 +135,9 @@ def test_check_conflict_markers_clean_merge(tmp_path):
     assert result == []
 
 
-def test_accept_aborts_on_conflict_markers(tmp_path):
-    """cmd_accept should abort and reset the merge if conflict markers are found."""
+def _setup_conflict_marker_repo(tmp_path):
+    """Helper: create a repo with an agent branch containing conflict markers."""
     repo, run = _init_repo(tmp_path)
-
-    # Create agent branch with conflict markers baked in
     run("git", "checkout", "-b", "agent/test789")
     (repo / "file.txt").write_text(
         "<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> other\n"
@@ -148,15 +146,12 @@ def test_accept_aborts_on_conflict_markers(tmp_path):
     run("git", "commit", "-m", "commit with markers")
     run("git", "checkout", "main")
 
-    # Record the pre-merge HEAD
     pre_merge = run("git", "rev-parse", "HEAD").stdout.strip()
 
-    # Create session dir structure AFTER branch setup (outside git tracking)
     ns_dir = repo / ".nightshift" / "sessions" / "test789"
     ns_dir.mkdir(parents=True)
     (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
 
-    # Create minimal WORKFLOW.md (untracked, fine)
     (repo / "WORKFLOW.md").write_text(
         "---\n"
         "agent:\n  kind: claude-code\n"
@@ -164,8 +159,13 @@ def test_accept_aborts_on_conflict_markers(tmp_path):
         "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
         "---\nPrompt\n"
     )
+    return repo, run, pre_merge, ns_dir
 
-    # Patch out functions that need external resources
+
+def test_accept_aborts_on_conflict_markers(tmp_path):
+    """cmd_accept should abort and reset the merge if conflict markers are found."""
+    repo, run, pre_merge, ns_dir = _setup_conflict_marker_repo(tmp_path)
+
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="test789"), \
          patch("host.cli.create_tracker") as mock_tracker, \
@@ -181,15 +181,12 @@ def test_accept_aborts_on_conflict_markers(tmp_path):
 
         assert exc_info.value.code == 1
 
-    # HEAD should have been reset back (merge undone)
     post_head = run("git", "rev-parse", "HEAD").stdout.strip()
     assert post_head == pre_merge
 
-    # Session state should be error:merge-conflict
     state = json.loads((ns_dir / "state.json").read_text())
     assert state["status"] == "error:merge-conflict"
 
-    # _report_accept_failure should have been called with conflict info
     mock_report.assert_called_once()
     call_msg = mock_report.call_args[0][3]
     assert "conflict markers" in call_msg

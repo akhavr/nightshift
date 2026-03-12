@@ -128,9 +128,9 @@ def test_watcher_detects_waiting_review_with_review_md(tmp_path):
 
     # Mock _launch_background to capture the command
     launched = []
-    watcher._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
 
-    watcher._check_for_auto_review()
+    watcher.reviews.check_for_auto_review()
 
     # Verify reviewer was launched
     assert len(launched) == 1
@@ -169,9 +169,9 @@ def test_watcher_skips_review_without_review_md(tmp_path):
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
     launched = []
-    watcher._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
 
-    watcher._check_for_auto_review()
+    watcher.reviews.check_for_auto_review()
 
     # No reviewer launched
     assert len(launched) == 0
@@ -204,13 +204,13 @@ def test_watcher_max_rounds_escalation(tmp_path):
     }))
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
-    watcher._review_rounds["abc123"] = 2  # Already at max
+    watcher.reviews._rounds["abc123"] = 2  # Already at max
 
     launched = []
-    watcher._launch_background = lambda cmd, sid: launched.append((cmd, sid))
-    watcher._tg_notify = MagicMock()
+    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.telegram.notify = MagicMock()
 
-    watcher._check_for_auto_review()
+    watcher.reviews.check_for_auto_review()
 
     # No reviewer launched
     assert len(launched) == 0
@@ -245,9 +245,9 @@ def test_watcher_skips_review_sessions(tmp_path):
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
     launched = []
-    watcher._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
 
-    watcher._check_for_auto_review()
+    watcher.reviews.check_for_auto_review()
 
     assert len(launched) == 0
 
@@ -270,7 +270,7 @@ def test_extract_reviewer_verdict_approve(tmp_path):
         + json.dumps({"role": "thought", "content": "Tests pass. @nightshift approve"}) + "\n"
     )
 
-    verdict = watcher._extract_reviewer_verdict(conv_log, "issue-123")
+    verdict = watcher.reviews.extract_reviewer_verdict(conv_log, "issue-123")
     assert verdict == "approve"
 
 
@@ -289,7 +289,7 @@ def test_extract_reviewer_verdict_revise(tmp_path):
         json.dumps({"role": "thought", "content": "Tests fail. Fix error handling. @nightshift revise"}) + "\n"
     )
 
-    verdict = watcher._extract_reviewer_verdict(conv_log, "issue-123")
+    verdict = watcher.reviews.extract_reviewer_verdict(conv_log, "issue-123")
     assert verdict == "revise"
 
 
@@ -308,7 +308,7 @@ def test_extract_reviewer_verdict_none(tmp_path):
         json.dumps({"role": "thought", "content": "Still reviewing..."}) + "\n"
     )
 
-    verdict = watcher._extract_reviewer_verdict(conv_log, "issue-123")
+    verdict = watcher.reviews.extract_reviewer_verdict(conv_log, "issue-123")
     assert verdict is None
 
 
@@ -334,9 +334,9 @@ def test_handle_reviewer_approve(tmp_path):
     }))
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
-    watcher._tg_notify = MagicMock()
+    watcher.telegram.notify = MagicMock()
 
-    watcher._handle_reviewer_approve("abc123", coder_dir, "issue-abc123456789")
+    watcher.reviews.handle_reviewer_approve("abc123", coder_dir, "issue-abc123456789")
 
     state = json.loads((coder_dir / "state.json").read_text())
     assert state["status"] == "waiting:human-review"
@@ -370,11 +370,11 @@ def test_handle_reviewer_revise(tmp_path):
     )
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
-    watcher._tg_notify = MagicMock()
+    watcher.telegram.notify = MagicMock()
     launched = []
-    watcher._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
 
-    watcher._handle_reviewer_revise("abc123", coder_dir, "issue-abc123456789", review_dir)
+    watcher.reviews.handle_reviewer_revise("abc123", coder_dir, "issue-abc123456789", review_dir)
 
     # Coder status should be working
     state = json.loads((coder_dir / "state.json").read_text())
@@ -428,18 +428,18 @@ def test_check_reviewer_done_approve(tmp_path):
     )
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
-    watcher._tg_notify = MagicMock()
+    watcher.telegram.notify = MagicMock()
     # Mock cleanup to avoid git operations
-    watcher._cleanup_review_session = MagicMock()
+    watcher.reviews.cleanup_review_session = MagicMock()
 
-    watcher._check_reviewer_done()
+    watcher.reviews.check_reviewer_done()
 
     # Coder should be waiting:human-review
     state = json.loads((coder_dir / "state.json").read_text())
     assert state["status"] == "waiting:human-review"
 
     # Cleanup should have been called
-    watcher._cleanup_review_session.assert_called_once()
+    watcher.reviews.cleanup_review_session.assert_called_once()
 
 
 # --- Launch: step flag naming ---

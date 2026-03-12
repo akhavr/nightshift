@@ -10,15 +10,17 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from core.protocols import IssueTracker, TrackerIssue, TrackerComment
+from core.protocols import IssueTracker, TrackerIssue, TrackerComment, SHORT_ID_LEN
 
 log = logging.getLogger(__name__)
+
+LOG_BODY_PREVIEW_LEN = 80
 
 
 def _issue_from_dict(d: dict) -> TrackerIssue:
     return TrackerIssue(
         id=d["id"],
-        identifier=d.get("identifier", d["id"][:12]),
+        identifier=d.get("identifier", d["id"][:SHORT_ID_LEN]),
         title=d.get("title", ""),
         body=d.get("body", ""),
         status=d.get("status", "open"),
@@ -74,16 +76,16 @@ class StaticTracker:
         return []  # Comments not available in static mode
 
     def add_comment(self, issue_id: str, body: str) -> None:
-        log.info(f"[static] Comment on {issue_id[:12]}: {body[:80]}")
+        log.info(f"[static] Comment on {issue_id[:SHORT_ID_LEN]}: {body[:LOG_BODY_PREVIEW_LEN]}")
 
     def set_status(self, issue_id: str, status: str) -> None:
-        log.info(f"[static] Status {issue_id[:12]} -> {status}")
+        log.info(f"[static] Status {issue_id[:SHORT_ID_LEN]} -> {status}")
 
     def add_label(self, issue_id: str, label: str) -> None:
-        log.info(f"[static] Label +{label} on {issue_id[:12]}")
+        log.info(f"[static] Label +{label} on {issue_id[:SHORT_ID_LEN]}")
 
     def remove_label(self, issue_id: str, label: str) -> None:
-        log.info(f"[static] Label -{label} on {issue_id[:12]}")
+        log.info(f"[static] Label -{label} on {issue_id[:SHORT_ID_LEN]}")
 
     def sync(self) -> None:
         pass  # Nothing to sync

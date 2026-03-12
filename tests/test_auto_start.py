@@ -102,7 +102,7 @@ class TestWatcherAutoStart:
             poll_interval_s=poll_interval_s, max_concurrent=max_concurrent,
         )
         watcher._auto_start_config = asc
-        watcher.tg_enabled = False
+        watcher.telegram.enabled = False
 
         return watcher
 
@@ -119,9 +119,9 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
-        watcher._check_new_issues()
+        watcher.monitor.check_new_issues()
 
         assert sorted(launched) == ["id-1", "id-3"]
 
@@ -142,9 +142,9 @@ class TestWatcherAutoStart:
         (sd / "state.json").write_text(json.dumps({"issue_id": "id-1", "status": "working"}))
 
         launched = []
-        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
-        watcher._check_new_issues()
+        watcher.monitor.check_new_issues()
 
         assert launched == ["id-2"]
 
@@ -166,9 +166,9 @@ class TestWatcherAutoStart:
         (sd / "state.json").write_text(json.dumps({"issue_id": "existing", "status": "working"}))
 
         launched = []
-        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
-        watcher._check_new_issues()
+        watcher.monitor.check_new_issues()
 
         # max_concurrent=2, 1 already active, so only 1 new launch
         assert len(launched) == 1
@@ -183,12 +183,12 @@ class TestWatcherAutoStart:
         ]
         watcher._tracker = tracker
         watcher._config = MagicMock()
-        watcher._known_issue_ids.add("id-1")
+        watcher.monitor._known_issue_ids.add("id-1")
 
         launched = []
-        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
-        watcher._check_new_issues()
+        watcher.monitor.check_new_issues()
 
         assert launched == []
 
@@ -205,17 +205,17 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         # First poll succeeds
-        watcher._last_auto_start_poll = 0
-        watcher._check_new_issues()
+        watcher.monitor._last_auto_start_poll = 0
+        watcher.monitor.check_new_issues()
         assert len(launched) == 1
 
         # Second poll within interval is skipped
         launched.clear()
-        watcher._known_issue_ids.clear()
-        watcher._check_new_issues()
+        watcher.monitor._known_issue_ids.clear()
+        watcher.monitor.check_new_issues()
         assert len(launched) == 0
 
     def test_empty_label_matches_all(self, tmp_path):
@@ -230,9 +230,9 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
-        watcher._check_new_issues()
+        watcher.monitor.check_new_issues()
 
         # Empty label means no filtering
         assert sorted(launched) == ["id-1", "id-2"]
@@ -246,10 +246,10 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         # Should not raise
-        watcher._check_new_issues()
+        watcher.monitor.check_new_issues()
 
         assert launched == []
 
@@ -262,12 +262,12 @@ class TestWatcherAutoStart:
         ]
         watcher._tracker = tracker
         watcher._config = MagicMock()
-        watcher._launch_background = lambda cmd, sid: None
+        watcher.monitor._launch_background = lambda cmd, sid: None
 
         tg_messages = []
-        watcher._tg_notify = lambda msg: tg_messages.append(msg)
+        watcher.telegram.notify = lambda msg: tg_messages.append(msg)
 
-        watcher._check_new_issues()
+        watcher.monitor.check_new_issues()
 
         assert len(tg_messages) == 1
         assert "id-1" in tg_messages[0]
@@ -290,4 +290,4 @@ class TestWatcherCountActiveSessions:
             sd.mkdir()
             (sd / "state.json").write_text(json.dumps({"status": status}))
 
-        assert watcher._count_active_sessions() == 2
+        assert watcher.monitor.count_active_sessions() == 2

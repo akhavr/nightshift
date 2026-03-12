@@ -4,6 +4,11 @@ import re
 from collections import Counter
 from core.protocols import TrackerIssue, IssueTracker
 
+MAX_KEYWORDS = 15
+MAX_CONTEXT_CHARS = 3000
+RESOLUTION_PREVIEW_LEN = 800
+MIN_KEYWORD_SCORE = 3
+
 STOP_WORDS = frozenset({
     "this","that","with","from","have","been","will","would","should","could",
     "about","their","there","which","other","than","then","when","what","into",
@@ -13,11 +18,11 @@ STOP_WORDS = frozenset({
 
 def search_related_issues(
     target: TrackerIssue, all_issues: list[TrackerIssue],
-    tracker: IssueTracker, min_score: int = 3, max_chars: int = 3000,
+    tracker: IssueTracker, min_score: int = MIN_KEYWORD_SCORE, max_chars: int = MAX_CONTEXT_CHARS,
 ) -> str:
     words = re.findall(r"\b[a-z]{4,}\b", f"{target.title} {target.body}".lower())
     keywords = [w for w, _ in Counter(
-        w for w in words if w not in STOP_WORDS).most_common(15)]
+        w for w in words if w not in STOP_WORDS).most_common(MAX_KEYWORDS)]
     if not keywords: return ""
     scored = []
     for issue in all_issues:
@@ -26,7 +31,7 @@ def search_related_issues(
         text = (issue.title + " " + " ".join(c.body for c in comments)).lower()
         score = sum(text.count(k) for k in keywords)
         if score >= min_score:
-            res = comments[-1].body[:800] if comments else "No resolution"
+            res = comments[-1].body[:RESOLUTION_PREVIEW_LEN] if comments else "No resolution"
             scored.append((score, issue, res))
     scored.sort(key=lambda x: x[0], reverse=True)
     parts, total = [], 0

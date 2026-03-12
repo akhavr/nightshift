@@ -23,6 +23,10 @@ import sys
 import time
 
 TIMEOUT = 60  # seconds per test
+FOLLOW_UP_TIMEOUT_S = 15
+LOG_PREVIEW_LEN = 200
+STDERR_PREVIEW_LEN = 500
+LOG_LINE_LIMIT = 10
 RESULTS = []
 
 
@@ -63,6 +67,47 @@ def cleanup(proc, master_fd):
         pass
 
 
+def _start_claude(extra_args, slave_fd):
+    """Start a claude process with common flags."""
+    cmd = ["claude", "--dangerously-skip-permissions",
+           "--output-format", "stream-json"] + extra_args
+    proc = subprocess.Popen(
+        cmd, stdin=slave_fd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+    os.close(slave_fd)
+    return proc
+
+
+def _log_output(lines, prefix="stdout"):
+    """Log first N lines of output."""
+    for line in lines[:LOG_LINE_LIMIT]:
+        log(f"  [{prefix}] {line[:LOG_PREVIEW_LEN]}")
+    if len(lines) > LOG_LINE_LIMIT:
+        log(f"  ... ({len(lines)} total lines)")
+
+
+def _log_stderr(proc):
+    """Read and log stderr if available."""
+    if proc.stderr:
+        try:
+            stderr_out = proc.stderr.read()
+        except Exception:
+            stderr_out = ""
+        if stderr_out:
+            log(f"  [stderr] {stderr_out[:STDERR_PREVIEW_LEN]}")
+
+
+def _send_follow_up(master_fd, message):
+    """Write a follow-up message to the PTY. Returns False on failure."""
+    try:
+        os.write(master_fd, message)
+        return True
+    except OSError as e:
+        log(f"  Write failed: {e}")
+        return False
+
+
 def test1_basic_p_mode():
     """Test 1: Does `claude -p` read follow-up input from PTY stdin?"""
     log("\n" + "=" * 60)
@@ -70,50 +115,27 @@ def test1_basic_p_mode():
     log("=" * 60)
 
     master_fd, slave_fd = pty.openpty()
-    proc = subprocess.Popen(
-        ["claude", "--dangerously-skip-permissions",
-         "--output-format", "stream-json",
-         "-p", "Say exactly the word HELLO and nothing else"],
-        stdin=slave_fd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1,
-    )
-    os.close(slave_fd)
+    proc = _start_claude(
+        ["-p", "Say exactly the word HELLO and nothing else"], slave_fd)
 
     lines = read_output(proc, master_fd, timeout_s=TIMEOUT)
-    exit_code = proc.poll()
+    _log_output(lines)
+    _log_stderr(proc)
 
-    for line in lines[:10]:
-        log(f"  [stdout] {line[:200]}")
-    if len(lines) > 10:
-        log(f"  ... ({len(lines)} total lines)")
-
-    stderr_out = ""
-    if proc.stderr:
-        try:
-            stderr_out = proc.stderr.read()
-        except Exception:
-            pass
-    if stderr_out:
-        log(f"  [stderr] {stderr_out[:500]}")
-
-    if exit_code is not None:
-        log(f"\n  Process exited with code {exit_code} after first response.")
+    if proc.poll() is not None:
+        log(f"\n  Process exited with code {proc.poll()} after first response.")
         log("  RESULT: -p mode is fire-and-forget. Does NOT read stdin for follow-up.")
         cleanup(proc, master_fd)
         return False
 
-    # Process still alive — try sending follow-up
     log("\n  Process still alive. Sending follow-up on PTY stdin...")
-    try:
-        os.write(master_fd, b"Now say exactly the word WORLD and nothing else\n")
-    except OSError as e:
-        log(f"  Write failed: {e}")
+    if not _send_follow_up(master_fd,
+                           b"Now say exactly the word WORLD and nothing else\n"):
         cleanup(proc, master_fd)
         return False
 
-    follow_up_lines = read_output(proc, master_fd, timeout_s=15)
-    for line in follow_up_lines[:10]:
-        log(f"  [follow-up] {line[:200]}")
+    follow_up_lines = read_output(proc, master_fd, timeout_s=FOLLOW_UP_TIMEOUT_S)
+    _log_output(follow_up_lines, "follow-up")
 
     has_world = any("WORLD" in l.upper() for l in follow_up_lines)
     log(f"\n  Follow-up received response: {bool(follow_up_lines)}")
@@ -131,69 +153,39 @@ def test2_stream_json_input():
     log("=" * 60)
 
     master_fd, slave_fd = pty.openpty()
-
-    # Build the first message in stream-json format
     first_msg = json.dumps({
         "type": "user",
         "content": "Say exactly the word HELLO and nothing else"
     }) + "\n"
 
-    proc = subprocess.Popen(
-        ["claude", "--dangerously-skip-permissions",
-         "--output-format", "stream-json",
-         "--input-format", "stream-json",
-         "-p", "-"],  # -p - means read prompt from stdin
-        stdin=slave_fd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1,
-    )
-    os.close(slave_fd)
+    proc = _start_claude(
+        ["--input-format", "stream-json", "-p", "-"], slave_fd)
 
-    # Send first message
-    try:
-        os.write(master_fd, first_msg.encode())
-    except OSError as e:
-        log(f"  First write failed: {e}")
+    if not _send_follow_up(master_fd, first_msg.encode()):
         cleanup(proc, master_fd)
         return False
 
     lines = read_output(proc, master_fd, timeout_s=TIMEOUT)
-    for line in lines[:10]:
-        log(f"  [stdout] {line[:200]}")
-    if len(lines) > 10:
-        log(f"  ... ({len(lines)} total lines)")
+    _log_output(lines)
 
     if proc.poll() is not None:
         log(f"  Process exited with code {proc.poll()}")
-
-        stderr_out = ""
-        if proc.stderr:
-            try:
-                stderr_out = proc.stderr.read()
-            except Exception:
-                pass
-        if stderr_out:
-            log(f"  [stderr] {stderr_out[:500]}")
-
+        _log_stderr(proc)
         log("  RESULT: stream-json input mode exited after first message.")
         cleanup(proc, master_fd)
         return False
 
-    # Send follow-up
     log("\n  Process alive. Sending stream-json follow-up...")
     second_msg = json.dumps({
         "type": "user",
         "content": "Now say exactly the word WORLD and nothing else"
     }) + "\n"
-    try:
-        os.write(master_fd, second_msg.encode())
-    except OSError as e:
-        log(f"  Follow-up write failed: {e}")
+    if not _send_follow_up(master_fd, second_msg.encode()):
         cleanup(proc, master_fd)
         return False
 
-    follow_up = read_output(proc, master_fd, timeout_s=15)
-    for line in follow_up[:10]:
-        log(f"  [follow-up] {line[:200]}")
+    follow_up = read_output(proc, master_fd, timeout_s=FOLLOW_UP_TIMEOUT_S)
+    _log_output(follow_up, "follow-up")
 
     has_world = any("WORLD" in l.upper() or "world" in l.lower() for l in follow_up)
     log(f"\n  RESULT: {'stream-json multi-turn WORKS' if has_world else 'stream-json multi-turn does NOT work'}")
@@ -209,38 +201,25 @@ def test3_interactive_mode():
     log("=" * 60)
 
     master_fd, slave_fd = pty.openpty()
-    proc = subprocess.Popen(
-        ["claude", "--dangerously-skip-permissions",
-         "--output-format", "stream-json"],
-        stdin=slave_fd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1,
-    )
-    os.close(slave_fd)
+    proc = _start_claude([], slave_fd)
 
-    # Wait a moment for startup
     time.sleep(2)
 
     if proc.poll() is not None:
-        stderr_out = proc.stderr.read() if proc.stderr else ""
         log(f"  Process exited immediately (code={proc.poll()})")
-        if stderr_out:
-            log(f"  [stderr] {stderr_out[:500]}")
+        _log_stderr(proc)
         log("  RESULT: Interactive mode doesn't work without real terminal.")
         cleanup(proc, master_fd)
         return False
 
-    # Send first prompt
     log("  Sending first prompt via PTY...")
-    try:
-        os.write(master_fd, b"Say exactly the word HELLO and nothing else\n")
-    except OSError as e:
-        log(f"  Write failed: {e}")
+    if not _send_follow_up(master_fd,
+                           b"Say exactly the word HELLO and nothing else\n"):
         cleanup(proc, master_fd)
         return False
 
     lines = read_output(proc, master_fd, timeout_s=TIMEOUT)
-    for line in lines[:10]:
-        log(f"  [stdout] {line[:200]}")
+    _log_output(lines)
 
     has_hello = any("HELLO" in l.upper() for l in lines)
     log(f"  Got HELLO response: {has_hello}")
@@ -250,18 +229,14 @@ def test3_interactive_mode():
         cleanup(proc, master_fd)
         return False
 
-    # Send follow-up
     log("  Sending follow-up...")
-    try:
-        os.write(master_fd, b"Now say exactly the word WORLD and nothing else\n")
-    except OSError as e:
-        log(f"  Follow-up write failed: {e}")
+    if not _send_follow_up(master_fd,
+                           b"Now say exactly the word WORLD and nothing else\n"):
         cleanup(proc, master_fd)
         return False
 
-    follow_up = read_output(proc, master_fd, timeout_s=15)
-    for line in follow_up[:10]:
-        log(f"  [follow-up] {line[:200]}")
+    follow_up = read_output(proc, master_fd, timeout_s=FOLLOW_UP_TIMEOUT_S)
+    _log_output(follow_up, "follow-up")
 
     has_world = any("WORLD" in l.upper() for l in follow_up)
     log(f"\n  RESULT: {'Interactive PTY multi-turn WORKS' if has_world else 'Interactive PTY multi-turn does NOT work'}")

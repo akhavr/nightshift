@@ -3,20 +3,29 @@
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
+from core.review import collect_review_feedback, build_revise_prompt
+from host.constants import SHORT_ID_LEN, DISPLAY_SEPARATOR_WIDTH, LOG_PREVIEW_LEN
 from host.env import load_all_dotenv
+from host.merge import (
+    resolve_merge_ref, check_working_tree_clean,
+    merge_with_rebase_fallback, verify_no_conflict_markers,
+)
+from host.session_utils import (
+    get_repo_root,
+    read_state, write_state, update_status,
+    force_remove_dir, remove_worktree,
+)
 
 
 def repo_root() -> Path:
-    return Path(subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip())
+    return get_repo_root()
 
 
 def sessions_dir() -> Path:
@@ -27,16 +36,16 @@ def resolve_session(issue_id: str) -> str:
     """Resolve a prefix to the full session ID. Exits on ambiguity or no match."""
     sd = sessions_dir()
     if not sd.exists():
-        print(f"No sessions directory found", file=sys.stderr)
+        print("No sessions directory found", file=sys.stderr)
         sys.exit(1)
-    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:12])]
+    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:SHORT_ID_LEN])]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         print(f"Ambiguous ID '{issue_id}' matches: {', '.join(matches)}", file=sys.stderr)
         sys.exit(1)
     # No match by session dir — return truncated (for start/new sessions)
-    return issue_id[:12]
+    return issue_id[:SHORT_ID_LEN]
 
 
 def cmd_start(a):
@@ -86,7 +95,7 @@ def cmd_status(a):
     if not sd.exists():
         print("No sessions."); return
     print(f"{'SESSION':<14} {'STATUS':<26} {'STEP':>5} {'CPS':>4}")
-    print("-" * 54)
+    print("-" * DISPLAY_SEPARATOR_WIDTH)
     for f in sorted(sd.glob("*/state.json")):
         sid = f.parent.name
         try:
@@ -114,7 +123,7 @@ def cmd_history(a):
         try:
             e = json.loads(line)
             print(f"  {e['timestamp'][:19]}  {icons.get(e['role'],'•')} "
-                  f"[{e['role']}] {e['content'][:120]}")
+                  f"[{e['role']}] {e['content'][:LOG_PREVIEW_LEN * 2]}")
         except Exception:
             continue
 
@@ -248,14 +257,12 @@ TELEGRAM_CHAT_ID=
 
 def _detect_default_branch(repo: Path) -> str:
     """Detect the default branch (main, master, etc.)."""
-    # Try HEAD of origin
     result = subprocess.run(
         ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
         capture_output=True, text=True, cwd=str(repo),
     )
     if result.returncode == 0:
         return result.stdout.strip().split("/")[-1]
-    # Fallback: current branch
     result = subprocess.run(
         ["git", "branch", "--show-current"],
         capture_output=True, text=True, cwd=str(repo),
@@ -265,52 +272,23 @@ def _detect_default_branch(repo: Path) -> str:
     return "main"
 
 
-def cmd_init(a):
-    """Scaffold WORKFLOW.md and .env.example in the current repo."""
-    try:
-        root = repo_root()
-    except subprocess.CalledProcessError:
-        print("Not inside a git repository.", file=sys.stderr)
-        sys.exit(1)
+def _scaffold_file(path: Path, content: str, force: bool, label: str = ""):
+    """Write a scaffold file, skipping if it exists and force is False."""
+    if path.exists() and not force:
+        print(f"{path.name} already exists at {path}. Use --force to overwrite.")
+        return
+    path.write_text(content)
+    msg = f"Created {path}"
+    if label:
+        msg += f" ({label})"
+    print(msg)
 
-    default_branch = _detect_default_branch(root)
 
-    # WORKFLOW.md
-    wf = root / "WORKFLOW.md"
-    if wf.exists() and not a.force:
-        print(f"WORKFLOW.md already exists at {wf}. Use --force to overwrite.")
-    else:
-        wf.write_text(DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}"))
-        print(f"Created {wf} (base_branch: {default_branch})")
-
-    # REVIEW.md
-    rv = root / "REVIEW.md"
-    if rv.exists() and not a.force:
-        print(f"REVIEW.md already exists at {rv}. Use --force to overwrite.")
-    else:
-        rv.write_text(DEFAULT_REVIEW_MD)
-        print(f"Created {rv}")
-
-    # .env.example
-    env_example = root / ".env.example"
-    if env_example.exists() and not a.force:
-        print(f".env.example already exists. Use --force to overwrite.")
-    else:
-        env_example.write_text(DEFAULT_ENV_EXAMPLE)
-        print(f"Created {env_example}")
-
-    # Create .nightshift directory
-    aw_dir = root / ".nightshift" / "sessions"
-    aw_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Created {aw_dir.parent}")
-
-    # Add .env to .gitignore if not already there
+def _update_gitignore(root: Path):
+    """Ensure .env, .worktrees/, .nightshift/ are in .gitignore."""
     gitignore = root / ".gitignore"
     lines = gitignore.read_text().splitlines() if gitignore.exists() else []
-    entries_to_add = []
-    for entry in [".env", ".worktrees/", ".nightshift/"]:
-        if entry not in lines:
-            entries_to_add.append(entry)
+    entries_to_add = [e for e in [".env", ".worktrees/", ".nightshift/"] if e not in lines]
     if entries_to_add:
         with gitignore.open("a") as f:
             if lines and lines[-1] != "":
@@ -322,221 +300,32 @@ def cmd_init(a):
     else:
         print(".gitignore already has nightshift entries")
 
+
+def cmd_init(a):
+    """Scaffold WORKFLOW.md and .env.example in the current repo."""
+    try:
+        root = repo_root()
+    except subprocess.CalledProcessError:
+        print("Not inside a git repository.", file=sys.stderr)
+        sys.exit(1)
+
+    default_branch = _detect_default_branch(root)
+    workflow_content = DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}")
+
+    _scaffold_file(root / "WORKFLOW.md", workflow_content, a.force, f"base_branch: {default_branch}")
+    _scaffold_file(root / "REVIEW.md", DEFAULT_REVIEW_MD, a.force)
+    _scaffold_file(root / ".env.example", DEFAULT_ENV_EXAMPLE, a.force)
+
+    aw_dir = root / ".nightshift" / "sessions"
+    aw_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Created {aw_dir.parent}")
+
+    _update_gitignore(root)
+
     print("\nNext steps:")
     print("  1. cp .env.example .env && edit .env with your credentials")
     print("  2. Review and customize WORKFLOW.md")
     print("  3. Run: nightshift start <issue-id>")
-
-
-def cmd_accept(a):
-    """Merge agent branch into base branch, then clean up."""
-    r = repo_root()
-    sid = resolve_session(a.issue_id)
-    config = load_workflow(a.workflow or r / "WORKFLOW.md")
-    branch = f"agent/{sid}"
-    base = config.workspace.base_branch
-    wt = r / config.workspace.root / f"agent-{sid}"
-
-    # Find merge source: branch or worktree HEAD
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", branch],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    if result.returncode == 0:
-        merge_ref = branch
-    elif wt.exists():
-        # Branch gone but worktree still has commits — use its HEAD
-        wt_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, cwd=str(wt),
-        )
-        if wt_head.returncode != 0:
-            print(f"Branch {branch} not found and worktree HEAD unreadable.", file=sys.stderr)
-            sys.exit(1)
-        merge_ref = wt_head.stdout.strip()
-        print(f"Branch {branch} gone, using worktree HEAD {merge_ref[:12]}")
-    else:
-        print(f"Branch {branch} not found and no worktree at {wt}.", file=sys.stderr)
-        sys.exit(1)
-
-    # Pre-check: repo must be clean (no uncommitted changes or unresolved conflicts)
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    dirty_files = [l for l in status.stdout.strip().splitlines()
-                   if l and not l.startswith("??")]
-    if dirty_files:
-        file_list = "\n".join(dirty_files[:10])
-        msg = (f"Cannot merge: working tree on `{base}` is not clean.\n"
-               f"```\n{file_list}\n```\n"
-               f"Commit or stash changes first.")
-        print(f"Working tree not clean:\n{file_list}", file=sys.stderr)
-        _report_accept_failure(config, r, a.issue_id, msg)
-        sys.exit(1)
-
-    # Show what will be merged
-    subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))
-    subprocess.run(["git", "diff", "--stat", f"{base}..{merge_ref}"], cwd=str(r))
-
-    # Merge
-    result = subprocess.run(
-        ["git", "merge", "--no-ff", merge_ref, "-m", f"Merge {branch}: agent work on {a.issue_id}"],
-        capture_output=True, text=True, cwd=str(r),
-    )
-    if result.returncode != 0:
-        merge_err = result.stderr.strip()
-
-        # Dirty working tree — user must commit/stash first
-        if "local changes" in merge_err or "overwritten by merge" in merge_err:
-            print(f"Merge failed — uncommitted changes on {base}:\n{merge_err}", file=sys.stderr)
-            _report_accept_failure(config, r, a.issue_id,
-                                   f"Cannot merge: uncommitted changes on `{base}`. "
-                                   f"Commit or stash them first.")
-            sys.exit(1)
-
-        # Conflict — abort the failed merge, rebase agent branch onto base, retry
-        subprocess.run(["git", "merge", "--abort"], capture_output=True, cwd=str(r))
-        print(f"Merge conflict — rebasing {branch} onto {base}...")
-
-        # Rebase from repo root (worktree .git may point to container paths).
-        # Checkout the branch in the main repo temporarily.
-        old_branch = subprocess.run(
-            ["git", "branch", "--show-current"],
-            capture_output=True, text=True, cwd=str(r),
-        ).stdout.strip()
-        subprocess.run(["git", "checkout", branch],
-                       capture_output=True, cwd=str(r))
-        rebase = subprocess.run(
-            ["git", "rebase", base],
-            capture_output=True, text=True, cwd=str(r),
-        )
-        if rebase.returncode != 0:
-            subprocess.run(["git", "rebase", "--abort"],
-                           capture_output=True, cwd=str(r))
-            subprocess.run(["git", "checkout", old_branch],
-                           capture_output=True, cwd=str(r))
-            conflict_details = rebase.stderr.strip()
-            print(f"Rebase failed:\n{conflict_details}", file=sys.stderr)
-            _report_accept_failure(
-                config, r, a.issue_id,
-                f"Merge conflicts with `{base}` that need manual resolution:\n"
-                f"```\n{conflict_details}\n```\n"
-                f"@nightshift revise")
-            sys.exit(1)
-
-        # Switch back to base branch for the merge
-        subprocess.run(["git", "checkout", old_branch],
-                       capture_output=True, cwd=str(r))
-        print(f"Rebase successful, retrying merge...")
-        new_ref = branch
-
-        result = subprocess.run(
-            ["git", "merge", "--no-ff", new_ref,
-             "-m", f"Merge {branch}: agent work on {a.issue_id}"],
-            capture_output=True, text=True, cwd=str(r),
-        )
-        if result.returncode != 0:
-            print(f"Merge still failed after rebase:\n{result.stderr}", file=sys.stderr)
-            _report_accept_failure(config, r, a.issue_id,
-                                   f"Merge failed even after rebase:\n"
-                                   f"```\n{result.stderr.strip()}\n```")
-            sys.exit(1)
-
-    print(f"Merged into {base}")
-
-    # Post-merge: detect unresolved conflict markers in changed files
-    conflict_files = _check_conflict_markers(r)
-    if conflict_files:
-        file_list = "\n".join(conflict_files[:20])
-        print(f"Conflict markers found after merge — aborting:\n{file_list}",
-              file=sys.stderr)
-        # Undo the merge commit
-        subprocess.run(["git", "reset", "--hard", "HEAD~1"],
-                       capture_output=True, cwd=str(r))
-        msg = (f"Merge aborted: conflict markers (`<<<<<<<`) found in "
-               f"{len(conflict_files)} file(s) after rebase+merge:\n"
-               f"```\n{file_list}\n```\n"
-               f"Manual conflict resolution required.")
-        _report_accept_failure(config, r, a.issue_id, msg)
-        # Update session status
-        state_file = sessions_dir() / sid / "state.json"
-        if state_file.exists():
-            try:
-                state = json.loads(state_file.read_text())
-                state["status"] = "error:merge-conflict"
-                state_file.write_text(json.dumps(state, indent=2))
-            except Exception as e:
-                print(f"Failed to update session state: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    _remove_worktree(r, wt, branch)
-
-    # Clean up any lingering review session
-    _cleanup_review_artifacts(r, sid, config)
-
-    # Close issue in tracker
-    try:
-        tracker = create_tracker(config, repo_dir=str(r))
-        tracker.set_status(a.issue_id, "closed")
-        tracker.add_comment(a.issue_id, f"✅ Accepted and merged into `{base}`.")
-        tracker.sync()
-    except Exception as e:
-        print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
-
-    print(f"Accepted and cleaned up {sid}")
-
-
-def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
-    """Clean up reviewer worktree, branch, and session if they exist."""
-    review_wt = repo / config.workspace.root / f"review-{coder_sid}"
-    review_branch = f"review/{coder_sid}"
-    review_session = repo / ".nightshift" / "sessions" / f"review-{coder_sid}"
-
-    if review_wt.exists():
-        _remove_worktree(repo, review_wt, review_branch)
-    else:
-        # Still try to clean branch
-        subprocess.run(["git", "branch", "-D", review_branch],
-                       capture_output=True, cwd=str(repo))
-
-    if review_session.exists():
-        import shutil
-        shutil.rmtree(review_session, ignore_errors=True)
-        print(f"Cleaned up review session for {coder_sid}")
-
-
-def _check_conflict_markers(repo: Path) -> list[str]:
-    """Check files changed by the merge commit for conflict markers.
-
-    Returns list of files containing markers, or empty list if clean.
-    """
-    # Get files changed in the merge commit vs its first parent (the base branch)
-    diff_result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD^1..HEAD"],
-        capture_output=True, text=True, cwd=str(repo),
-    )
-    if diff_result.returncode != 0:
-        print(f"Warning: git diff --name-only failed (rc={diff_result.returncode}), "
-              f"skipping conflict marker check", file=sys.stderr)
-        return []
-    changed_files = [f for f in diff_result.stdout.strip().splitlines() if f]
-    if not changed_files:
-        return []
-
-    conflict_files = []
-    for fname in changed_files:
-        fpath = repo / fname
-        if not fpath.is_file():
-            continue
-        try:
-            content = fpath.read_text(errors="replace")
-        except Exception as e:
-            print(f"Warning: cannot read {fname}: {e}", file=sys.stderr)
-            continue
-        if "\n<<<<<<<" in content or content.startswith("<<<<<<<"):
-            conflict_files.append(fname)
-    return conflict_files
 
 
 def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
@@ -549,36 +338,58 @@ def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
         print(f"Warning: failed to post failure to tracker: {e}", file=sys.stderr)
 
 
-def _force_remove_dir(path: Path):
-    """Remove a directory, handling root-owned files from Docker."""
-    import shutil
+def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
+    """Clean up reviewer worktree, branch, and session if they exist."""
+    review_wt = repo / config.workspace.root / f"review-{coder_sid}"
+    review_branch = f"review/{coder_sid}"
+    review_session = repo / ".nightshift" / "sessions" / f"review-{coder_sid}"
+
+    if review_wt.exists():
+        remove_worktree(repo, review_wt, review_branch)
+    else:
+        subprocess.run(["git", "branch", "-D", review_branch],
+                       capture_output=True, cwd=str(repo))
+
+    if review_session.exists():
+        shutil.rmtree(review_session, ignore_errors=True)
+        print(f"Cleaned up review session for {coder_sid}")
+
+
+def cmd_accept(a):
+    """Merge agent branch into base branch, then clean up."""
+    r = repo_root()
+    sid = resolve_session(a.issue_id)
+    config = load_workflow(a.workflow or r / "WORKFLOW.md")
+    branch = f"agent/{sid}"
+    base = config.workspace.base_branch
+    wt = r / config.workspace.root / f"agent-{sid}"
+
+    merge_ref = resolve_merge_ref(r, branch, wt)
+    check_working_tree_clean(r, base, config, a.issue_id, _report_accept_failure)
+
+    # Show what will be merged
+    subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))
+    subprocess.run(["git", "diff", "--stat", f"{base}..{merge_ref}"], cwd=str(r))
+
+    merge_with_rebase_fallback(r, merge_ref, branch, base, a.issue_id, config,
+                                _report_accept_failure)
+    print(f"Merged into {base}")
+
+    verify_no_conflict_markers(r, config, a.issue_id, sid,
+                                sessions_dir(), _report_accept_failure)
+
+    remove_worktree(r, wt, branch)
+    _cleanup_review_artifacts(r, sid, config)
+
     try:
-        shutil.rmtree(path)
-    except PermissionError:
-        # Docker may have created files as root
-        subprocess.run(["docker", "run", "--rm",
-                        "-v", f"{path}:/cleanup:rw",
-                        "ubuntu:24.04", "rm", "-rf", "/cleanup"],
-                       capture_output=True)
-        # Now try again — the mount point itself should be removable
-        try:
-            shutil.rmtree(path)
-        except FileNotFoundError:
-            pass
+        tracker = create_tracker(config, repo_dir=str(r))
+        tracker.set_status(a.issue_id, "closed")
+        tracker.add_comment(a.issue_id, f"✅ Accepted and merged into `{base}`.")
+        tracker.sync()
+    except Exception as e:
+        print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
 
-
-def _remove_worktree(repo: Path, wt: Path, branch: str):
-    """Remove worktree and branch, handling broken .git and root-owned files."""
-    if wt.exists():
-        result = subprocess.run(
-            ["git", "worktree", "remove", str(wt), "--force"],
-            capture_output=True, cwd=str(repo),
-        )
-        if result.returncode != 0:
-            # Worktree remove failed (e.g. .git file missing) — force remove dir
-            _force_remove_dir(wt)
-    subprocess.run(["git", "worktree", "prune"], capture_output=True, cwd=str(repo))
-    subprocess.run(["git", "branch", "-D", branch], capture_output=True, cwd=str(repo))
+    print(f"Accepted and cleaned up {sid}")
 
 
 def cmd_reject(a):
@@ -588,7 +399,6 @@ def cmd_reject(a):
     config = load_workflow(r / "WORKFLOW.md")
     branch = f"agent/{sid}"
 
-    # Show what will be discarded
     result = subprocess.run(
         ["git", "log", "--oneline", f"{config.workspace.base_branch}..{branch}"],
         capture_output=True, text=True, cwd=str(r),
@@ -597,18 +407,13 @@ def cmd_reject(a):
         print(f"Discarding commits:\n{result.stdout.strip()}")
 
     wt = r / config.workspace.root / f"agent-{sid}"
-    _remove_worktree(r, wt, branch)
-
-    # Clean up any review artifacts
+    remove_worktree(r, wt, branch)
     _cleanup_review_artifacts(r, sid, config)
 
-    # Remove session
     ss = sessions_dir() / sid
     if ss.exists():
-        import shutil
         shutil.rmtree(ss)
 
-    # Close issue in tracker
     try:
         tracker = create_tracker(config, repo_dir=str(r))
         tracker.set_status(a.issue_id, "closed")
@@ -618,9 +423,6 @@ def cmd_reject(a):
         print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
 
     print(f"Rejected and cleaned up {sid}")
-
-
-from core.review import collect_review_feedback, build_revise_prompt
 
 
 def cmd_revise(a):
@@ -633,18 +435,16 @@ def cmd_revise(a):
         print(f"No session found for {sid}", file=sys.stderr)
         sys.exit(1)
 
-    state = json.loads((sd / "state.json").read_text())
+    state = read_state(sd)
     if state.get("status") not in ("waiting:review", "waiting:human-review"):
         print(f"Session {sid} is not awaiting review (status: {state.get('status')})",
               file=sys.stderr)
         sys.exit(1)
 
-    # Collect review comments from tracker
     config = load_workflow(a.workflow or r / "WORKFLOW.md")
     tracker = create_tracker(config, repo_dir=str(r))
     review_comments = collect_review_feedback(tracker, a.issue_id)
 
-    # Combine with inline feedback
     inline = a.message if hasattr(a, "message") and a.message else None
     feedback = build_revise_prompt(review_comments, inline)
 
@@ -653,15 +453,12 @@ def cmd_revise(a):
               file=sys.stderr)
         sys.exit(1)
 
-    # Write resume prompt and update state
     (sd / "resume-prompt.md").write_text(feedback)
-    state["status"] = "working"
-    (sd / "state.json").write_text(json.dumps(state, indent=2))
+    update_status(sd, "working")
 
     print(f"Revising {sid} with {len(review_comments)} comment(s)" +
           (f" + inline feedback" if inline else ""))
 
-    # Delegate to launch.py --resume
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
     if a.workflow:
@@ -675,26 +472,16 @@ def cmd_cleanup(a):
     config = load_workflow(r / "WORKFLOW.md")
 
     wt = r / config.workspace.root / f"agent-{sid}"
-    _remove_worktree(r, wt, f"agent/{sid}")
+    remove_worktree(r, wt, f"agent/{sid}")
 
     ss = sessions_dir() / sid
     if ss.exists() and not a.keep_session:
-        import shutil
         shutil.rmtree(ss)
     print(f"Cleaned up {sid}")
 
 
-def main():
-    # Load .env early so all commands see credentials
-    try:
-        load_all_dotenv(repo_root() / ".env")
-    except subprocess.CalledProcessError:
-        pass  # Not in a git repo (e.g. --help)
-
-    p = argparse.ArgumentParser(prog="nightshift")
-    p.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
-    s = p.add_subparsers(dest="cmd", required=True)
-
+def _register_session_commands(s):
+    """Register session lifecycle commands."""
     sp = s.add_parser("start")
     sp.add_argument("issue_id")
     sp.add_argument("--max-turns", type=int, default=None)
@@ -708,6 +495,33 @@ def main():
     sp.add_argument("issue_id")
     sp.add_argument("message")
     sp.set_defaults(func=cmd_answer)
+
+    sp = s.add_parser("accept", help="Merge agent work into base branch")
+    sp.add_argument("issue_id")
+    sp.set_defaults(func=cmd_accept)
+
+    sp = s.add_parser("reject", help="Discard agent work and clean up")
+    sp.add_argument("issue_id")
+    sp.set_defaults(func=cmd_reject)
+
+    sp = s.add_parser("revise", help="Resume agent with review feedback")
+    sp.add_argument("issue_id")
+    sp.add_argument("message", nargs="?", default=None, help="Inline review feedback")
+    sp.set_defaults(func=cmd_revise)
+
+    sp = s.add_parser("cleanup")
+    sp.add_argument("issue_id")
+    sp.add_argument("--keep-session", action="store_true")
+    sp.set_defaults(func=cmd_cleanup)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser with all subcommands."""
+    p = argparse.ArgumentParser(prog="nightshift")
+    p.add_argument("--workflow", default=None, help="Path to WORKFLOW.md")
+    s = p.add_subparsers(dest="cmd", required=True)
+
+    _register_session_commands(s)
 
     sp = s.add_parser("watcher")
     sp.add_argument("--no-auto-start", action="store_true",
@@ -729,24 +543,17 @@ def main():
     sp.add_argument("--force", action="store_true", help="Overwrite existing files")
     sp.set_defaults(func=cmd_init)
 
-    sp = s.add_parser("accept", help="Merge agent work into base branch")
-    sp.add_argument("issue_id")
-    sp.set_defaults(func=cmd_accept)
+    return p
 
-    sp = s.add_parser("reject", help="Discard agent work and clean up")
-    sp.add_argument("issue_id")
-    sp.set_defaults(func=cmd_reject)
 
-    sp = s.add_parser("revise", help="Resume agent with review feedback")
-    sp.add_argument("issue_id")
-    sp.add_argument("message", nargs="?", default=None, help="Inline review feedback")
-    sp.set_defaults(func=cmd_revise)
+def main():
+    # Load .env early so all commands see credentials
+    try:
+        load_all_dotenv(repo_root() / ".env")
+    except subprocess.CalledProcessError:
+        pass  # Not in a git repo (e.g. --help)
 
-    sp = s.add_parser("cleanup")
-    sp.add_argument("issue_id")
-    sp.add_argument("--keep-session", action="store_true")
-    sp.set_defaults(func=cmd_cleanup)
-
+    p = _build_parser()
     a = p.parse_args()
     a.func(a)
 

@@ -1,0 +1,735 @@
+"""Tests for ReviewOrchestrator: auto-review, verdicts, approve/revise, cleanup, commands."""
+
+import json
+import sys
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch, call
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from host.watcher import HostWatcher
+from core.protocols import TrackerIssue, TrackerComment
+
+from tests.watcher.conftest import _make_watcher, _make_session, _make_issue, _make_comment
+
+
+# ---------------------------------------------------------------------------
+# check_for_auto_review tests
+# ---------------------------------------------------------------------------
+
+class TestCheckForAutoReview:
+    def test_no_sessions_dir(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.reviews.sessions_dir = tmp_path / "nonexistent"
+        w.reviews.check_for_auto_review()  # should not raise
+
+    def test_no_review_md(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="waiting:review")
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+        w.reviews.check_for_auto_review()
+        assert launched == []
+
+    def test_review_md_triggers_reviewer_launch(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nagent:\n  kind: claude-code\n---\nReview\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+        w.reviews.check_for_auto_review()
+        assert "review-abc" in launched
+
+    def test_skips_review_prefixed_sessions(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\n---\nReview\n")
+        _make_session(w.sessions_dir, "review-abc", status="waiting:review")
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+        w.reviews.check_for_auto_review()
+        assert launched == []
+
+    def test_non_waiting_review_skipped(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\n---\nReview\n")
+        _make_session(w.sessions_dir, "abc", status="working")
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+        w.reviews.check_for_auto_review()
+        assert launched == []
+
+
+# ---------------------------------------------------------------------------
+# maybe_launch_review tests
+# ---------------------------------------------------------------------------
+
+class TestMaybeLaunchReview:
+    def test_launches_reviewer_and_increments_rounds(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        assert "review-abc" in launched
+        assert w.reviews._rounds["abc"] == 1
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "reviewing"
+
+    def test_max_rounds_escalates(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 2\n---\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        w.reviews._rounds["abc"] = 2
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+        w.telegram.notify = MagicMock()
+
+        w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
+        w.telegram.notify.assert_called_once()
+
+    def test_round_count_increments_each_time(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 5\n---\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        w.reviews._rounds["abc"] = 1
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        assert w.reviews._rounds["abc"] == 2
+
+
+# ---------------------------------------------------------------------------
+# extract_reviewer_verdict tests
+# ---------------------------------------------------------------------------
+
+class TestExtractReviewerVerdict:
+    def test_approve_from_conv_log(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        conv = tmp_path / "conversation.jsonl"
+        conv.write_text(
+            json.dumps({"role": "thought", "content": "All good. @nightshift approve"}) + "\n"
+        )
+        verdict = w.reviews.extract_reviewer_verdict(conv, "issue-123")
+        assert verdict == "approve"
+
+    def test_revise_from_conv_log(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        conv = tmp_path / "conversation.jsonl"
+        conv.write_text(
+            json.dumps({"role": "thought", "content": "Errors found. @nightshift revise"}) + "\n"
+        )
+        verdict = w.reviews.extract_reviewer_verdict(conv, "issue-123")
+        assert verdict == "revise"
+
+    def test_no_verdict_in_log(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        conv = tmp_path / "conversation.jsonl"
+        conv.write_text(
+            json.dumps({"role": "thought", "content": "Still reviewing..."}) + "\n"
+        )
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        verdict = w.reviews.extract_reviewer_verdict(conv, "issue-123")
+        assert verdict is None
+
+    def test_missing_conv_log(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        verdict = w.reviews.extract_reviewer_verdict(tmp_path / "nonexistent.jsonl", "issue-123")
+        assert verdict is None
+
+    def test_approve_from_tracker_comments(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        conv = tmp_path / "conversation.jsonl"
+        conv.write_text(json.dumps({"role": "thought", "content": "Regular content"}) + "\n")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [_make_comment("@nightshift approve")]
+        w._tracker = tracker
+        verdict = w.reviews.extract_reviewer_verdict(conv, "issue-123")
+        assert verdict == "approve"
+
+    def test_tracker_failure_handled(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        conv = tmp_path / "conversation.jsonl"
+        conv.write_text(json.dumps({"role": "thought", "content": "no command here"}) + "\n")
+        tracker = MagicMock()
+        tracker.get_comments.side_effect = RuntimeError("tracker down")
+        w._tracker = tracker
+        # should not raise
+        verdict = w.reviews.extract_reviewer_verdict(conv, "issue-123")
+        assert verdict is None
+
+    def test_invalid_json_lines_skipped(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        conv = tmp_path / "conversation.jsonl"
+        conv.write_text("not json\n" + json.dumps({"content": "@nightshift approve"}) + "\n")
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        verdict = w.reviews.extract_reviewer_verdict(conv, "issue-123")
+        assert verdict == "approve"
+
+
+# ---------------------------------------------------------------------------
+# handle_reviewer_approve tests
+# ---------------------------------------------------------------------------
+
+class TestHandleReviewerApprove:
+    def test_updates_status_to_human_review(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
+        w.telegram.notify = MagicMock()
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        w.reviews.handle_reviewer_approve("abc", coder_dir, "issue-abc")
+
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
+
+    def test_sends_tg_notification(self, tmp_path):
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
+        tg_calls = []
+        w.telegram.notify = lambda msg: tg_calls.append(msg)
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        w.reviews.handle_reviewer_approve("abc", coder_dir, "issue-abc")
+
+        assert len(tg_calls) == 1
+        assert "approved" in tg_calls[0].lower()
+
+    def test_posts_tracker_comment(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
+        w.telegram.notify = MagicMock()
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        w.reviews.handle_reviewer_approve("abc", coder_dir, "issue-abc")
+
+        tracker.add_comment.assert_called_once()
+        call_args = tracker.add_comment.call_args[0]
+        assert "APPROVED" in call_args[1]
+
+    def test_tracker_failure_doesnt_crash(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
+        w.telegram.notify = MagicMock()
+        tracker = MagicMock()
+        tracker.add_comment.side_effect = RuntimeError("tracker down")
+        w._tracker = tracker
+
+        # should not raise
+        w.reviews.handle_reviewer_approve("abc", coder_dir, "issue-abc")
+
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
+
+
+# ---------------------------------------------------------------------------
+# collect_reviewer_feedback tests
+# ---------------------------------------------------------------------------
+
+class TestCollectReviewerFeedback:
+    def test_feedback_from_conv_log(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "Fix the test. @nightshift revise"}) + "\n"
+        )
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+
+        parts = w.reviews.collect_reviewer_feedback("abc", "issue-abc", review_dir)
+
+        assert any("Fix the test" in p for p in parts)
+
+    def test_feedback_from_tracker_comments(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text("")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [_make_comment("Bad code. @nightshift revise")]
+        w._tracker = tracker
+
+        parts = w.reviews.collect_reviewer_feedback("abc", "issue-abc", review_dir)
+
+        assert any("Bad code" in p for p in parts)
+
+    def test_fallback_message_when_no_feedback(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text("")
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+
+        parts = w.reviews.collect_reviewer_feedback("abc", "issue-abc", review_dir)
+
+        assert len(parts) == 1
+        assert "did not provide specific feedback" in parts[0]
+
+    def test_tracker_failure_handled(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text("")
+        tracker = MagicMock()
+        tracker.get_comments.side_effect = RuntimeError("tracker down")
+        w._tracker = tracker
+
+        # should not raise, returns fallback
+        parts = w.reviews.collect_reviewer_feedback("abc", "issue-abc", review_dir)
+        assert len(parts) >= 1
+
+
+# ---------------------------------------------------------------------------
+# handle_reviewer_revise tests
+# ---------------------------------------------------------------------------
+
+class TestHandleReviewerRevise:
+    def test_writes_resume_prompt_and_relaunches(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "Fix error handling. @nightshift revise"}) + "\n"
+        )
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.reviews.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
+
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "working"
+        assert (coder_dir / "resume-prompt.md").exists()
+        assert "abc" in launched
+
+    def test_sends_tg_notification(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text("")
+        tg_calls = []
+        w.telegram.notify = lambda msg: tg_calls.append(msg)
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        w.reviews._launch_background = lambda cmd, sid: None
+
+        w.reviews.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
+
+        assert any("revise" in m.lower() or "revision" in m.lower() for m in tg_calls)
+
+    def test_marks_recently_launched(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text("")
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        w.reviews._launch_background = lambda cmd, sid: None
+
+        w.reviews.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
+
+        assert "abc" in w._recently_launched
+
+
+# ---------------------------------------------------------------------------
+# cleanup_review_session tests
+# ---------------------------------------------------------------------------
+
+class TestCleanupReviewSession:
+    def test_removes_review_dir(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "state.json").write_text("{}")
+        w._recently_launched["review-abc"] = time.time()
+        w.reviews._comment_counts["review-abc"] = 5
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"):
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+            w.reviews.cleanup_review_session("review-abc", review_dir)
+
+        assert not review_dir.exists()
+        assert "review-abc" not in w._recently_launched
+        assert "review-abc" not in w.reviews._comment_counts
+
+    def test_cleanup_failure_does_not_raise(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir()
+
+        with patch("core.config.load_workflow", side_effect=RuntimeError("boom")):
+            # should not raise
+            w.reviews.cleanup_review_session("review-abc", review_dir)
+
+
+# ---------------------------------------------------------------------------
+# check_reviewer_done tests
+# ---------------------------------------------------------------------------
+
+class TestCheckReviewerDone:
+    def test_approve_verdict_transitions_coder(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "@nightshift approve"}) + "\n"
+        )
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
+        w.reviews.cleanup_review_session.assert_called_once()
+
+    def test_revise_verdict_resumes_coder(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "Fix this. @nightshift revise"}) + "\n"
+        )
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "working"
+        assert "abc" in launched
+
+    def test_no_verdict_does_nothing(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="reviewing")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "Still reviewing..."}) + "\n"
+        )
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        w.reviews.cleanup_review_session.assert_not_called()
+
+    def test_non_review_sessions_skipped(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="waiting:review")  # coder, not reviewer
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        w.reviews.cleanup_review_session.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# check_reviews / poll_review_comments tests
+# ---------------------------------------------------------------------------
+
+class TestCheckReviews:
+    def test_poll_skipped_within_interval(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.reviews._last_poll = time.time()  # just polled
+        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        w.reviews.check_reviews({})
+
+        tracker.get_comments.assert_not_called()
+
+    def test_poll_runs_after_interval(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.reviews._last_poll = 0.0  # long ago
+        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = []
+        w._tracker = tracker
+
+        w.reviews.check_reviews({})
+
+        tracker.get_comments.assert_called_once_with("issue-abc")
+
+    def test_nightshift_command_triggers_action(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.reviews._last_poll = 0.0
+        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [
+            _make_comment("Looks good. @nightshift accept")
+        ]
+        w._tracker = tracker
+        w.reviews._comment_counts["abc"] = 0
+
+        actions = []
+        w.reviews.handle_review_command = lambda sid, iid, cmd, sd: actions.append((sid, cmd))
+
+        w.reviews.check_reviews({})
+
+        assert ("abc", "accept") in actions
+
+    def test_non_review_session_comment_count_cleared(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.reviews._last_poll = 0.0
+        _make_session(w.sessions_dir, "abc", status="working")
+        w.reviews._comment_counts["abc"] = 5
+
+        w.reviews.check_reviews({})
+
+        assert "abc" not in w.reviews._comment_counts
+
+
+class TestPollReviewComments:
+    def test_first_poll_checks_last_comment(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [
+            _make_comment("No command"),
+            _make_comment("Looks good. @nightshift accept"),
+        ]
+        w._tracker = tracker
+        # last_count == 0 (first poll)
+
+        actions = []
+        w.reviews.handle_review_command = lambda sid, iid, cmd, s: actions.append((sid, cmd))
+
+        w.reviews.poll_review_comments("abc", "issue-abc", sd)
+
+        assert ("abc", "accept") in actions
+        assert w.reviews._comment_counts["abc"] == 2
+
+    def test_new_comments_processed(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [
+            _make_comment("Old comment"),
+            _make_comment("@nightshift revise Fix the bug"),
+        ]
+        w._tracker = tracker
+        w.reviews._comment_counts["abc"] = 1  # already seen first comment
+
+        actions = []
+        w.reviews.handle_review_command = lambda sid, iid, cmd, s: actions.append((sid, cmd))
+
+        w.reviews.poll_review_comments("abc", "issue-abc", sd)
+
+        assert ("abc", "revise") in actions
+
+    def test_no_new_comments_no_action(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [_make_comment("Old")]
+        w._tracker = tracker
+        w.reviews._comment_counts["abc"] = 1
+
+        actions = []
+        w.reviews.handle_review_command = lambda *a: actions.append(a)
+
+        w.reviews.poll_review_comments("abc", "issue-abc", sd)
+
+        assert actions == []
+
+    def test_tracker_failure_handled(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+        tracker = MagicMock()
+        tracker.get_comments.side_effect = RuntimeError("tracker down")
+        w._tracker = tracker
+
+        # should not raise
+        w.reviews.poll_review_comments("abc", "issue-abc", sd)
+
+
+# ---------------------------------------------------------------------------
+# do_revise tests
+# ---------------------------------------------------------------------------
+
+class TestDoRevise:
+    def test_revise_writes_resume_prompt_and_launches(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [
+            _make_comment("Work complete. Awaiting review."),
+            _make_comment("Please fix error handling."),
+        ]
+        w._tracker = tracker
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.reviews.do_revise("abc", "issue-abc", sd)
+
+        assert (sd / "resume-prompt.md").exists()
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "working"
+        assert "abc" in launched
+
+    def test_revise_no_feedback_skips_launch(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = []
+        w._tracker = tracker
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.reviews.do_revise("abc", "issue-abc", sd)
+
+        assert launched == []
+
+    def test_revise_clears_comment_count(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.return_value = [_make_comment("fix this")]
+        w._tracker = tracker
+        w.reviews._comment_counts["abc"] = 5
+        w.reviews._launch_background = lambda cmd, sid: None
+
+        w.reviews.do_revise("abc", "issue-abc", sd)
+
+        assert "abc" not in w.reviews._comment_counts
+
+    def test_revise_exception_logged(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        tracker.get_comments.side_effect = RuntimeError("DB error")
+        w._tracker = tracker
+
+        # should not raise
+        w.reviews.do_revise("abc", "issue-abc", sd)
+
+
+# ---------------------------------------------------------------------------
+# do_cli_command tests
+# ---------------------------------------------------------------------------
+
+class TestDoCliCommand:
+    def test_successful_accept_command(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.telegram.notify = MagicMock()
+        w.reviews._comment_counts["abc"] = 3
+
+        with patch("host.watcher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="Done", stderr="")
+            w.reviews.do_cli_command("abc", "accept", "issue-abc")
+
+        mock_run.assert_called_once()
+        assert "abc" not in w.reviews._comment_counts
+        assert "abc" not in w.reviews._command_failures
+
+    def test_failed_command_sets_backoff(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.telegram.notify = MagicMock()
+
+        with patch("host.watcher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error msg")
+            w.reviews.do_cli_command("abc", "accept", "issue-abc")
+
+        assert "abc" in w.reviews._command_failures
+        _, attempts = w.reviews._command_failures["abc"]
+        assert attempts == 1
+
+    def test_successful_command_clears_failures(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.telegram.notify = MagicMock()
+        w.reviews._command_failures["abc"] = (time.time(), 3)
+
+        with patch("host.watcher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            w.reviews.do_cli_command("abc", "accept", "issue-abc")
+
+        assert "abc" not in w.reviews._command_failures
+
+    def test_reject_command(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.telegram.notify = MagicMock()
+
+        with patch("host.watcher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            w.reviews.do_cli_command("abc", "reject", "issue-abc")
+
+        call_args = mock_run.call_args[0][0]
+        assert "reject" in call_args
+
+    def test_subprocess_exception_handled(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.telegram.notify = MagicMock()
+
+        with patch("host.watcher.subprocess.run", side_effect=OSError("no such file")):
+            # should not raise
+            w.reviews.do_cli_command("abc", "accept", "issue-abc")
+
+
+# ---------------------------------------------------------------------------
+# handle_review_command backoff tests
+# ---------------------------------------------------------------------------
+
+class TestHandleReviewCommandBackoff:
+    def test_command_blocked_during_backoff(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+        # Set command failure with recent time
+        w.reviews._command_failures["abc"] = (time.time(), 1)  # 1 attempt, backoff = 60s
+
+        actions = []
+        w.reviews.do_cli_command = lambda *a: actions.append(a)
+        w.reviews.do_revise = lambda *a: actions.append(a)
+
+        w.reviews.handle_review_command("abc", "issue-abc", "accept", sd)
+
+        assert actions == []  # blocked by backoff
+
+    def test_command_allowed_after_backoff_expires(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+        # Set failure in the past (well beyond backoff)
+        w.reviews._command_failures["abc"] = (time.time() - 9999, 1)
+
+        actions = []
+        w.reviews.do_cli_command = lambda sid, cmd, iid: actions.append(cmd)
+
+        w.reviews.handle_review_command("abc", "issue-abc", "accept", sd)
+
+        assert "accept" in actions

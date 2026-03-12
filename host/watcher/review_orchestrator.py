@@ -1,0 +1,321 @@
+"""Review orchestration: auto-review launch, reviewer session lifecycle.
+
+Delegates verdict handling to VerdictHandler and command execution to CommandExecutor.
+"""
+
+import json
+import logging
+import sys
+import time
+from pathlib import Path
+
+from host.constants import (
+    REVIEW_POLL_INTERVAL_S, SHORT_ID_LEN, DEFAULT_MAX_REVIEW_ROUNDS,
+)
+from host.session_utils import read_state, update_status as _update_status
+from core.config import load_workflow
+from core.review import parse_nightshift_command
+from host.watcher.telegram_relay import TelegramRelay
+from host.watcher.verdict_handler import VerdictHandler
+from host.watcher.command_executor import CommandExecutor
+
+log = logging.getLogger("watcher")
+
+# Directory containing the host package (host/)
+_HOST_DIR = Path(__file__).resolve().parent.parent
+
+
+def _pkg():
+    """Lazy import of host.watcher package for test-patchable names."""
+    import host.watcher as _w
+    return _w
+
+
+class ReviewOrchestrator:
+    """Review orchestration: auto-review launch, verdict handling, review commands."""
+
+    def __init__(self, sessions_dir: Path, repo_dir: Path,
+                 telegram: TelegramRelay,
+                 get_tracker, recently_launched: dict,
+                 launch_background):
+        self.sessions_dir = sessions_dir
+        self.repo_dir = repo_dir
+        self.telegram = telegram
+        self._get_tracker = get_tracker
+        self._recently_launched = recently_launched
+        self._launch_background = launch_background
+        self._last_poll = 0.0
+        self._rounds: dict[str, int] = {}
+
+        self.verdicts = VerdictHandler(
+            sessions_dir, repo_dir, telegram,
+            get_tracker, recently_launched,
+            lambda cmd, sid: self._launch_background(cmd, sid),
+        )
+        self.commands = CommandExecutor(
+            sessions_dir, repo_dir, telegram,
+            get_tracker, recently_launched,
+            lambda cmd, sid: self._launch_background(cmd, sid),
+        )
+
+    # -- Delegated state for backward compat with tests/callers --
+
+    @property
+    def _comment_counts(self):
+        return self.commands._comment_counts
+
+    @property
+    def _command_failures(self):
+        return self.commands._command_failures
+
+    # -- Delegated accessors for backward compat with tests/callers --
+
+    def extract_reviewer_verdict(self, conv_log, issue_id):
+        return self.verdicts.extract_reviewer_verdict(conv_log, issue_id)
+
+    def handle_reviewer_approve(self, coder_sid, coder_dir, issue_id):
+        return self.verdicts.handle_reviewer_approve(coder_sid, coder_dir, issue_id)
+
+    def handle_reviewer_revise(self, coder_sid, coder_dir, issue_id, review_dir):
+        return self.verdicts.handle_reviewer_revise(coder_sid, coder_dir, issue_id, review_dir)
+
+    def collect_reviewer_feedback(self, coder_sid, issue_id, review_dir):
+        return self.verdicts.collect_reviewer_feedback(coder_sid, issue_id, review_dir)
+
+    def do_revise(self, sid, issue_id, session_dir):
+        return self.commands.do_revise(sid, issue_id, session_dir)
+
+    def do_cli_command(self, sid, command, issue_id):
+        return self.commands.do_cli_command(sid, command, issue_id)
+
+    def post_telegram_review_to_tracker(self, issue_id, text, author):
+        return self.commands.post_telegram_review_to_tracker(issue_id, text, author)
+
+    def handle_review_command(self, sid, issue_id, cmd, session_dir):
+        return self._dispatch_review_command(sid, issue_id, cmd, session_dir)
+
+    def poll_review_comments(self, sid, issue_id, session_dir):
+        return self._poll_review_comments(sid, issue_id, session_dir)
+
+    # -- Core orchestration methods --
+
+    def check_for_auto_review(self):
+        """Detect waiting:review coder sessions, launch reviewer if REVIEW.md exists."""
+        if not self.sessions_dir.exists():
+            return
+
+        review_md = self.repo_dir / "REVIEW.md"
+        if not review_md.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir() or session_dir.name.startswith("review-"):
+                continue
+            sid = session_dir.name
+            if not (session_dir / "state.json").exists():
+                continue
+            try:
+                state = read_state(session_dir)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"[{sid}] Failed to read state for auto-review: {e}")
+                continue
+            if state.get("status") != "waiting:review":
+                continue
+            issue_id = state.get("issue_id", "")
+            if issue_id:
+                self.maybe_launch_review(sid, session_dir, issue_id, review_md)
+
+    def maybe_launch_review(self, sid: str, session_dir: Path,
+                            issue_id: str, review_md: Path):
+        """Launch a review session for sid, or escalate if max rounds reached."""
+        try:
+            review_config = load_workflow(review_md)
+            max_rounds = review_config.review.max_rounds
+        except Exception as e:
+            log.warning(f"[{sid}] Failed to load REVIEW.md config, using default max rounds: {e}")
+            max_rounds = DEFAULT_MAX_REVIEW_ROUNDS
+
+        rounds = self._rounds.get(sid, 0)
+        if rounds >= max_rounds:
+            self._escalate_to_human(sid, session_dir, issue_id, max_rounds)
+            return
+
+        _update_status(session_dir, "reviewing")
+        review_sid = f"review-{sid}"
+        self._recently_launched[review_sid] = time.time()
+        self._rounds[sid] = rounds + 1
+
+        log.info(f"[{sid}] Launching automated review (round {rounds + 1}/{max_rounds})")
+        cmd = [
+            sys.executable,
+            str(_HOST_DIR / "launch.py"),
+            issue_id,
+            "--workflow", str(review_md),
+            "--step", "review",
+            "--coder-session", sid,
+        ]
+        self._launch_background(cmd, review_sid)
+
+    def _escalate_to_human(self, sid: str, session_dir: Path,
+                           issue_id: str, max_rounds: int):
+        """Escalate to human review when max rounds reached."""
+        log.info(f"[{sid}] Max review rounds ({max_rounds}) reached -- escalating")
+        _update_status(session_dir, "waiting:human-review")
+        self.telegram.notify(
+            f"\u26a0\ufe0f `{sid}` hit max review rounds ({max_rounds}). "
+            f"Escalating to human review.\n"
+            f"`nightshift accept/reject/revise {issue_id}`")
+
+    def check_reviewer_done(self):
+        """Check if reviewer sessions have finished, handle verdict."""
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not sid.startswith("review-"):
+                continue
+            if not (session_dir / "state.json").exists():
+                continue
+            self._process_reviewer_session(sid, session_dir)
+
+    def _process_reviewer_session(self, sid: str, session_dir: Path):
+        """Check a single reviewer session for verdict."""
+        try:
+            state = read_state(session_dir)
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{sid}] Failed to read reviewer state: {e}")
+            return
+        if state.get("status") != "waiting:review":
+            return
+
+        issue_id = state.get("issue_id", "")
+        coder_sid = sid[len("review-"):]
+        coder_dir = self.sessions_dir / coder_sid
+        if not coder_dir.exists():
+            return
+
+        conv_log = session_dir / "conversation.jsonl"
+        verdict = self.verdicts.extract_reviewer_verdict(conv_log, issue_id)
+        if not verdict:
+            return
+
+        log.info(f"[{sid}] Reviewer verdict: {verdict}")
+        if verdict == "approve":
+            self.verdicts.handle_reviewer_approve(coder_sid, coder_dir, issue_id)
+        elif verdict == "revise":
+            self.verdicts.handle_reviewer_revise(coder_sid, coder_dir, issue_id, session_dir)
+
+        self.cleanup_review_session(sid, session_dir)
+
+    def cleanup_review_session(self, review_sid: str, review_dir: Path):
+        """Clean up a reviewer session (worktree, branch, session dir)."""
+        try:
+            coder_sid = review_sid[len("review-"):]
+
+            review_md = self.repo_dir / "REVIEW.md"
+            config = load_workflow(review_md) if review_md.exists() else load_workflow(self.repo_dir / "WORKFLOW.md")
+
+            wt = self.repo_dir / config.workspace.root / f"review-{coder_sid}"
+            branch = f"review/{coder_sid}"
+
+            _pkg().remove_worktree(self.repo_dir, wt, branch)
+            _pkg().shutil.rmtree(review_dir, ignore_errors=True)
+
+            self._recently_launched.pop(review_sid, None)
+            self.commands._comment_counts.pop(review_sid, None)
+
+            log.info(f"[{review_sid}] Cleaned up reviewer session")
+        except Exception as e:
+            log.error(f"[{review_sid}] Reviewer cleanup failed: {e}")
+
+    def check_reviews(self, tg_review_replies: dict[str, tuple[str, str]]):
+        """Poll tracker for @nightshift commands on waiting:review sessions."""
+        now = time.time()
+        if now - self._last_poll < REVIEW_POLL_INTERVAL_S:
+            return
+        self._last_poll = now
+
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not (session_dir / "state.json").exists():
+                continue
+            self._check_session_reviews(sid, session_dir, tg_review_replies)
+
+    def _check_session_reviews(self, sid: str, session_dir: Path,
+                                tg_review_replies: dict[str, tuple[str, str]]):
+        """Check a single session for review commands."""
+        try:
+            state = read_state(session_dir)
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{sid}] Failed to read state for review check: {e}")
+            return
+        if state.get("status") not in ("waiting:review", "waiting:human-review"):
+            self.commands._comment_counts.pop(sid, None)
+            return
+        issue_id = state.get("issue_id", "")
+        if not issue_id:
+            return
+
+        if sid in tg_review_replies:
+            tg_text, tg_author = tg_review_replies[sid]
+            self.commands.post_telegram_review_to_tracker(issue_id, tg_text, tg_author)
+
+        self._poll_review_comments(sid, issue_id, session_dir)
+
+    def _poll_review_comments(self, sid: str, issue_id: str, session_dir: Path):
+        """Check tracker for new @nightshift commands on a review session."""
+        try:
+            tracker = self._get_tracker()
+            comments = tracker.get_comments(issue_id)
+        except Exception as e:
+            log.warning(f"[{sid}] Tracker poll failed: {e}")
+            return
+
+        last_count = self.commands._comment_counts.get(sid, 0)
+        if len(comments) <= last_count:
+            return
+
+        self.commands._comment_counts[sid] = len(comments)
+
+        if last_count == 0:
+            self._handle_first_poll(sid, issue_id, comments, session_dir)
+            return
+
+        for comment in comments[last_count:]:
+            cmd = parse_nightshift_command(comment.body)
+            if cmd:
+                log.info(f"[{sid}] Found @nightshift {cmd} from {comment.author}")
+                self.handle_review_command(sid, issue_id, cmd, session_dir)
+                break
+
+    def _handle_first_poll(self, sid: str, issue_id: str,
+                           comments: list, session_dir: Path):
+        """Handle the first poll for a session (check latest comment only)."""
+        if comments:
+            cmd = parse_nightshift_command(comments[-1].body)
+            if cmd:
+                log.info(f"[{sid}] Found pending @nightshift {cmd} from {comments[-1].author}")
+                self.handle_review_command(sid, issue_id, cmd, session_dir)
+
+    def _dispatch_review_command(self, sid: str, issue_id: str,
+                                  cmd: str, session_dir: Path):
+        """Execute a @nightshift command on a waiting:review session."""
+        if self.commands.is_in_cooldown(sid):
+            return
+
+        if cmd == "revise":
+            self.do_revise(sid, issue_id, session_dir)
+        elif cmd == "accept":
+            self.do_cli_command(sid, "accept", issue_id)
+        elif cmd == "reject":
+            self.do_cli_command(sid, "reject", issue_id)
+        elif cmd == "approve":
+            self.handle_reviewer_approve(sid, session_dir, issue_id)

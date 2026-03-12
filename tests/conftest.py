@@ -103,6 +103,12 @@ class MockNotifier:
         self.questions: list[dict] = []
         self.pending_answers: dict[str, str] = {}
 
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
     def notify(self, message: str) -> None:
         self.notifications.append(message)
 
