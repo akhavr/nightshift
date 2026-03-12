@@ -47,12 +47,12 @@ def post_run_action(
         reason = st.status.split(":")[1]
         return prepare_resume(
             state_mgr, tracker, notifier, issue, agent, workspace,
-            workspace_mgr, build_resume_fn, reason)
+            build_resume_fn, reason)
     if st.status == "working":
         commit_wip_fn("max-turns")
         return prepare_resume(
             state_mgr, tracker, notifier, issue, agent, workspace,
-            workspace_mgr, build_resume_fn, "max-turns")
+            build_resume_fn, "max-turns")
     # Unexpected
     commit_wip_fn("unexpected exit")
     state_mgr.update_status("suspended:unexpected")
@@ -108,7 +108,6 @@ def prepare_resume(
     issue: TrackerIssue,
     agent: CodingAgent,
     workspace: Workspace | None,
-    workspace_mgr: WorkspaceManager,
     build_resume_fn,
     reason: str,
 ) -> str:
