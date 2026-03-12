@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+from core.constants import TITLE_TRUNCATE_LEN
 from core.protocols import Workspace
 from core.state import StateManager, SessionState
 from core.qa_flow import handle_question, handle_waiting, deliver_answer
@@ -12,8 +13,8 @@ from tests.conftest import (
 )
 
 
-def _setup(tmp_path):
-    issue = make_test_issue()
+def _setup(tmp_path, issue=None):
+    issue = issue or make_test_issue()
     agent = MockAgent([])
     agent.start("test", tmp_path, 50)  # mark as alive
     tracker = MockTracker({issue.id: issue})
@@ -59,18 +60,9 @@ class TestHandleQuestion:
         assert any(issue.title in n for n in notifier.notifications)
 
     def test_long_title_truncated_in_fallback(self, tmp_path):
-        from core.constants import TITLE_TRUNCATE_LEN
         long_title = "B" * 100
         issue = make_test_issue(title=long_title)
-        agent = MockAgent([])
-        agent.start("test", tmp_path, 50)
-        tracker = MockTracker({issue.id: issue})
-        notifier = MockNotifier()
-        session_dir = tmp_path / "session"
-        sm = StateManager(session_dir)
-        from core.state import SessionState
-        state = SessionState(issue_id=issue.id, branch="agent/test", status="working")
-        sm._write(state)
+        _, tracker, notifier, sm, issue = _setup(tmp_path, issue=issue)
         notifier.send_question = lambda *a, **kw: False
         pending = []
         handle_question("Q?", sm, tracker, notifier, issue, pending)
