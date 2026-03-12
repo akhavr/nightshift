@@ -77,6 +77,12 @@ class HostWatcher:
         """
         self._shutdown = shutdown_event or threading.Event()
 
+        # Propagate shutdown event to tracker so interruptible subprocess
+        # polls can be interrupted when stuck in git-bug calls
+        tracker = self._get_tracker()
+        if hasattr(tracker, '_shutdown'):
+            tracker._shutdown = self._shutdown
+
         log.info(f"Watching {self.sessions_dir}")
         if self.telegram.enabled:
             log.info("Telegram polling enabled")
@@ -111,6 +117,11 @@ class HostWatcher:
             # Use event.wait() instead of time.sleep() so shutdown
             # can interrupt the sleep immediately
             self._shutdown.wait(timeout=MAIN_LOOP_SLEEP_S)
+
+        # Terminate any in-flight tracker subprocesses (e.g. git-bug sync)
+        tracker = self._get_tracker()
+        if hasattr(tracker, 'terminate_current'):
+            tracker.terminate_current()
 
         log.info("Watcher shutdown complete")
 

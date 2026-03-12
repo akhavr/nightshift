@@ -18,6 +18,17 @@ _LOCK_RETRIES = 3
 _LOCK_RETRY_DELAY_S = 5
 _CMD_TIMEOUT_S = 30
 _POLL_INTERVAL_S = 0.1
+_GRACEFUL_KILL_TIMEOUT_S = 5
+
+
+def _graceful_kill(proc: subprocess.Popen, timeout: int = _GRACEFUL_KILL_TIMEOUT_S) -> None:
+    """Terminate a subprocess, escalating to kill if it doesn't exit in time."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 class GitBugTracker:
@@ -83,12 +94,7 @@ class GitBugTracker:
             deadline = time.monotonic() + timeout
             while proc.poll() is None:
                 if self._shutdown.is_set():
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
+                    _graceful_kill(proc)
                     return ("", "", None)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -111,12 +117,7 @@ class GitBugTracker:
             proc = self._current_proc
         if proc and proc.poll() is None:
             log.info("Terminating in-flight git-bug process")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+            _graceful_kill(proc)
 
     @staticmethod
     def _extract_lock_pid(stderr: str) -> int | None:

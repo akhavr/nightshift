@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from host.watcher.main import _handle_shutdown, shutdown_event
 from host.watcher.host_watcher import HostWatcher
-from adapters.trackers.git_bug import GitBugTracker, _POLL_INTERVAL_S
+from adapters.trackers.git_bug import GitBugTracker, _POLL_INTERVAL_S, _graceful_kill
 
 from tests.watcher.conftest import _make_watcher
 
@@ -87,6 +87,55 @@ class TestWatcherShutdown:
         # Even with no argument, run() should work — just pass our own
         w.run(shutdown_event=ev)
         assert w._shutdown is ev
+
+    def test_run_propagates_shutdown_to_tracker(self, tmp_path):
+        """run() propagates shutdown_event to the tracker's _shutdown."""
+        w = _make_watcher(tmp_path)
+        ev = threading.Event()
+        ev.set()  # exit immediately
+
+        mock_tracker = MagicMock()
+        mock_tracker._shutdown = threading.Event()
+        w._tracker = mock_tracker
+
+        w.run(shutdown_event=ev)
+        # The tracker's _shutdown should now be the same event
+        assert mock_tracker._shutdown is ev
+
+    def test_run_calls_terminate_current_on_exit(self, tmp_path):
+        """run() calls tracker.terminate_current() after loop exits."""
+        w = _make_watcher(tmp_path)
+        ev = threading.Event()
+        ev.set()
+
+        mock_tracker = MagicMock()
+        mock_tracker._shutdown = threading.Event()
+        w._tracker = mock_tracker
+
+        w.run(shutdown_event=ev)
+        mock_tracker.terminate_current.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _graceful_kill helper tests
+# ---------------------------------------------------------------------------
+
+class TestGracefulKill:
+    def test_graceful_kill_terminates_normally(self):
+        """_graceful_kill terminates process that exits within timeout."""
+        proc = MagicMock()
+        proc.wait.return_value = None
+        _graceful_kill(proc)
+        proc.terminate.assert_called_once()
+        proc.kill.assert_not_called()
+
+    def test_graceful_kill_escalates_to_kill(self):
+        """_graceful_kill escalates to kill if terminate times out."""
+        proc = MagicMock()
+        proc.wait.side_effect = [subprocess.TimeoutExpired("cmd", 5), None]
+        _graceful_kill(proc)
+        proc.terminate.assert_called_once()
+        proc.kill.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
