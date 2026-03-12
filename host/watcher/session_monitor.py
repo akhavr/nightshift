@@ -7,8 +7,9 @@ import time
 from pathlib import Path
 
 from host.constants import (
-    REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN, LOG_PREVIEW_LEN,
+    REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
 )
+from core.constants import TITLE_TRUNCATE_LEN
 from host.session_utils import read_state
 from core.config import load_workflow
 from host.watcher.telegram_relay import TelegramRelay
@@ -235,8 +236,8 @@ class SessionMonitor:
             sid = issue.id[:SHORT_ID_LEN]
             self._recently_launched[sid] = time.time()
             active_count += 1
-            log.info(f"Auto-start: launching {issue.identifier} -- {issue.title[:LOG_PREVIEW_LEN]}")
-            self.telegram.notify(f"\U0001f680 Auto-starting `{issue.identifier}`: {issue.title[:LOG_PREVIEW_LEN]}")
+            log.info(f"Auto-start: launching {issue.identifier} -- {issue.title[:TITLE_TRUNCATE_LEN]}")
+            self.telegram.notify(f"\U0001f680 Auto-starting `{issue.identifier}`: {issue.title[:TITLE_TRUNCATE_LEN]}")
 
             cmd = [
                 sys.executable,

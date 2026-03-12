@@ -7,6 +7,7 @@ import logging
 import time
 
 from core.config import MergeConfig
+from core.constants import TITLE_TRUNCATE_LEN
 from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
 from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
@@ -74,7 +75,7 @@ class SessionRunner:
             if not self._run_hook(self.hooks_config.before_run, "before_run", fatal=True):
                 self.state_mgr.update_status("suspended:hook-failure")
                 self.notifier.notify(
-                    f"⚠️ {self.issue.identifier}: before_run hook failed.")
+                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]}: before_run hook failed.")
                 return False
 
         self.state_mgr.append_conversation("user", prompt)
@@ -100,7 +101,7 @@ class SessionRunner:
                 log.error(f"Hit max resumes ({MAX_RESUMES}). Stopping.")
                 self.state_mgr.update_status("suspended:max-resumes")
                 self.notifier.notify(
-                    f"⚠️ {self.issue.identifier} hit {MAX_RESUMES} resumes. Manual --resume needed.")
+                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]} hit {MAX_RESUMES} resumes. Manual --resume needed.")
                 break
 
             if not self._run_agent_cycle(prompt):

@@ -394,6 +394,15 @@ class TestAutoResume:
         assert st.status == "suspended:max-resumes"
         assert any(str(MAX_RESUMES) in n for n in notifier.notifications)
 
+    def test_max_resumes_notification_includes_title(self, tmp_path):
+        scripts = [[_system_event("context window full")] for _ in range(MAX_RESUMES + 1)]
+        agent = ScriptedAgent(scripts)
+        issue = make_test_issue(title="Fix the widget")
+        runner, _, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, agent=agent, issue=issue)
+        runner.run()
+        assert any("Fix the widget" in n for n in notifier.notifications)
+
     def test_context_limit_auto_resumes(self, tmp_path):
         """Context limit should auto-resume with a new prompt."""
         agent = ScriptedAgent([
@@ -472,6 +481,15 @@ class TestPostRun:
         assert st.status == "suspended:unexpected"
         assert any("unexpectedly" in n for n in notifier.notifications)
 
+    def test_unexpected_status_includes_title(self, tmp_path):
+        issue = make_test_issue(title="Fix the widget")
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, issue=issue)
+        runner._workspace = Workspace(path=tmp_path, branch="test")
+        state_mgr.update_status("some-weird-status")
+        runner._post_run()
+        assert any("Fix the widget" in n for n in notifier.notifications)
+
     def test_done_pending_review_notifies(self, tmp_path):
         runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path)
         runner._workspace = Workspace(path=tmp_path, branch="test")
@@ -499,6 +517,15 @@ class TestHooks:
         st = state_mgr.load_state()
         assert st.status == "suspended:hook-failure"
         assert any("before_run hook failed" in n for n in notifier.notifications)
+
+    def test_before_run_hook_failure_includes_title(self, tmp_path):
+        hooks = HooksConfig(after_create=None, before_run="fail", after_run=None)
+        issue = make_test_issue(title="Fix the widget")
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=[_exit_event()], hooks_config=hooks, issue=issue)
+        ws_mgr.run_hook = lambda path, script, timeout: script != "fail"
+        runner.run()
+        assert any("Fix the widget" in n for n in notifier.notifications)
 
     def test_after_run_hook_runs(self, tmp_path):
         hooks = HooksConfig(after_create=None, before_run=None, after_run="echo done")
