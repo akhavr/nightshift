@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -16,40 +17,107 @@ log = logging.getLogger(__name__)
 _LOCK_RETRIES = 3
 _LOCK_RETRY_DELAY_S = 5
 _CMD_TIMEOUT_S = 30
+_POLL_INTERVAL_S = 0.1
+_GRACEFUL_KILL_TIMEOUT_S = 5
+
+
+def _graceful_kill(proc: subprocess.Popen, timeout: int = _GRACEFUL_KILL_TIMEOUT_S) -> None:
+    """Terminate a subprocess, escalating to kill if it doesn't exit in time."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 class GitBugTracker:
-    def __init__(self, repo_dir: str | Path = "/workspace"):
+    def __init__(self, repo_dir: str | Path = "/workspace",
+                 shutdown_event: threading.Event | None = None):
         self.cwd = str(repo_dir)
+        self._shutdown = shutdown_event or threading.Event()
+        self._current_proc: subprocess.Popen | None = None
+        self._proc_lock = threading.Lock()
 
     def _run(self, *args: str, timeout: int = _CMD_TIMEOUT_S, ignore_rc: set[int] | None = None) -> str:
         for attempt in range(_LOCK_RETRIES):
+            if self._shutdown.is_set():
+                return ""
             try:
-                r = subprocess.run(
-                    ["git-bug", *args], cwd=self.cwd,
-                    capture_output=True, text=True, timeout=timeout,
+                stdout, stderr, returncode = self._run_interruptible(
+                    ["git-bug", *args], timeout=timeout,
                 )
-                if r.returncode == 0:
-                    return r.stdout.strip()
-                if r.returncode in (ignore_rc or set()):
-                    return r.stdout.strip()
-                if "already locked by the process pid" in r.stderr:
-                    # Check if the locking process is still alive
-                    pid = self._extract_lock_pid(r.stderr)
+                if returncode is None:
+                    return ""  # shutdown interrupted
+                if returncode == 0:
+                    return stdout.strip()
+                if returncode in (ignore_rc or set()):
+                    return stdout.strip()
+                if "already locked by the process pid" in stderr:
+                    pid = self._extract_lock_pid(stderr)
                     if pid and not self._pid_alive(pid):
                         log.warning(f"git-bug locked by dead process {pid} — clearing lock")
                         self._clear_stale_lock()
                         continue  # retry immediately after clearing
                     if attempt < _LOCK_RETRIES - 1:
                         log.info(f"git-bug locked (pid {pid}), retrying in {_LOCK_RETRY_DELAY_S}s...")
-                        time.sleep(_LOCK_RETRY_DELAY_S)
+                        if self._shutdown.wait(timeout=_LOCK_RETRY_DELAY_S):
+                            return ""  # shutdown during retry sleep
                         continue
-                log.warning(f"git-bug {' '.join(args)} failed (rc={r.returncode}): {r.stderr.strip()}")
-                return r.stdout.strip()
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                log.warning(f"git-bug {' '.join(args)} failed (rc={returncode}): {stderr.strip()}")
+                return stdout.strip()
+            except subprocess.TimeoutExpired:
+                log.warning(f"git-bug {args[0]} timed out after {timeout}s")
+                return ""
+            except OSError as e:
                 log.warning(f"git-bug {args[0]} failed: {e}")
                 return ""
         return ""
+
+    def _run_interruptible(self, cmd: list[str], timeout: int
+                           ) -> tuple[str, str, int | None]:
+        """Run a subprocess with poll loop so signals can interrupt it.
+
+        Returns (stdout, stderr, returncode). returncode is None if
+        shutdown interrupted before the process finished.
+        """
+        with self._proc_lock:
+            if self._shutdown.is_set():
+                return ("", "", None)
+            proc = subprocess.Popen(
+                cmd, cwd=self.cwd,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            self._current_proc = proc
+
+        try:
+            deadline = time.monotonic() + timeout
+            while proc.poll() is None:
+                if self._shutdown.is_set():
+                    _graceful_kill(proc)
+                    return ("", "", None)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    proc.kill()
+                    proc.wait()
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                # Short sleep so we check shutdown frequently
+                time.sleep(min(_POLL_INTERVAL_S, remaining))
+
+            stdout = proc.stdout.read() if proc.stdout else ""
+            stderr = proc.stderr.read() if proc.stderr else ""
+            return (stdout, stderr, proc.returncode)
+        finally:
+            with self._proc_lock:
+                self._current_proc = None
+
+    def terminate_current(self):
+        """Terminate any in-flight child process. Called during shutdown."""
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc and proc.poll() is None:
+            log.info("Terminating in-flight git-bug process")
+            _graceful_kill(proc)
 
     @staticmethod
     def _extract_lock_pid(stderr: str) -> int | None:

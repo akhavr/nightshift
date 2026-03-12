@@ -15,8 +15,6 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from host.constants import SHORT_ID_LEN
-
 log = logging.getLogger("watcher")
 
 # Maximum characters of question text to include in a comment.

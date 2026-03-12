@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -67,8 +68,21 @@ class HostWatcher:
             self._auto_start_config = self._config.auto_start
         return self._auto_start_config
 
-    def run(self):
-        """Main watcher loop -- delegates to helper classes."""
+    def run(self, shutdown_event: threading.Event | None = None):
+        """Main watcher loop -- delegates to helper classes.
+
+        Args:
+            shutdown_event: Optional event that, when set, causes the loop
+                to exit cleanly. Used by signal handlers for graceful shutdown.
+        """
+        self._shutdown = shutdown_event or threading.Event()
+
+        # Propagate shutdown event to tracker so interruptible subprocess
+        # polls can be interrupted when stuck in git-bug calls
+        tracker = self._get_tracker()
+        if hasattr(tracker, '_shutdown'):
+            tracker._shutdown = self._shutdown
+
         log.info(f"Watching {self.sessions_dir}")
         if self.telegram.enabled:
             log.info("Telegram polling enabled")
@@ -86,7 +100,7 @@ class HostWatcher:
         else:
             log.info("Auto-start disabled")
 
-        while True:
+        while not self._shutdown.is_set():
             tg_answers, tg_reviews = (
                 self.telegram.poll_all(self.qa._paused) if self.telegram.enabled else ({}, {})
             )
@@ -100,7 +114,16 @@ class HostWatcher:
             self.monitor.check_closed_issues()
             if self.auto_start:
                 self.monitor.check_new_issues()
-            time.sleep(MAIN_LOOP_SLEEP_S)
+            # Use event.wait() instead of time.sleep() so shutdown
+            # can interrupt the sleep immediately
+            self._shutdown.wait(timeout=MAIN_LOOP_SLEEP_S)
+
+        # Terminate any in-flight tracker subprocesses (e.g. git-bug sync)
+        tracker = self._get_tracker()
+        if hasattr(tracker, 'terminate_current'):
+            tracker.terminate_current()
+
+        log.info("Watcher shutdown complete")
 
     def _maybe_sync_tracker(self):
         """Sync tracker at most once per review poll interval."""

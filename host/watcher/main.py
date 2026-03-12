@@ -2,12 +2,26 @@
 
 import argparse
 import logging
+import signal
 import subprocess
+import threading
 from pathlib import Path
 
 from host.env import load_all_dotenv
 from host.session_utils import get_repo_root
 from host.watcher.host_watcher import HostWatcher
+
+log = logging.getLogger("watcher")
+
+# Module-level shutdown event so signal handlers can set it
+shutdown_event = threading.Event()
+
+
+def _handle_shutdown(signum, frame):
+    """Signal handler for SIGTERM/SIGINT — sets the shutdown event."""
+    sig_name = signal.Signals(signum).name
+    log.info(f"Received {sig_name}, shutting down...")
+    shutdown_event.set()
 
 
 def main():
@@ -29,6 +43,10 @@ def main():
             filename=a.log_file,
         )
 
+    # Install signal handlers before starting the main loop
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     # Load .env from repo root (does not override existing env vars)
     try:
         repo = get_repo_root()
@@ -36,4 +54,5 @@ def main():
     except subprocess.CalledProcessError:
         repo = Path.cwd()
 
-    HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start).run()
+    watcher = HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start)
+    watcher.run(shutdown_event=shutdown_event)
