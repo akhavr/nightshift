@@ -445,6 +445,67 @@ class TestReviewOrchestratorPostsDone:
         assert "complete" in body
         assert "Checkpoints: 2" in body
 
+    def test_done_comment_reposted_after_revise_auto_review(self, tmp_path):
+        """After auto-review revise verdict, second completion gets a new done comment."""
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+
+        # First done comment
+        w.reviews.check_for_auto_review()
+        assert tracker.add_comment.call_count == 1
+        assert "complete" in tracker.add_comment.call_args[0][1]
+
+        # Simulate auto-review revise verdict clearing _posted_done
+        w.reviews._posted_done.discard("abc")
+
+        # Update state back to waiting:review (coder completed again)
+        state = json.loads((sd / "state.json").read_text())
+        state["status"] = "waiting:review"
+        state["checkpoints"] = [{"id": 1}, {"id": 2}, {"id": 3}]
+        (sd / "state.json").write_text(json.dumps(state))
+        tracker.reset_mock()
+
+        w.reviews.check_for_auto_review()
+
+        # Second done comment SHOULD be posted
+        tracker.add_comment.assert_called_once()
+        assert "Checkpoints: 3" in tracker.add_comment.call_args[0][1]
+
+    def test_done_comment_reposted_after_human_revise(self, tmp_path):
+        """After human @nightshift revise, second completion gets a new done comment."""
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+
+        # First done comment
+        w.reviews.check_for_auto_review()
+        assert tracker.add_comment.call_count == 1
+        tracker.reset_mock()
+
+        # Human revise command clears _posted_done
+        launched = []
+        w.reviews.commands._launch_background = lambda cmd, sid: launched.append(sid)
+        tracker.get_comments.return_value = [
+            MagicMock(body="@nightshift revise", author="human")
+        ]
+        w.reviews._dispatch_review_command("abc", "issue-abc", "revise", sd)
+
+        # Verify _posted_done was cleared
+        assert "abc" not in w.reviews._posted_done
+
+        # Second completion
+        state = json.loads((sd / "state.json").read_text())
+        state["status"] = "waiting:review"
+        (sd / "state.json").write_text(json.dumps(state))
+        tracker.reset_mock()
+
+        w.reviews.check_for_auto_review()
+        tracker.add_comment.assert_called_once()
+        assert "complete" in tracker.add_comment.call_args[0][1]
+
     def test_done_comment_not_posted_twice(self, tmp_path):
         tracker = MagicMock()
         w = _make_watcher(tmp_path)

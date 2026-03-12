@@ -221,6 +221,7 @@ class ReviewOrchestrator:
         if verdict == "approve":
             self.verdicts.handle_reviewer_approve(coder_sid, coder_dir, issue_id)
         elif verdict == "revise":
+            self._posted_done.discard(coder_sid)
             self.verdicts.handle_reviewer_revise(coder_sid, coder_dir, issue_id, session_dir)
 
         self.cleanup_review_session(sid, session_dir)
@@ -327,6 +328,7 @@ class ReviewOrchestrator:
             return
 
         if cmd == "revise":
+            self._posted_done.discard(sid)
             self.do_revise(sid, issue_id, session_dir)
         elif cmd == "accept":
             self.do_cli_command(sid, "accept", issue_id)
