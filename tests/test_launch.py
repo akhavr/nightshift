@@ -15,6 +15,7 @@ from core.protocols import TrackerIssue
 from host.workspace_setup import create_worktree
 from host.issue_dump import dump_issue_data
 from host.docker_cmd import build_docker_cmd
+from host.launch import _resolve_names
 
 
 # ── Fixtures ──────────────────────────────────────────────
@@ -643,3 +644,25 @@ class TestPrepareReviewSession:
         prepare_review_session(repo, review_session, short_id, config)
 
         assert (review_session / "diff.patch").read_text() == "N/A"
+
+
+# ── _resolve_names tests ─────────────────────────────────
+
+class TestResolveNames:
+
+    def test_coder_container_name(self, config):
+        names = _resolve_names("abc123def456ef", "coder", config)
+        assert names["container_name"] == "nightshift-abc123def456"
+        assert not names["is_review"]
+        assert names["session_name"] == "abc123def456"
+
+    def test_review_container_name(self, config):
+        names = _resolve_names("abc123def456ef", "review", config)
+        assert names["container_name"] == "nightshift-review-abc123def456"
+        assert names["is_review"]
+        assert names["session_name"] == "review-abc123def456"
+
+    def test_no_container_name_collision(self, config):
+        coder = _resolve_names("abc123def456ef", "coder", config)
+        review = _resolve_names("abc123def456ef", "review", config)
+        assert coder["container_name"] != review["container_name"]
