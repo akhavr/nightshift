@@ -38,6 +38,7 @@ class GitBugTracker:
         self._shutdown = shutdown_event or threading.Event()
         self._current_proc: subprocess.Popen | None = None
         self._proc_lock = threading.Lock()
+        self._has_remote: bool | None = None  # lazy-detected on first sync
 
     def _run(self, *args: str, timeout: int = _CMD_TIMEOUT_S, ignore_rc: set[int] | None = None) -> str:
         for attempt in range(_LOCK_RETRIES):
@@ -202,6 +203,22 @@ class GitBugTracker:
     def remove_label(self, issue_id: str, label: str) -> None:
         self._run("bug", "label", "rm", issue_id, label, ignore_rc={1})
 
+    _NO_REMOTE_MARKERS = ("remote not found", "unable to resolve URL for remote")
+
     def sync(self) -> None:
-        self._run("pull")
-        self._run("push")
+        if self._has_remote is False:
+            return
+        if self._has_remote is None:
+            # Probe once — run pull and check stderr for missing remote
+            stdout, stderr, rc = self._run_interruptible(
+                ["git-bug", "pull"], timeout=_CMD_TIMEOUT_S)
+            if rc and any(m in (stderr or "") for m in self._NO_REMOTE_MARKERS):
+                log.info("git-bug has no remote configured — skipping sync")
+                self._has_remote = False
+                return
+            self._has_remote = True
+            # pull already ran; just do push
+            self._run("push")
+        else:
+            self._run("pull")
+            self._run("push")

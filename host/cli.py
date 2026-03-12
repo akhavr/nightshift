@@ -328,8 +328,8 @@ def cmd_init(a):
     _update_gitignore(root)
 
     print("\nNext steps:")
-    print("  1. cp .env.example .env && edit .env with your credentials")
-    print("  2. Review and customize WORKFLOW.md")
+    print("  1. Review and customize WORKFLOW.md (notifications, auto_start, base_branch)")
+    print("  2. Optionally: cp .env.example .env && edit (not needed if vars are already exported)")
     print("  3. Run: nightshift start <issue-id>")
 
 
