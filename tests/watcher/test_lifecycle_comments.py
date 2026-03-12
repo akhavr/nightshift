@@ -1,0 +1,399 @@
+"""Tests for lifecycle comment posting to the issue tracker."""
+
+import json
+import sys
+import time
+from pathlib import Path
+from unittest.mock import MagicMock, patch, call
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from host.watcher.lifecycle_comments import (
+    _safe_post, post_start, post_resume, post_question,
+    post_done, post_revise, read_checkpoint_count,
+    _QUESTION_PREVIEW_LEN,
+)
+from tests.watcher.conftest import _make_watcher, _make_session
+
+
+# ---------------------------------------------------------------------------
+# _safe_post
+# ---------------------------------------------------------------------------
+
+class TestSafePost:
+    def test_posts_comment_and_syncs(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+
+        _safe_post(get_tracker, "issue-1", "hello", "test", "sid-1")
+
+        tracker.add_comment.assert_called_once_with("issue-1", "hello")
+        tracker.sync.assert_called_once()
+
+    def test_logs_on_tracker_failure(self):
+        get_tracker = MagicMock(side_effect=RuntimeError("tracker down"))
+
+        # Should not raise
+        _safe_post(get_tracker, "issue-1", "hello", "test", "sid-1")
+
+    def test_logs_on_add_comment_failure(self):
+        tracker = MagicMock()
+        tracker.add_comment.side_effect = RuntimeError("write failed")
+        get_tracker = MagicMock(return_value=tracker)
+
+        # Should not raise
+        _safe_post(get_tracker, "issue-1", "hello", "test", "sid-1")
+
+    def test_logs_on_sync_failure(self):
+        tracker = MagicMock()
+        tracker.sync.side_effect = RuntimeError("sync failed")
+        get_tracker = MagicMock(return_value=tracker)
+
+        # Should not raise -- comment was posted even if sync fails
+        _safe_post(get_tracker, "issue-1", "hello", "test", "sid-1")
+        tracker.add_comment.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# post_start
+# ---------------------------------------------------------------------------
+
+class TestPostStart:
+    def test_posts_start_comment(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+
+        post_start(get_tracker, "issue-abc", "abc")
+
+        tracker.add_comment.assert_called_once()
+        body = tracker.add_comment.call_args[0][1]
+        assert "abc" in body
+        assert "started" in body
+        assert "nightshift logs" in body
+        assert "nightshift history" in body
+
+
+# ---------------------------------------------------------------------------
+# post_resume
+# ---------------------------------------------------------------------------
+
+class TestPostResume:
+    def test_posts_resume_comment_with_reason_and_checkpoints(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+
+        post_resume(get_tracker, "issue-abc", "abc",
+                    reason="orphaned (container gone)", checkpoint_count=3)
+
+        body = tracker.add_comment.call_args[0][1]
+        assert "resumed" in body
+        assert "orphaned" in body
+        assert "Checkpoint count: 3" in body
+
+
+# ---------------------------------------------------------------------------
+# post_question
+# ---------------------------------------------------------------------------
+
+class TestPostQuestion:
+    def test_posts_question_comment(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+
+        post_question(get_tracker, "issue-abc", "abc", "What is the DB password?")
+
+        body = tracker.add_comment.call_args[0][1]
+        assert "blocked on question" in body
+        assert "What is the DB password?" in body
+        assert "nightshift answer" in body
+
+    def test_truncates_long_question(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+        long_q = "x" * 500
+
+        post_question(get_tracker, "issue-abc", "abc", long_q)
+
+        body = tracker.add_comment.call_args[0][1]
+        assert "..." in body
+        assert len(body) < 500 + 200  # body shouldn't contain full 500 chars
+
+
+# ---------------------------------------------------------------------------
+# post_done
+# ---------------------------------------------------------------------------
+
+class TestPostDone:
+    def test_posts_done_comment(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+
+        post_done(get_tracker, "issue-abc", "abc", checkpoint_count=5)
+
+        body = tracker.add_comment.call_args[0][1]
+        assert "complete" in body
+        assert "Checkpoints: 5" in body
+        assert "nightshift logs" in body
+
+
+# ---------------------------------------------------------------------------
+# post_revise
+# ---------------------------------------------------------------------------
+
+class TestPostRevise:
+    def test_posts_revise_comment(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+
+        post_revise(get_tracker, "issue-abc", "abc", "Fix the tests")
+
+        body = tracker.add_comment.call_args[0][1]
+        assert "revision" in body
+        assert "Fix the tests" in body
+
+    def test_truncates_long_reason(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+        long_reason = "r" * 500
+
+        post_revise(get_tracker, "issue-abc", "abc", long_reason)
+
+        body = tracker.add_comment.call_args[0][1]
+        assert "..." in body
+
+
+# ---------------------------------------------------------------------------
+# read_checkpoint_count
+# ---------------------------------------------------------------------------
+
+class TestReadCheckpointCount:
+    def test_reads_checkpoint_count(self, tmp_path):
+        sd = tmp_path / "session"
+        sd.mkdir()
+        state = {"checkpoints": [{"id": 1}, {"id": 2}, {"id": 3}]}
+        (sd / "state.json").write_text(json.dumps(state))
+
+        assert read_checkpoint_count(sd) == 3
+
+    def test_returns_zero_on_missing_file(self, tmp_path):
+        sd = tmp_path / "session"
+        sd.mkdir()
+        assert read_checkpoint_count(sd) == 0
+
+    def test_returns_zero_on_invalid_json(self, tmp_path):
+        sd = tmp_path / "session"
+        sd.mkdir()
+        (sd / "state.json").write_text("not json{{{")
+        assert read_checkpoint_count(sd) == 0
+
+    def test_returns_zero_on_missing_checkpoints_key(self, tmp_path):
+        sd = tmp_path / "session"
+        sd.mkdir()
+        (sd / "state.json").write_text(json.dumps({"status": "working"}))
+        assert read_checkpoint_count(sd) == 0
+
+
+# ---------------------------------------------------------------------------
+# Integration: QAHandler posts question comment
+# ---------------------------------------------------------------------------
+
+class TestQAHandlerPostsQuestion:
+    def test_question_comment_posted_on_first_pause(self, tmp_path):
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        sd = _make_session(w.sessions_dir, "abc", issue_id="issue-abc")
+        waiting = {"question": "What is X?", "issue_id": "issue-abc"}
+        (sd / "waiting.json").write_text(json.dumps(waiting))
+
+        with patch("host.watcher.docker_pause", return_value=True), \
+             patch("host.watcher.time") as mock_time:
+            mock_time.sleep.return_value = None
+            mock_time.time.return_value = 1000.0
+            w.qa.scan_for_waiting()
+
+        tracker.add_comment.assert_called_once()
+        body = tracker.add_comment.call_args[0][1]
+        assert "What is X?" in body
+
+    def test_question_comment_not_posted_twice(self, tmp_path):
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        sd = _make_session(w.sessions_dir, "abc", issue_id="issue-abc")
+        waiting = {"question": "What is X?", "issue_id": "issue-abc"}
+        (sd / "waiting.json").write_text(json.dumps(waiting))
+
+        with patch("host.watcher.docker_pause", return_value=True), \
+             patch("host.watcher.time") as mock_time:
+            mock_time.sleep.return_value = None
+            mock_time.time.return_value = 1000.0
+            w.qa.scan_for_waiting()
+
+        # Reset tracker, remove from paused to simulate re-scan
+        tracker.reset_mock()
+        w.qa._paused.clear()
+
+        (sd / "waiting.json").write_text(json.dumps(waiting))
+        with patch("host.watcher.docker_pause", return_value=True), \
+             patch("host.watcher.time") as mock_time:
+            mock_time.sleep.return_value = None
+            mock_time.time.return_value = 2000.0
+            w.qa.scan_for_waiting()
+
+        # Comment should NOT be posted again
+        tracker.add_comment.assert_not_called()
+
+    def test_no_tracker_no_crash(self, tmp_path):
+        """QAHandler with no get_tracker should not crash."""
+        from host.watcher.qa_handler import QAHandler
+        from host.watcher.telegram_relay import TelegramRelay
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        tg = TelegramRelay("", "", "repo", sessions)
+        qa = QAHandler(sessions, tg)  # no get_tracker
+        sd = sessions / "abc"
+        sd.mkdir()
+        state = {"issue_id": "issue-abc", "branch": "b", "status": "working"}
+        (sd / "state.json").write_text(json.dumps(state))
+        waiting = {"question": "Q?", "issue_id": "issue-abc"}
+        (sd / "waiting.json").write_text(json.dumps(waiting))
+
+        with patch("host.watcher.docker_pause", return_value=True), \
+             patch("host.watcher.time") as mock_time:
+            mock_time.sleep.return_value = None
+            mock_time.time.return_value = 1000.0
+            qa.scan_for_waiting()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Integration: SessionMonitor posts start comment
+# ---------------------------------------------------------------------------
+
+class TestSessionMonitorPostsStart:
+    def test_start_comment_posted_on_auto_start(self, tmp_path):
+        from core.protocols import TrackerIssue
+
+        tracker = MagicMock()
+        issue = TrackerIssue(
+            id="issue-new-123456789012",
+            identifier="issue-new-12",
+            title="New issue",
+            body="",
+            status="open",
+            labels=["nightshift"],
+        )
+        tracker.list_issues.return_value = [issue]
+
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        w.auto_start = True
+        w.monitor.auto_start = True
+        w.monitor._last_auto_start_poll = 0.0
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        asc = MagicMock()
+        asc.enabled = True
+        asc.label = "nightshift"
+        asc.poll_interval_s = 0
+        asc.max_concurrent = 5
+        w.monitor._get_auto_start_config = lambda: asc
+
+        w.monitor.check_new_issues()
+
+        assert len(launched) == 1
+        # Verify start comment was posted
+        tracker.add_comment.assert_called_once()
+        body = tracker.add_comment.call_args[0][1]
+        assert "started" in body
+
+
+# ---------------------------------------------------------------------------
+# Integration: SessionMonitor posts resume comment
+# ---------------------------------------------------------------------------
+
+class TestSessionMonitorPostsResume:
+    def test_resume_comment_posted_on_orphan_recovery(self, tmp_path):
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert "abc" in launched
+        tracker.add_comment.assert_called_once()
+        body = tracker.add_comment.call_args[0][1]
+        assert "resumed" in body
+        assert "orphaned" in body
+
+
+# ---------------------------------------------------------------------------
+# Integration: ReviewOrchestrator posts done comment
+# ---------------------------------------------------------------------------
+
+class TestReviewOrchestratorPostsDone:
+    def test_done_comment_posted_when_session_reaches_waiting_review(self, tmp_path):
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        # Add some checkpoints to state
+        state = json.loads((sd / "state.json").read_text())
+        state["checkpoints"] = [{"id": 1}, {"id": 2}]
+        (sd / "state.json").write_text(json.dumps(state))
+
+        # No REVIEW.md -> won't launch review, but done comment should still post
+        w.reviews.check_for_auto_review()
+
+        tracker.add_comment.assert_called_once()
+        body = tracker.add_comment.call_args[0][1]
+        assert "complete" in body
+        assert "Checkpoints: 2" in body
+
+    def test_done_comment_not_posted_twice(self, tmp_path):
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+
+        w.reviews.check_for_auto_review()
+        tracker.reset_mock()
+        w.reviews.check_for_auto_review()
+
+        tracker.add_comment.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Integration: VerdictHandler posts revise comment
+# ---------------------------------------------------------------------------
+
+class TestVerdictHandlerPostsRevise:
+    def test_revise_comment_posted(self, tmp_path):
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                   issue_id="issue-abc")
+
+        # Write reviewer conversation with revise verdict
+        conv = {"role": "assistant", "content": "@nightshift revise: fix the tests please"}
+        (review_dir / "conversation.jsonl").write_text(json.dumps(conv) + "\n")
+
+        launched = []
+        w.reviews.verdicts._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.reviews.verdicts.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
+
+        # Should have posted revise comment
+        assert any("revision" in str(c) for c in tracker.add_comment.call_args_list)

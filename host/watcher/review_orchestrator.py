@@ -107,8 +107,7 @@ class ReviewOrchestrator:
             return
 
         review_md = self.repo_dir / "REVIEW.md"
-        if not review_md.exists():
-            return
+        waiting_sessions = []
 
         for session_dir in self.sessions_dir.iterdir():
             if not session_dir.is_dir() or session_dir.name.startswith("review-"):
@@ -124,12 +123,22 @@ class ReviewOrchestrator:
             if state.get("status") != "waiting:review":
                 continue
             issue_id = state.get("issue_id", "")
-            if issue_id:
-                if sid not in self._posted_done:
-                    self._posted_done.add(sid)
-                    cp_count = read_checkpoint_count(session_dir)
-                    post_done(self._get_tracker, issue_id, sid, cp_count)
-                self.maybe_launch_review(sid, session_dir, issue_id, review_md)
+            if not issue_id:
+                continue
+
+            # Post done comment once per session (regardless of REVIEW.md)
+            if sid not in self._posted_done:
+                self._posted_done.add(sid)
+                cp_count = read_checkpoint_count(session_dir)
+                post_done(self._get_tracker, issue_id, sid, cp_count)
+
+            waiting_sessions.append((sid, session_dir, issue_id))
+
+        if not review_md.exists():
+            return
+
+        for sid, session_dir, issue_id in waiting_sessions:
+            self.maybe_launch_review(sid, session_dir, issue_id, review_md)
 
     def maybe_launch_review(self, sid: str, session_dir: Path,
                             issue_id: str, review_md: Path):
