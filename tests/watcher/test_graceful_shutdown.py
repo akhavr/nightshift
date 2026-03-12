@@ -12,9 +12,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from host.cli import cmd_watcher
 from host.watcher.main import _handle_shutdown, shutdown_event
 from host.watcher.host_watcher import HostWatcher
-from adapters.trackers.git_bug import GitBugTracker, _POLL_INTERVAL_S, _graceful_kill
+from adapters.trackers.git_bug import GitBugTracker, _graceful_kill
 
 from tests.watcher.conftest import _make_watcher
 
@@ -282,3 +283,54 @@ class TestGitBugTrackerShutdown:
 
         mock_proc.terminate.assert_called_once()
         mock_proc.kill.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# cmd_watcher uses os.execvpe (no orphan child process)
+# ---------------------------------------------------------------------------
+
+class TestCmdWatcherExecvpe:
+    def test_cmd_watcher_uses_execvpe(self, tmp_path):
+        """cmd_watcher replaces the process via os.execvpe so signals reach watcher directly."""
+        args = MagicMock()
+        args.no_auto_start = False
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli.sessions_dir", return_value=tmp_path / "sessions"), \
+             patch("host.cli.os.execvpe") as mock_exec:
+            (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+            cmd_watcher(args)
+
+            mock_exec.assert_called_once()
+            call_args = mock_exec.call_args
+            cmd = call_args[0][1]  # second positional arg is the argv list
+            assert "-m" in cmd
+            assert "host.watcher" in cmd
+
+    def test_cmd_watcher_passes_no_auto_start(self, tmp_path):
+        """cmd_watcher passes --no-auto-start flag when set."""
+        args = MagicMock()
+        args.no_auto_start = True
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli.sessions_dir", return_value=tmp_path / "sessions"), \
+             patch("host.cli.os.execvpe") as mock_exec:
+            (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+            cmd_watcher(args)
+
+            cmd = mock_exec.call_args[0][1]
+            assert "--no-auto-start" in cmd
+
+    def test_cmd_watcher_sets_pythonpath(self, tmp_path):
+        """cmd_watcher sets PYTHONPATH to agent-worker root in the exec env."""
+        args = MagicMock()
+        args.no_auto_start = False
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli.sessions_dir", return_value=tmp_path / "sessions"), \
+             patch("host.cli.os.execvpe") as mock_exec:
+            (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+            cmd_watcher(args)
+
+            env = mock_exec.call_args[0][2]  # third positional arg is env dict
+            assert "PYTHONPATH" in env
