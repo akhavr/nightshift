@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 READ_TIMEOUT_S = 10.0
 STALL_TIMEOUT_S = 300.0
+PROCESS_TERMINATE_TIMEOUT_S = 10  # Wait before kill on terminate
 TOOL_RESULT_PREVIEW_LEN = 500
 TOOL_INPUT_PREVIEW_LEN = 300
 
@@ -106,7 +107,7 @@ class ClaudeCodeAgent:
     def terminate(self) -> None:
         if self._process and self._process.poll() is None:
             self._process.terminate()
-            try: self._process.wait(timeout=10)
+            try: self._process.wait(timeout=PROCESS_TERMINATE_TIMEOUT_S)
             except Exception: self._process.kill(); self._process.wait()
         self._process = None; self._pid = None
         # Note: _session_id is preserved so next start() can --resume

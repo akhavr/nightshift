@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
-from host.constants import SHORT_ID_LEN
+from host.constants import SHORT_ID_LEN, DISPLAY_SEPARATOR_WIDTH, LOG_PREVIEW_LEN
 from host.env import load_all_dotenv
 from host.merge import (
     resolve_merge_ref, check_working_tree_clean,
@@ -95,7 +95,7 @@ def cmd_status(a):
     if not sd.exists():
         print("No sessions."); return
     print(f"{'SESSION':<14} {'STATUS':<26} {'STEP':>5} {'CPS':>4}")
-    print("-" * 54)
+    print("-" * DISPLAY_SEPARATOR_WIDTH)
     for f in sorted(sd.glob("*/state.json")):
         sid = f.parent.name
         try:
@@ -123,7 +123,7 @@ def cmd_history(a):
         try:
             e = json.loads(line)
             print(f"  {e['timestamp'][:19]}  {icons.get(e['role'],'•')} "
-                  f"[{e['role']}] {e['content'][:120]}")
+                  f"[{e['role']}] {e['content'][:LOG_PREVIEW_LEN * 2]}")
         except Exception:
             continue
 

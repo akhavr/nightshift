@@ -2,6 +2,12 @@
 
 import re
 from typing import Callable
+
+try:
+    import jinja2
+except ImportError:
+    jinja2 = None  # type: ignore[assignment]
+
 from core.state import StateManager
 from core.protocols import TrackerIssue
 
@@ -22,15 +28,14 @@ def render_template(
     Extra keyword arguments are passed as additional template variables
     (e.g. diff, base_branch, agent_branch for REVIEW.md).
     """
-    try:
-        import jinja2
+    if jinja2 is not None:
         env = jinja2.Environment(undefined=jinja2.Undefined)
         tmpl = env.from_string(template)
         return tmpl.render(
             issue=issue, related_context=related_context, attempt=attempt,
             **extra_vars,
         )
-    except ImportError:
+    else:
         # Fallback: simple {{ var }} replacement (no conditionals)
         result = template
         result = result.replace("{{ issue.title }}", issue.title)

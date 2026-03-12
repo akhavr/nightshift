@@ -4,7 +4,9 @@ import json
 import logging
 from pathlib import Path
 
-from host.constants import PRE_PAUSE_DELAY_S, STILL_WAITING_LOG_INTERVAL_S, SHORT_ID_LEN
+from host.constants import (
+    PRE_PAUSE_DELAY_S, STILL_WAITING_LOG_INTERVAL_S, SHORT_ID_LEN, LOG_PREVIEW_LEN,
+)
 from host.watcher.telegram_relay import TelegramRelay
 
 log = logging.getLogger("watcher")
@@ -56,7 +58,7 @@ class QAHandler:
                         "paused_at": _pkg().time.time(),
                         "tg_msg_id": None,
                     }
-                    log.info(f"[{sid}] Paused. Question: {data.get('question', '')[:60]}")
+                    log.info(f"[{sid}] Paused. Question: {data.get('question', '')[:LOG_PREVIEW_LEN]}")
 
                     # Forward question to Telegram if not already sent by container
                     if self.telegram.enabled and data.get("question"):
@@ -82,7 +84,7 @@ class QAHandler:
             # Check Telegram replies
             if sid in tg_replies:
                 answer = tg_replies[sid]
-                log.info(f"[{sid}] Telegram reply: {answer[:60]}")
+                log.info(f"[{sid}] Telegram reply: {answer[:LOG_PREVIEW_LEN]}")
                 answer_file.write_text(answer)
                 _pkg().docker_unpause(info["container"])
                 log.info(f"[{sid}] Unpaused.")

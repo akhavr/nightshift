@@ -26,3 +26,11 @@ TG_POST_TIMEOUT_S = 10
 TG_MESSAGE_HARD_LIMIT = 4096
 TG_MESSAGE_SOFT_LIMIT = 4000
 TG_TRUNCATION_POINT = 3950
+
+# ── Adapters ───────────────────────────────────────────
+HTTP_REQUEST_TIMEOUT_S = 10       # Default timeout for outgoing HTTP calls
+PROCESS_TERMINATE_TIMEOUT_S = 10  # Timeout for process termination before kill
+DISPLAY_SEPARATOR_WIDTH = 54      # Width of CLI separator lines
+LOG_PREVIEW_LEN = 60             # Truncation length for log message previews
+FILE_LIST_PREVIEW_LEN = 10       # Max files to show in error file lists
+CONFLICT_FILE_PREVIEW_LEN = 20   # Max conflict files to show

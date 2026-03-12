@@ -7,6 +7,8 @@ import requests
 from core.protocols import Notifier
 from adapters.notifiers._utils import project_prefix
 
+HTTP_REQUEST_TIMEOUT_S = 10  # Default timeout for outgoing HTTP calls
+
 log = logging.getLogger(__name__)
 
 
@@ -22,7 +24,7 @@ class WebhookNotifier:
 
     def notify(self, message: str) -> None:
         if self.url:
-            try: requests.post(self.url, json={"text": project_prefix(message)}, timeout=10)
+            try: requests.post(self.url, json={"text": project_prefix(message)}, timeout=HTTP_REQUEST_TIMEOUT_S)
             except Exception as e:
                 log.warning(f"Webhook notify failed: {e}")
 

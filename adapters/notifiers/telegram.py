@@ -11,6 +11,11 @@ import requests
 from core.protocols import Notifier, IssueTracker, SHORT_ID_LEN
 from adapters.notifiers._utils import project_prefix
 
+HTTP_REQUEST_TIMEOUT_S = 10   # Default timeout for outgoing HTTP calls
+TG_LONG_POLL_TIMEOUT_S = 2   # Telegram getUpdates long-poll timeout
+TG_POLL_HTTP_TIMEOUT_S = 7   # HTTP timeout for getUpdates (> long-poll)
+TG_ERROR_BACKOFF_S = 5        # Sleep on poll error before retry
+
 log = logging.getLogger(__name__)
 
 
@@ -41,7 +46,7 @@ class TelegramNotifier:
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
                 json={"chat_id": self.chat_id,
                       "text": project_prefix(f"🤖 {message}"),
-                      "parse_mode": "Markdown"}, timeout=10)
+                      "parse_mode": "Markdown"}, timeout=HTTP_REQUEST_TIMEOUT_S)
         except requests.RequestException as e:
             log.warning(f"Telegram notify failed: {e}")
 
@@ -58,7 +63,7 @@ class TelegramNotifier:
                     "parse_mode": "Markdown",
                     "reply_markup": {"force_reply": True, "selective": True,
                                      "input_field_placeholder": "Answer..."},
-                }, timeout=10)
+                }, timeout=HTTP_REQUEST_TIMEOUT_S)
             d = resp.json()
             if not d.get("ok"): return False
             with self._lock:
@@ -87,13 +92,14 @@ class TelegramNotifier:
             try:
                 resp = requests.get(
                     f"https://api.telegram.org/bot{self.token}/getUpdates",
-                    params={"offset": self._offset, "timeout": 2,
-                            "allowed_updates": json.dumps(["message"])}, timeout=7)
+                    params={"offset": self._offset, "timeout": TG_LONG_POLL_TIMEOUT_S,
+                            "allowed_updates": json.dumps(["message"])},
+                    timeout=TG_POLL_HTTP_TIMEOUT_S)
                 for u in resp.json().get("result", []):
                     self._offset = u["update_id"] + 1
                     self._handle(u)
             except Exception as e:
-                log.warning(f"Telegram: {e}"); time.sleep(5)
+                log.warning(f"Telegram: {e}"); time.sleep(TG_ERROR_BACKOFF_S)
 
     def _handle(self, u: dict):
         msg = u.get("message", {}); text = msg.get("text", "").strip()
