@@ -6,6 +6,7 @@ from core.protocols import (
     AgentEvent, AgentEventType, TrackerIssue, Workspace,
 )
 from core.state import StateManager, SessionState
+from core.constants import TITLE_TRUNCATE_LEN
 from core.post_run import (
     post_run_action, notify_done, resume_with_answer,
     prepare_resume, maybe_summarize_checkpoints,
@@ -102,6 +103,43 @@ class TestPostRunAction:
         assert sm.load_state().status == "suspended:unexpected"
         assert any("unexpectedly" in n for n in notifier.notifications)
 
+    def test_cancelled_external_includes_title(self, tmp_path):
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("cancelled:external")
+        post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None)
+        assert any(issue.title in n for n in notifier.notifications)
+
+    def test_unexpected_status_includes_title(self, tmp_path):
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("some-weird-status")
+        post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None)
+        assert any(issue.title in n for n in notifier.notifications)
+
+    def test_context_limit_resume_includes_title(self, tmp_path):
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("suspended:context-limit")
+        sm.write_resume_prompt("resume prompt")
+        post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None)
+        assert any(issue.title in n for n in notifier.notifications)
+
+    def test_long_title_truncated_in_notification(self, tmp_path):
+        long_title = "A" * 100
+        issue = make_test_issue(title=long_title)
+        agent, tracker, notifier, ws_mgr, sm, ws, _ = _setup(tmp_path, issue=issue)
+        sm.update_status("cancelled:external")
+        post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None)
+        notification = notifier.notifications[-1]
+        assert long_title[:TITLE_TRUNCATE_LEN] in notification
+        assert long_title not in notification
+
 
 class TestResumeWithAnswer:
     def test_returns_answer(self, tmp_path):
@@ -134,6 +172,12 @@ class TestNotifyDone:
         st = sm.load_state()
         notify_done(sm, ws_mgr, None, tracker, notifier, issue, st)
         assert sm.load_state().status == "waiting:review"
+
+    def test_done_notification_includes_title(self, tmp_path):
+        _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        st = sm.load_state()
+        notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
+        assert any(issue.title in n for n in notifier.notifications)
 
 
 class TestMaybeSummarizeCheckpoints:

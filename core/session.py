@@ -7,6 +7,7 @@ import logging
 import time
 
 from core.config import MergeConfig
+from core.constants import TITLE_TRUNCATE_LEN
 from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
 from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
@@ -24,7 +25,6 @@ RECONCILE_S = 60
 QUESTION_WAIT_TIMEOUT_S = 30  # OQ-4: fallback if @@WAITING@@ never arrives
 MAX_RESUMES = 10  # prevent infinite context-limit loops
 COMMIT_DESC_MAX_LEN = 60     # max description length in checkpoint commit messages
-TITLE_MAX_LEN = 60           # truncation length for issue titles in notifications
 
 
 class SessionRunner:
@@ -75,7 +75,7 @@ class SessionRunner:
             if not self._run_hook(self.hooks_config.before_run, "before_run", fatal=True):
                 self.state_mgr.update_status("suspended:hook-failure")
                 self.notifier.notify(
-                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_MAX_LEN]}: before_run hook failed.")
+                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]}: before_run hook failed.")
                 return False
 
         self.state_mgr.append_conversation("user", prompt)
@@ -101,7 +101,7 @@ class SessionRunner:
                 log.error(f"Hit max resumes ({MAX_RESUMES}). Stopping.")
                 self.state_mgr.update_status("suspended:max-resumes")
                 self.notifier.notify(
-                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_MAX_LEN]} hit {MAX_RESUMES} resumes. Manual --resume needed.")
+                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]} hit {MAX_RESUMES} resumes. Manual --resume needed.")
                 break
 
             if not self._run_agent_cycle(prompt):

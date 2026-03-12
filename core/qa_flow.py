@@ -8,11 +8,10 @@ import logging
 
 from core.answer_collector import collect_answer, ANSWER_PREVIEW_LEN
 from core.protocols import CodingAgent, IssueTracker, Notifier, TrackerIssue
+from core.constants import TITLE_TRUNCATE_LEN
 from core.state import StateManager
 
 log = logging.getLogger(__name__)
-
-TITLE_MAX_LEN = 60  # truncation length for issue titles in notifications
 
 
 def handle_question(
@@ -34,7 +33,7 @@ def handle_question(
     sent_via_notifier = notifier.send_question(
         issue.id, question, issue.identifier)
     if not sent_via_notifier:
-        notifier.notify(f"❓ [{issue.identifier}] {issue.title[:TITLE_MAX_LEN]}: {question}")
+        notifier.notify(f"❓ [{issue.identifier}] {issue.title[:TITLE_TRUNCATE_LEN]}: {question}")
 
     pending_questions.append(question)
     return sent_via_notifier

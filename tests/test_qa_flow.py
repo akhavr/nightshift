@@ -51,6 +51,33 @@ class TestHandleQuestion:
         assert sent is False
         assert any("Q?" in n for n in notifier.notifications)
 
+    def test_fallback_notification_includes_title(self, tmp_path):
+        _, tracker, notifier, sm, issue = _setup(tmp_path)
+        notifier.send_question = lambda *a, **kw: False
+        pending = []
+        handle_question("Q?", sm, tracker, notifier, issue, pending)
+        assert any(issue.title in n for n in notifier.notifications)
+
+    def test_long_title_truncated_in_fallback(self, tmp_path):
+        from core.constants import TITLE_TRUNCATE_LEN
+        long_title = "B" * 100
+        issue = make_test_issue(title=long_title)
+        agent = MockAgent([])
+        agent.start("test", tmp_path, 50)
+        tracker = MockTracker({issue.id: issue})
+        notifier = MockNotifier()
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        from core.state import SessionState
+        state = SessionState(issue_id=issue.id, branch="agent/test", status="working")
+        sm._write(state)
+        notifier.send_question = lambda *a, **kw: False
+        pending = []
+        handle_question("Q?", sm, tracker, notifier, issue, pending)
+        notification = notifier.notifications[-1]
+        assert long_title[:TITLE_TRUNCATE_LEN] in notification
+        assert long_title not in notification
+
 
 class TestHandleWaiting:
     def test_collects_answer_from_file(self, tmp_path):
