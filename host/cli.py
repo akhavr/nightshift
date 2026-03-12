@@ -87,7 +87,9 @@ def cmd_watcher(a):
     if a.no_auto_start:
         cmd.append("--no-auto-start")
     print(f"Logging to {log_file}")
-    subprocess.run(cmd)
+    # host.watcher uses absolute imports — ensure agent-worker root is on PYTHONPATH
+    env = {**__import__("os").environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    subprocess.run(cmd, env=env)
 
 
 def cmd_status(a):
