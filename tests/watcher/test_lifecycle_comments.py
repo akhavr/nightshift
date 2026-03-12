@@ -11,9 +11,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from host.watcher.lifecycle_comments import (
-    _safe_post, post_start, post_resume, post_question,
+    _safe_post, _truncate, post_start, post_resume, post_question,
     post_done, post_revise, read_checkpoint_count,
-    _QUESTION_PREVIEW_LEN,
+    _PREVIEW_LEN,
 )
 from tests.watcher.conftest import _make_watcher, _make_session
 
@@ -57,22 +57,56 @@ class TestSafePost:
 
 
 # ---------------------------------------------------------------------------
+# _truncate
+# ---------------------------------------------------------------------------
+
+class TestTruncate:
+    def test_short_text_unchanged(self):
+        assert _truncate("hello") == "hello"
+
+    def test_exact_length_unchanged(self):
+        text = "x" * _PREVIEW_LEN
+        assert _truncate(text) == text
+
+    def test_long_text_truncated_with_ellipsis(self):
+        text = "x" * 500
+        result = _truncate(text)
+        assert result.endswith("...")
+        assert len(result) == _PREVIEW_LEN + 3
+
+    def test_custom_max_len(self):
+        result = _truncate("abcdefgh", max_len=5)
+        assert result == "abcde..."
+
+
+# ---------------------------------------------------------------------------
 # post_start
 # ---------------------------------------------------------------------------
 
 class TestPostStart:
-    def test_posts_start_comment(self):
+    def test_posts_start_comment_with_title(self):
         tracker = MagicMock()
         get_tracker = MagicMock(return_value=tracker)
 
-        post_start(get_tracker, "issue-abc", "abc")
+        post_start(get_tracker, "issue-abc", "abc", title="Fix login bug")
 
         tracker.add_comment.assert_called_once()
         body = tracker.add_comment.call_args[0][1]
         assert "abc" in body
         assert "started" in body
+        assert "working on: Fix login bug" in body
         assert "nightshift logs" in body
         assert "nightshift history" in body
+
+    def test_posts_start_comment_without_title(self):
+        tracker = MagicMock()
+        get_tracker = MagicMock(return_value=tracker)
+
+        post_start(get_tracker, "issue-abc", "abc")
+
+        body = tracker.add_comment.call_args[0][1]
+        assert "started" in body
+        assert "working on" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +252,7 @@ class TestQAHandlerPostsQuestion:
         body = tracker.add_comment.call_args[0][1]
         assert "What is X?" in body
 
-    def test_question_comment_not_posted_twice(self, tmp_path):
+    def test_same_question_not_posted_twice_without_answer(self, tmp_path):
         tracker = MagicMock()
         w = _make_watcher(tmp_path)
         w._tracker = tracker
@@ -243,8 +277,60 @@ class TestQAHandlerPostsQuestion:
             mock_time.time.return_value = 2000.0
             w.qa.scan_for_waiting()
 
-        # Comment should NOT be posted again
+        # Comment should NOT be posted again (same question, no answer in between)
         tracker.add_comment.assert_not_called()
+
+    def test_second_question_posted_after_answer_delivered(self, tmp_path):
+        """Multi-round Q&A: second question gets its own lifecycle comment."""
+        tracker = MagicMock()
+        w = _make_watcher(tmp_path)
+        w._tracker = tracker
+        sd = _make_session(w.sessions_dir, "abc", issue_id="issue-abc")
+
+        # First question
+        waiting = {"question": "What is X?", "issue_id": "issue-abc"}
+        (sd / "waiting.json").write_text(json.dumps(waiting))
+
+        with patch("host.watcher.docker_pause", return_value=True), \
+             patch("host.watcher.docker_unpause", return_value=True), \
+             patch("host.watcher.time") as mock_time:
+            mock_time.sleep.return_value = None
+            mock_time.time.return_value = 1000.0
+            w.qa.scan_for_waiting()
+
+        assert tracker.add_comment.call_count == 1
+        assert "What is X?" in tracker.add_comment.call_args[0][1]
+
+        # Deliver answer via CLI (write answer.txt)
+        (sd / "answer.txt").write_text("42")
+
+        with patch("host.watcher.docker_unpause", return_value=True), \
+             patch("host.watcher.time") as mock_time:
+            mock_time.time.return_value = 2000.0
+            w.qa.check_for_answers({})
+
+        # Verify answer was processed and dedup was reset
+        assert "abc" not in w.qa._paused
+        assert "abc" not in w.qa._posted_question
+
+        # Clean up for second round
+        (sd / "waiting.json").unlink()
+        (sd / "answer.txt").unlink()
+        tracker.reset_mock()
+
+        # Second question
+        waiting2 = {"question": "What is Y?", "issue_id": "issue-abc"}
+        (sd / "waiting.json").write_text(json.dumps(waiting2))
+
+        with patch("host.watcher.docker_pause", return_value=True), \
+             patch("host.watcher.time") as mock_time:
+            mock_time.sleep.return_value = None
+            mock_time.time.return_value = 3000.0
+            w.qa.scan_for_waiting()
+
+        # Second question SHOULD get its own comment
+        tracker.add_comment.assert_called_once()
+        assert "What is Y?" in tracker.add_comment.call_args[0][1]
 
     def test_no_tracker_no_crash(self, tmp_path):
         """QAHandler with no get_tracker should not crash."""
@@ -306,10 +392,11 @@ class TestSessionMonitorPostsStart:
         w.monitor.check_new_issues()
 
         assert len(launched) == 1
-        # Verify start comment was posted
+        # Verify start comment was posted with issue title
         tracker.add_comment.assert_called_once()
         body = tracker.add_comment.call_args[0][1]
         assert "started" in body
+        assert "working on: New issue" in body
 
 
 # ---------------------------------------------------------------------------

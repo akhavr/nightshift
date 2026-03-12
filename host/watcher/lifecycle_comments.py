@@ -17,8 +17,15 @@ from typing import Callable
 
 log = logging.getLogger("watcher")
 
-# Maximum characters of question text to include in a comment.
-_QUESTION_PREVIEW_LEN = 200
+# Maximum characters of preview text to include in a comment.
+_PREVIEW_LEN = 200
+
+
+def _truncate(text: str, max_len: int = _PREVIEW_LEN) -> str:
+    """Truncate text to max_len, appending '...' if shortened."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
 
 
 def _safe_post(get_tracker: Callable, issue_id: str, body: str, event: str, sid: str) -> None:
@@ -31,10 +38,12 @@ def _safe_post(get_tracker: Callable, issue_id: str, body: str, event: str, sid:
         log.warning(f"[{sid}] Failed to post lifecycle comment ({event}): {e}")
 
 
-def post_start(get_tracker: Callable, issue_id: str, sid: str) -> None:
+def post_start(get_tracker: Callable, issue_id: str, sid: str,
+               title: str = "") -> None:
     """Post a comment when a session is auto-started by the watcher."""
+    working_on = f", working on: {_truncate(title)}" if title else ""
     body = (
-        f"Session `{sid}` started.\n\n"
+        f"Session `{sid}` started{working_on}.\n\n"
         f"View progress: `nightshift logs {issue_id}` / "
         f"`nightshift history {issue_id}`"
     )
@@ -56,12 +65,9 @@ def post_resume(get_tracker: Callable, issue_id: str, sid: str, reason: str,
 def post_question(get_tracker: Callable, issue_id: str, sid: str,
                   question: str) -> None:
     """Post a comment when the agent is blocked on a question."""
-    truncated = question[:_QUESTION_PREVIEW_LEN]
-    if len(question) > _QUESTION_PREVIEW_LEN:
-        truncated += "..."
     body = (
         f"Session `{sid}` blocked on question:\n\n"
-        f"> {truncated}\n\n"
+        f"> {_truncate(question)}\n\n"
         f"Answer via: `nightshift answer {issue_id} \"<answer>\"`"
     )
     _safe_post(get_tracker, issue_id, body, "question", sid)
@@ -81,12 +87,9 @@ def post_done(get_tracker: Callable, issue_id: str, sid: str,
 def post_revise(get_tracker: Callable, issue_id: str, sid: str,
                 reason: str) -> None:
     """Post a comment when a session is sent back for revision."""
-    truncated = reason[:_QUESTION_PREVIEW_LEN]
-    if len(reason) > _QUESTION_PREVIEW_LEN:
-        truncated += "..."
     body = (
         f"Session `{sid}` sent back for revision:\n\n"
-        f"> {truncated}\n\n"
+        f"> {_truncate(reason)}\n\n"
         f"View progress: `nightshift logs {issue_id}` / "
         f"`nightshift history {issue_id}`"
     )

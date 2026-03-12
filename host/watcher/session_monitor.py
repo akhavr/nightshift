@@ -244,7 +244,7 @@ class SessionMonitor:
             log.info(f"Auto-start: launching {issue.identifier} -- {issue.title[:LOG_PREVIEW_LEN]}")
             self.telegram.notify(f"\U0001f680 Auto-starting `{issue.identifier}`: {issue.title[:LOG_PREVIEW_LEN]}")
 
-            post_start(self._get_tracker, issue.id, sid)
+            post_start(self._get_tracker, issue.id, sid, title=issue.title)
 
             cmd = [
                 sys.executable,

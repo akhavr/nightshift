@@ -90,6 +90,7 @@ class QAHandler:
                 log.info(f"[{sid}] answer.txt found (via CLI). Unpausing.")
                 _pkg().docker_unpause(info["container"])
                 del self._paused[sid]
+                self._posted_question.discard(sid)
                 continue
 
             # Check Telegram replies
@@ -100,6 +101,7 @@ class QAHandler:
                 _pkg().docker_unpause(info["container"])
                 log.info(f"[{sid}] Unpaused.")
                 del self._paused[sid]
+                self._posted_question.discard(sid)
                 continue
 
             # Log periodic status
