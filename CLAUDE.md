@@ -49,7 +49,7 @@ The system has a strict three-layer split:
 - `Notifier` — notify + round-trip Q&A (send_question/check_answer)
 
 Key core modules:
-- `config.py` — Parses `WORKFLOW.md` YAML front matter into typed dataclasses. Contains adapter registries and factory functions (`create_agent`, `create_tracker`, etc.) that use `importlib` for dynamic instantiation.
+- `config/` — Package: `models.py` (typed dataclasses), `loader.py` (YAML front matter parsing, env var resolution), `factories.py` (adapter registries and dynamic instantiation). `__init__.py` re-exports all public symbols for backward compatibility (`from core.config import load_workflow` still works).
 - `session.py` — `SessionRunner`: the main event loop. Streams agent events, handles markers (`@@LOG@@`, `@@CHECKPOINT@@`, `@@QUESTION@@`, `@@WAITING@@`, `@@DONE@@`), manages auto-resume on context limits/stalls. Delegates Q&A to `qa_flow.py`, post-run lifecycle to `post_run.py`, and hook execution to `hooks.py`.
 - `hooks.py` — Hook execution for workspace lifecycle events (after_create, before_run, after_run). Extracted from SessionRunner.
 - `post_run.py` — Post-run lifecycle: resume logic, done notification (proof-of-work summary), checkpoint summarization. Extracted from SessionRunner.
@@ -70,8 +70,13 @@ Key core modules:
 - `workspace_setup.py` — Worktree creation, branch management, review session preparation.
 - `issue_dump.py` — Dumps `issue.json` and `issues.json` to the session dir for the container's `StaticTracker`.
 - `docker_cmd.py` — Builds the `docker run` command with all mounts, env vars, and auth credentials.
-- `watcher.py` — Polls session dirs for `waiting.json`, pauses Docker containers, writes `answer.txt` on Telegram reply or CLI input, then unpauses. Zero tracker coupling.
-- `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.py.
+- `watcher/` — Package split by concern: `host_watcher.py` (main loop), `telegram_relay.py` (Telegram polling), `qa_handler.py` (Q&A flow), `review_orchestrator.py` (auto-review launch/verdict), `session_monitor.py` (orphan detection, cleanup), `command_executor.py` (CLI command dispatch), `verdict_handler.py` (approve/revise handling), `main.py` (entry point). Run via `python -m host.watcher`.
+- `session_utils.py` — Shared session state I/O (read/write state.json), path helpers, worktree cleanup.
+- `constants.py` — Named constants for timeouts, thresholds, polling intervals (replaces magic numbers).
+- `git_utils.py` — Git command wrappers (branch detection, merge, diff).
+- `docker_utils.py` — Docker container management (pause/unpause/stop/status).
+- `merge.py` — Merge execution and conflict validation logic extracted from cli.py.
+- `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.
 
 **`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, runs `SessionRunner`.
 
@@ -79,7 +84,7 @@ Key core modules:
 
 - **CRITICAL — Never silently catch exceptions.** This is the #1 rule. `except Exception: pass`, `except: continue`, and any catch block that discards the error without logging is FORBIDDEN. Every `except` block MUST log or print the error with enough context to diagnose (the operation, the input, the exception). Use `logging.warning`/`logging.error` or `print(..., file=sys.stderr)`. Code that violates this rule will be rejected in review. No exceptions to this rule.
 - **Rebuild Docker image after code changes.** Any change to files that run inside the container (`core/`, `adapters/`, `entrypoint.py`, `docker-entrypoint.sh`, `Dockerfile`) requires rebuilding: `sg docker "docker build -t nightshift:latest ."`
-- **Test coverage target: 80%.** Run `coverage run -m pytest tests/ && coverage report` to check. Every new code path must have tests. Current: 66% (2025-03-11).
+- **Test coverage target: 80%.** Run `coverage run -m pytest tests/ && coverage report` to check. Every new code path must have tests. Current: 93% (2025-03-12).
 - **No magic numbers.** Timeouts, thresholds, and retry counts must be named constants, not bare literals.
 - **Imports at module top.** No `import shutil` inside functions. No late imports except to break circular dependencies (and those must have a comment explaining why).
 - **Functions under 50 lines.** If a function exceeds 50 lines, extract helpers. Long functions are a review blocker.
@@ -89,7 +94,7 @@ Key core modules:
 
 ## Key Design Patterns
 
-- **Adapter registration**: `core/config.py` has `AGENT_REGISTRY`, `TRACKER_REGISTRY`, etc. mapping `kind` strings to `(module_path, class_name)` tuples. New adapters: add entry to registry + implement the Protocol.
+- **Adapter registration**: `core/config/factories.py` has `AGENT_REGISTRY`, `TRACKER_REGISTRY`, etc. mapping `kind` strings to `(module_path, class_name)` tuples. New adapters: add entry to registry + implement the Protocol.
 - **WORKFLOW.md**: YAML front matter configures adapters, merge policy, hooks. The markdown body after `---` is the Jinja2 prompt template. `$VAR` references in YAML are resolved from environment variables. `.env` is loaded BEFORE WORKFLOW.md parsing.
 - **StaticTracker pattern**: Host dumps issue data to `issue.json` and `issues.json` in the session dir. Container reads them via `StaticTracker`. Write operations (comments, labels) are logged but no-op inside the container.
 - **Container-host communication**: Exclusively via shared files in the session directory (`/session/` inside container, `.nightshift/sessions/<id>/` on host). No network calls between container and host.
@@ -102,22 +107,19 @@ Key core modules:
 
 **Target: 80% line coverage.** Check with: `.venv/bin/python -m coverage run -m pytest tests/ && .venv/bin/python -m coverage report`
 
-Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). Test directories exist for `tests/adapters/` and `tests/integration/` but have no test files yet.
+Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). 517 tests across `tests/` and `tests/watcher/`.
 
-Current test files: `test_stream_parser.py` (Claude Code stream-json parsing), `test_marker_reliability.py` (marker failure modes), `oq1_stdin_test.py` (CLI behavior verification), `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py` (automated review), `test_auto_start.py` (auto-start config and watcher logic).
+Key test files: `test_stream_parser.py`, `test_marker_reliability.py`, `oq1_stdin_test.py`, `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_cli_commands.py`, `test_cli_helpers.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py`, `test_review.py`, `test_auto_start.py`, `test_session_runner.py`, `test_hooks.py`, `test_post_run.py`, `test_qa_flow.py`, `test_prompts.py`, `test_config_factories.py`, `test_docker_utils.py`, `test_git_utils.py`, `test_composite_notifier.py`, `test_notifier_prefix.py`, `test_search.py`, `test_session_utils_host.py`, `test_launch.py`, `test_post_container.py`, `test_assistant_text_logging.py`, `watcher/test_qa_handler.py`, `watcher/test_host_watcher.py`, `watcher/test_review_orchestrator.py`, `watcher/test_telegram_relay.py`, `watcher/test_session_monitor.py`.
 
-Coverage gaps (prioritized):
-- `host/cli.py` (23%) — cmd_accept, cmd_reject, cmd_init, cmd_revise need tests
-- `host/launch.py` (25%) — Docker command construction, worktree setup
-- `host/watcher.py` (35%) — review orchestration, container lifecycle, auto-start polling
-- `adapters/trackers/git_bug.py` (41%) — git-bug CLI interaction
-- `adapters/notifiers/telegram.py` (55%) — Telegram API calls
+Remaining coverage gaps:
+- `adapters/trackers/git_bug.py` — git-bug CLI interaction (hard to test without git-bug binary)
+- `adapters/notifiers/telegram.py` — Telegram API calls (requires mocking HTTP)
 
 ## Docker
 
 The container runs with `--user $(id -u):$(id -g)` matching the host UID so it can read `600`-permission credential files. Auth credentials are mounted read-only at `/claude-auth` and copied to a writable HOME by `docker-entrypoint.sh`.
 
-Key Docker run pattern:
+Key Docker run pattern (no `-it` flag — containers are fire-and-forget):
 ```bash
 docker run --rm --user $(id -u):$(id -g) \
   -v <worktree>:/workspace:rw \
@@ -129,7 +131,11 @@ docker run --rm --user $(id -u):$(id -g) \
   nightshift:latest
 ```
 
+Container naming: coder containers are `nightshift-<short-id>`, review containers are `nightshift-review-<short-id>`. The watcher detects review sessions by the `review-` prefix in session IDs and passes `--step review --workflow REVIEW.md` when auto-resuming them.
+
 `docker-entrypoint.sh` rewrites the worktree `.git` pointer to use container paths (`/repo-git/worktrees/agent-<short-id>`), enabling git operations inside the container.
+
+When launching the watcher from a different repo (e.g. `nightshift watcher` from `jessica-ng/`), `cli.py` injects `PYTHONPATH` pointing to the agent-worker root so `python -m host.watcher` resolves correctly.
 
 ## git-bug
 
