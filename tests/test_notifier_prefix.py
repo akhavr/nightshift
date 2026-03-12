@@ -95,9 +95,9 @@ class TestWebhookPrefix:
 
 class TestLaunchProjectName:
     def test_launch_passes_project_name(self):
-        """Verify launch.py includes PROJECT_NAME in docker command."""
+        """Verify docker_cmd.py includes PROJECT_NAME in docker command."""
         from pathlib import Path
-        launch_py = Path(__file__).parent.parent / "host" / "launch.py"
-        content = launch_py.read_text()
+        docker_cmd_py = Path(__file__).parent.parent / "host" / "docker_cmd.py"
+        content = docker_cmd_py.read_text()
         assert "PROJECT_NAME" in content
         assert 'f"PROJECT_NAME={repo.name}"' in content
