@@ -80,7 +80,7 @@ def cmd_watcher(a):
     log_file = repo_root() / ".nightshift" / "watcher.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        sys.executable, str(Path(__file__).parent / "watcher.py"),
+        sys.executable, "-m", "host.watcher",
         "--sessions-dir", str(sessions_dir()),
         "--log-file", str(log_file),
     ]

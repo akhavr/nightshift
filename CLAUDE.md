@@ -63,7 +63,10 @@ Key core modules:
 
 **`host/`** — Host-side scripts (run outside Docker):
 - `cli.py` — User-facing CLI: init, start, resume, answer, status, logs, history, accept, reject, cleanup, watcher.
-- `launch.py` — Loads `.env`, creates worktree + session dir, dumps issue data to JSON (for StaticTracker), builds `docker run` command with volume mounts, then `execvp` into Docker.
+- `launch.py` — Orchestrates workspace setup, issue data dumping, and container launch. Delegates to `workspace_setup.py`, `issue_dump.py`, and `docker_cmd.py`.
+- `workspace_setup.py` — Worktree creation, branch management, review session preparation.
+- `issue_dump.py` — Dumps `issue.json` and `issues.json` to the session dir for the container's `StaticTracker`.
+- `docker_cmd.py` — Builds the `docker run` command with all mounts, env vars, and auth credentials.
 - `watcher.py` — Polls session dirs for `waiting.json`, pauses Docker containers, writes `answer.txt` on Telegram reply or CLI input, then unpauses. Zero tracker coupling.
 - `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.py.
 
