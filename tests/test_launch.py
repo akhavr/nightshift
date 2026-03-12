@@ -1,4 +1,4 @@
-"""Tests for host/launch.py helper functions."""
+"""Tests for host/launch.py and its extracted modules."""
 
 import json
 import os
@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.config.models import WorkflowConfig, AgentConfig, WorkspaceConfig
 from core.protocols import TrackerIssue
-from host.launch import _create_worktree, _dump_issue_data, _build_docker_cmd
+from host.workspace_setup import create_worktree
+from host.issue_dump import dump_issue_data
+from host.docker_cmd import build_docker_cmd
 
 
 # ── Fixtures ──────────────────────────────────────────────
@@ -45,11 +47,11 @@ def sample_issue():
     )
 
 
-# ── _create_worktree tests ───────────────────────────────
+# ── create_worktree tests ───────────────────────────────
 
 class TestCreateWorktree:
 
-    @patch("host.launch.subprocess.run")
+    @patch("host.workspace_setup.subprocess.run")
     def test_creates_worktree_and_writes_state(self, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -74,7 +76,7 @@ class TestCreateWorktree:
 
         mock_run.side_effect = side_effect
 
-        _create_worktree(repo, wt_path, branch, base_branch, session_dir, issue_id)
+        create_worktree(repo, wt_path, branch, base_branch, session_dir, issue_id)
 
         # Session dir created
         assert session_dir.exists()
@@ -95,7 +97,7 @@ class TestCreateWorktree:
         assert mock_run.call_args_list[1][0][0] == ["git", "branch", branch, base_branch]
         assert mock_run.call_args_list[2][0][0] == ["git", "worktree", "add", str(wt_path), branch]
 
-    @patch("host.launch.subprocess.run")
+    @patch("host.workspace_setup.subprocess.run")
     def test_exits_on_worktree_failure(self, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -111,10 +113,10 @@ class TestCreateWorktree:
         ]
 
         with pytest.raises(SystemExit) as exc_info:
-            _create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
+            create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
-    @patch("host.launch.subprocess.run")
+    @patch("host.workspace_setup.subprocess.run")
     def test_exits_on_empty_worktree(self, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -132,11 +134,11 @@ class TestCreateWorktree:
         mock_run.side_effect = side_effect
 
         with pytest.raises(SystemExit) as exc_info:
-            _create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
+            create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
-    @patch("host.launch.force_remove_dir")
-    @patch("host.launch.subprocess.run")
+    @patch("host.workspace_setup.force_remove_dir")
+    @patch("host.workspace_setup.subprocess.run")
     def test_removes_existing_worktree_dir(self, mock_run, mock_force_rm, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -154,11 +156,11 @@ class TestCreateWorktree:
 
         mock_run.side_effect = side_effect
 
-        _create_worktree(repo, wt_path, "agent/x", "master", session_dir, "issue1")
+        create_worktree(repo, wt_path, "agent/x", "master", session_dir, "issue1")
 
         mock_force_rm.assert_called_once_with(wt_path)
 
-    @patch("host.launch.subprocess.run")
+    @patch("host.workspace_setup.subprocess.run")
     def test_copies_gitignore_if_exists(self, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -176,17 +178,17 @@ class TestCreateWorktree:
 
         mock_run.side_effect = side_effect
 
-        _create_worktree(repo, wt_path, "agent/x", "master", session_dir, "issue1")
+        create_worktree(repo, wt_path, "agent/x", "master", session_dir, "issue1")
 
         assert (wt_path / ".gitignore").exists()
         assert (wt_path / ".gitignore").read_text() == "*.pyc\n__pycache__/\n"
 
 
-# ── _dump_issue_data tests ───────────────────────────────
+# ── dump_issue_data tests ───────────────────────────────
 
 class TestDumpIssueData:
 
-    @patch("host.launch.create_tracker")
+    @patch("host.issue_dump.create_tracker")
     def test_dumps_issue_and_all_issues(self, mock_create_tracker, tmp_path, config, sample_issue):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -197,8 +199,8 @@ class TestDumpIssueData:
         mock_tracker.list_issues.return_value = [sample_issue]
         mock_create_tracker.return_value = mock_tracker
 
-        _dump_issue_data(config, repo, session_dir, "abc123def456",
-                         is_review=False, is_resume=False)
+        dump_issue_data(config, repo, session_dir, "abc123def456",
+                        is_review=False, is_resume=False)
 
         # issue.json written
         issue_data = json.loads((session_dir / "issue.json").read_text())
@@ -210,19 +212,19 @@ class TestDumpIssueData:
         assert len(all_data) == 1
         assert all_data[0]["id"] == "abc123def456"
 
-    @patch("host.launch.create_tracker")
+    @patch("host.issue_dump.create_tracker")
     def test_skips_dump_for_review_with_existing_issue(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
         (session_dir / "issue.json").write_text('{"id": "existing"}')
 
-        _dump_issue_data(config, tmp_path, session_dir, "abc123",
-                         is_review=True, is_resume=False)
+        dump_issue_data(config, tmp_path, session_dir, "abc123",
+                        is_review=True, is_resume=False)
 
         # Tracker should not even be created
         mock_create_tracker.assert_not_called()
 
-    @patch("host.launch.create_tracker")
+    @patch("host.issue_dump.create_tracker")
     def test_exits_when_issue_not_found_and_no_cache(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -232,11 +234,11 @@ class TestDumpIssueData:
         mock_create_tracker.return_value = mock_tracker
 
         with pytest.raises(SystemExit) as exc_info:
-            _dump_issue_data(config, tmp_path, session_dir, "missing",
-                             is_review=False, is_resume=False)
+            dump_issue_data(config, tmp_path, session_dir, "missing",
+                            is_review=False, is_resume=False)
         assert exc_info.value.code == 1
 
-    @patch("host.launch.create_tracker")
+    @patch("host.issue_dump.create_tracker")
     def test_reuses_cache_on_resume_when_tracker_fails(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -247,13 +249,13 @@ class TestDumpIssueData:
         mock_create_tracker.return_value = mock_tracker
 
         # Should not exit -- reuses cached data
-        _dump_issue_data(config, tmp_path, session_dir, "abc",
-                         is_review=False, is_resume=True)
+        dump_issue_data(config, tmp_path, session_dir, "abc",
+                        is_review=False, is_resume=True)
 
         # issue.json should remain untouched
         assert json.loads((session_dir / "issue.json").read_text())["id"] == "cached"
 
-    @patch("host.launch.create_tracker")
+    @patch("host.issue_dump.create_tracker")
     def test_exits_on_resume_without_cache(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -264,11 +266,11 @@ class TestDumpIssueData:
         mock_create_tracker.return_value = mock_tracker
 
         with pytest.raises(SystemExit):
-            _dump_issue_data(config, tmp_path, session_dir, "abc",
-                             is_review=False, is_resume=True)
+            dump_issue_data(config, tmp_path, session_dir, "abc",
+                            is_review=False, is_resume=True)
 
 
-# ── _build_docker_cmd tests ──────────────────────────────
+# ── build_docker_cmd tests ──────────────────────────────
 
 class TestBuildDockerCmd:
 
@@ -298,9 +300,9 @@ class TestBuildDockerCmd:
             os.environ[k] = v
 
         try:
-            with patch("host.launch.sys") as mock_sys:
+            with patch("host.docker_cmd.sys") as mock_sys:
                 mock_sys.stdin.isatty.return_value = False
-                return _build_docker_cmd(
+                return build_docker_cmd(
                     repo, workspace_mount, session_dir, container_name,
                     worktree_name, issue_id, short_id, max_turns,
                     step, is_resume, workflow_path, image,
@@ -368,7 +370,7 @@ class TestBuildDockerCmd:
         (fake_home / ".claude").mkdir()
         (fake_home / ".claude.json").write_text("{}")
 
-        with patch("host.launch.Path.home", return_value=fake_home):
+        with patch("host.docker_cmd.Path.home", return_value=fake_home):
             cmd = self._call()
 
         cmd_str = " ".join(cmd)
@@ -379,7 +381,7 @@ class TestBuildDockerCmd:
         fake_home = tmp_path / "home"
         fake_home.mkdir()  # No .claude or .claude.json
 
-        with patch("host.launch.Path.home", return_value=fake_home):
+        with patch("host.docker_cmd.Path.home", return_value=fake_home):
             cmd = self._call()
 
         cmd_str = " ".join(cmd)
@@ -433,9 +435,9 @@ class TestBuildDockerCmd:
 class TestMain:
 
     @patch("host.launch.subprocess.run")
-    @patch("host.launch._dump_issue_data")
-    @patch("host.launch._create_worktree")
-    @patch("host.launch._build_docker_cmd", return_value=["docker", "run", "test"])
+    @patch("host.launch.dump_issue_data")
+    @patch("host.workspace_setup.create_worktree")
+    @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
@@ -467,8 +469,8 @@ class TestMain:
         mock_run.assert_called_once_with(["docker", "run", "test"])
 
     @patch("host.launch.subprocess.run")
-    @patch("host.launch._dump_issue_data")
-    @patch("host.launch._build_docker_cmd", return_value=["docker", "run", "test"])
+    @patch("host.launch.dump_issue_data")
+    @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
@@ -495,8 +497,8 @@ class TestMain:
             assert exc_info.value.code == 1
 
     @patch("host.launch.subprocess.run")
-    @patch("host.launch._dump_issue_data")
-    @patch("host.launch._build_docker_cmd", return_value=["docker", "run", "test"])
+    @patch("host.launch.dump_issue_data")
+    @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
@@ -601,13 +603,13 @@ class TestPostContainer:
         _post_container(session_dir, config, tmp_path, "issue1")
 
 
-# ── _prepare_review_session tests ────────────────────────
+# ── prepare_review_session tests ────────────────────────
 
 class TestPrepareReviewSession:
 
-    @patch("host.launch.subprocess.run")
+    @patch("host.workspace_setup.subprocess.run")
     def test_copies_issue_data_and_generates_diff(self, mock_run, tmp_path, config):
-        from host.launch import _prepare_review_session
+        from host.workspace_setup import prepare_review_session
         repo = tmp_path / "repo"
         short_id = "abc123def456"
 
@@ -621,15 +623,15 @@ class TestPrepareReviewSession:
 
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f b/f\n+hello")
 
-        _prepare_review_session(repo, review_session, short_id, config)
+        prepare_review_session(repo, review_session, short_id, config)
 
         assert (review_session / "issue.json").read_text() == '{"id": "test"}'
         assert (review_session / "issues.json").read_text() == '[{"id": "test"}]'
         assert "hello" in (review_session / "diff.patch").read_text()
 
-    @patch("host.launch.subprocess.run")
+    @patch("host.workspace_setup.subprocess.run")
     def test_writes_na_on_diff_failure(self, mock_run, tmp_path, config):
-        from host.launch import _prepare_review_session
+        from host.workspace_setup import prepare_review_session
         repo = tmp_path / "repo"
         short_id = "abc123def456"
 
@@ -638,6 +640,6 @@ class TestPrepareReviewSession:
 
         mock_run.return_value = MagicMock(returncode=1, stdout="")
 
-        _prepare_review_session(repo, review_session, short_id, config)
+        prepare_review_session(repo, review_session, short_id, config)
 
         assert (review_session / "diff.patch").read_text() == "N/A"

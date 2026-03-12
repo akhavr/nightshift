@@ -33,8 +33,7 @@ def test_docker_entrypoint_rewrites_git_pointer(tmp_path):
 
 
 def test_launch_mounts_repo_git():
-    """launch.py docker command should include /repo-git mount."""
-    from host.launch import main
-    import host.launch as launch_mod
-    source = Path(launch_mod.__file__).read_text()
-    assert "/repo-git" in source, "launch.py should mount .git as /repo-git"
+    """docker_cmd.py should include /repo-git mount."""
+    import host.docker_cmd as docker_cmd_mod
+    source = Path(docker_cmd_mod.__file__).read_text()
+    assert "/repo-git" in source, "docker_cmd.py should mount .git as /repo-git"
