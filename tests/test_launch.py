@@ -301,13 +301,11 @@ class TestBuildDockerCmd:
             os.environ[k] = v
 
         try:
-            with patch("host.docker_cmd.sys") as mock_sys:
-                mock_sys.stdin.isatty.return_value = False
-                return build_docker_cmd(
-                    repo, workspace_mount, session_dir, container_name,
-                    worktree_name, issue_id, short_id, max_turns,
-                    step, is_resume, workflow_path, image,
-                )
+            return build_docker_cmd(
+                repo, workspace_mount, session_dir, container_name,
+                worktree_name, issue_id, short_id, max_turns,
+                step, is_resume, workflow_path, image,
+            )
         finally:
             # Restore env
             for k, v in saved.items():
@@ -361,9 +359,12 @@ class TestBuildDockerCmd:
         cmd = self._call(is_resume=False)
         assert "RESUME=" in " ".join(cmd)
 
-    def test_no_tty_flags_when_not_tty(self):
+    def test_no_tty_flags(self):
+        """Containers are fire-and-forget (-p mode), never need -it."""
         cmd = self._call()
         assert "-it" not in cmd
+        assert "-i" not in cmd
+        assert "-t" not in cmd
 
     def test_auth_mounts_when_dirs_exist(self, tmp_path):
         fake_home = tmp_path / "home"
