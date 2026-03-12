@@ -6,7 +6,6 @@ Extracted from SessionRunner to keep session.py focused on the event loop.
 import logging
 from pathlib import Path
 
-from core.prompts import build_resume_prompt
 from core.protocols import (
     AgentEventType, CodingAgent, IssueTracker, Notifier,
     TrackerIssue, Workspace, WorkspaceManager,
