@@ -15,6 +15,7 @@ from host.constants import (
 from host.session_utils import read_state, update_status as _update_status
 from core.config import load_workflow
 from core.review import parse_nightshift_command
+from host.watcher.lifecycle_comments import post_done, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
 from host.watcher.verdict_handler import VerdictHandler
 from host.watcher.command_executor import CommandExecutor
@@ -46,6 +47,7 @@ class ReviewOrchestrator:
         self._launch_background = launch_background
         self._last_poll = 0.0
         self._rounds: dict[str, int] = {}
+        self._posted_done: set[str] = set()
 
         self.verdicts = VerdictHandler(
             sessions_dir, repo_dir, telegram,
@@ -123,6 +125,10 @@ class ReviewOrchestrator:
                 continue
             issue_id = state.get("issue_id", "")
             if issue_id:
+                if sid not in self._posted_done:
+                    self._posted_done.add(sid)
+                    cp_count = read_checkpoint_count(session_dir)
+                    post_done(self._get_tracker, issue_id, sid, cp_count)
                 self.maybe_launch_review(sid, session_dir, issue_id, review_md)
 
     def maybe_launch_review(self, sid: str, session_dir: Path,

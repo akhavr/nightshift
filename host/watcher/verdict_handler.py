@@ -14,6 +14,7 @@ from core.review import (
     parse_nightshift_command, strip_nightshift_command,
     build_revise_prompt,
 )
+from host.watcher.lifecycle_comments import post_revise
 from host.watcher.telegram_relay import TelegramRelay
 
 log = logging.getLogger("watcher")
@@ -159,6 +160,9 @@ class VerdictHandler:
             self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")
             self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.")
+
+            reason = "\n".join(parts)
+            post_revise(self._get_tracker, issue_id, coder_sid, reason)
 
             cmd = [
                 sys.executable,

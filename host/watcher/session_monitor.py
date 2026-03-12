@@ -11,6 +11,7 @@ from host.constants import (
 )
 from host.session_utils import read_state
 from core.config import load_workflow
+from host.watcher.lifecycle_comments import post_start, post_resume, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
 
 log = logging.getLogger("watcher")
@@ -92,6 +93,11 @@ class SessionMonitor:
 
         log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}). Auto-resuming.")
         self._recently_launched[sid] = time.time()
+
+        session_dir = self.sessions_dir / sid
+        checkpoint_count = read_checkpoint_count(session_dir)
+        post_resume(self._get_tracker, issue_id, sid,
+                    reason="orphaned (container gone)", checkpoint_count=checkpoint_count)
 
         is_review = sid.startswith("review-")
         cmd = [
@@ -237,6 +243,8 @@ class SessionMonitor:
             active_count += 1
             log.info(f"Auto-start: launching {issue.identifier} -- {issue.title[:LOG_PREVIEW_LEN]}")
             self.telegram.notify(f"\U0001f680 Auto-starting `{issue.identifier}`: {issue.title[:LOG_PREVIEW_LEN]}")
+
+            post_start(self._get_tracker, issue.id, sid)
 
             cmd = [
                 sys.executable,

@@ -7,6 +7,7 @@ from pathlib import Path
 from host.constants import (
     PRE_PAUSE_DELAY_S, STILL_WAITING_LOG_INTERVAL_S, SHORT_ID_LEN, LOG_PREVIEW_LEN,
 )
+from host.watcher.lifecycle_comments import post_question
 from host.watcher.telegram_relay import TelegramRelay
 
 log = logging.getLogger("watcher")
@@ -21,10 +22,13 @@ def _pkg():
 class QAHandler:
     """Q&A pause/unpause cycle: detects waiting containers, delivers answers."""
 
-    def __init__(self, sessions_dir: Path, telegram: TelegramRelay):
+    def __init__(self, sessions_dir: Path, telegram: TelegramRelay,
+                 get_tracker=None):
         self.sessions_dir = sessions_dir
         self.telegram = telegram
+        self._get_tracker = get_tracker
         self._paused: dict[str, dict] = {}
+        self._posted_question: set[str] = set()
 
     def scan_for_waiting(self):
         """Detect new waiting.json files -> pause those containers."""
@@ -66,6 +70,13 @@ class QAHandler:
                             sid, data["question"], data.get("issue_id", "")[:SHORT_ID_LEN]
                         )
                         self._paused[sid]["tg_msg_id"] = msg_id
+
+                    # Post question comment to tracker (once per session)
+                    issue_id = data.get("issue_id", "")
+                    if self._get_tracker and issue_id and sid not in self._posted_question:
+                        self._posted_question.add(sid)
+                        post_question(self._get_tracker, issue_id, sid,
+                                      data.get("question", ""))
                 else:
                     log.warning(f"[{sid}] Pause failed -- container will poll internally")
 

@@ -41,7 +41,7 @@ class HostWatcher:
             repo_dir.name,
             sessions_dir,
         )
-        self.qa = QAHandler(sessions_dir, self.telegram)
+        self.qa = QAHandler(sessions_dir, self.telegram, self._get_tracker)
         self.reviews = ReviewOrchestrator(
             sessions_dir, repo_dir, self.telegram,
             self._get_tracker, self._recently_launched, self._launch_background,
