@@ -13,7 +13,7 @@ The system creates a git worktree per issue and runs the coding agent inside a D
 ### REQ-002: Session lifecycle management
 The system tracks session state (working, suspended, waiting, done) with atomic JSON persistence and exposes status via CLI.
 
-- **Tests:** test_marker_reliability.py, test_cli_commands.py, test_session_runner.py, test_session_utils_host.py
+- **Tests:** test_marker_reliability.py, test_cli_commands.py, test_session_runner.py, test_session_utils_host.py, watcher/test_graceful_shutdown.py
 - **Status:** covered
 
 ### REQ-003: Human Q&A

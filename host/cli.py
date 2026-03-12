@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -88,8 +89,10 @@ def cmd_watcher(a):
         cmd.append("--no-auto-start")
     print(f"Logging to {log_file}")
     # host.watcher uses absolute imports — ensure agent-worker root is on PYTHONPATH
-    env = {**__import__("os").environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
-    subprocess.run(cmd, env=env)
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    # Use os.execvpe to replace this process with the watcher, so signals
+    # (SIGTERM/SIGINT) reach the watcher directly — no parent to orphan it.
+    os.execvpe(cmd[0], cmd, env)
 
 
 def cmd_status(a):
