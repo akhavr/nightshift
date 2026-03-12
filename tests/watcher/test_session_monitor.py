@@ -106,6 +106,55 @@ class TestCheckOrphanedSessions:
         assert "abc" in launched
         assert "abc" not in w._recently_launched or w._recently_launched["abc"] > time.time() - 5
 
+    def test_orphaned_coder_session_no_review_step(self, tmp_path):
+        """Coder session resume should NOT include --step review."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert len(launched_cmds) == 1
+        assert "--step" not in launched_cmds[0]
+
+    def test_orphaned_review_session_includes_step_review(self, tmp_path):
+        """Review session resume MUST include --step review to avoid container name collision."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "review-abc", status="working", issue_id="issue-abc")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        step_idx = cmd.index("--step")
+        assert cmd[step_idx + 1] == "review"
+
+    def test_orphaned_review_session_with_review_md(self, tmp_path):
+        """Review session resume should pass --workflow REVIEW.md when it exists."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "review-abc", status="working", issue_id="issue-abc")
+        # Create REVIEW.md in repo dir
+        review_md = w.monitor.repo_dir / "REVIEW.md"
+        review_md.write_text("---\nagent:\n  kind: claude-code\n---\n")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        wf_idx = cmd.index("--workflow")
+        assert cmd[wf_idx + 1] == str(review_md)
+
 
 # ---------------------------------------------------------------------------
 # check_closed_issues tests

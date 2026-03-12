@@ -93,11 +93,17 @@ class SessionMonitor:
         log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}). Auto-resuming.")
         self._recently_launched[sid] = time.time()
 
+        is_review = sid.startswith("review-")
         cmd = [
             sys.executable,
             str(_HOST_DIR / "launch.py"),
             issue_id, "--resume",
         ]
+        if is_review:
+            review_md = self.repo_dir / "REVIEW.md"
+            cmd += ["--step", "review"]
+            if review_md.exists():
+                cmd += ["--workflow", str(review_md)]
         self._launch_background(cmd, sid)
 
     def check_closed_issues(self):
