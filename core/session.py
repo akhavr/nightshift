@@ -4,17 +4,17 @@ Works with any adapters implementing the protocols.
 """
 
 import logging
-import subprocess
 import time
-from pathlib import Path
 
-from core.answer_collector import collect_answer, ANSWER_PREVIEW_LEN
 from core.config import MergeConfig
+from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
+from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
 from core.protocols import (
     CodingAgent, IssueTracker, Notifier, WorkspaceManager,
     AgentEventType, MarkerType, parse_marker, TrackerIssue, Workspace,
 )
+from core.qa_flow import handle_question, handle_waiting
 from core.state import StateManager
 
 log = logging.getLogger(__name__)
@@ -23,10 +23,7 @@ BOT_PREFIXES = ("💭", "🤖", "❓", "📌", "⚠️", "✅", "⏸️", "🔄"
 RECONCILE_S = 60
 QUESTION_WAIT_TIMEOUT_S = 30  # OQ-4: fallback if @@WAITING@@ never arrives
 MAX_RESUMES = 10  # prevent infinite context-limit loops
-DEFAULT_HOOK_TIMEOUT_S = 60
 COMMIT_DESC_MAX_LEN = 60     # max description length in checkpoint commit messages
-CHECKPOINT_SUMMARIZE_THRESHOLD = 10  # summarize when more than this many checkpoints
-CHECKPOINT_SUMMARY_COUNT = 5  # number of key decisions to keep in summary
 
 
 class SessionRunner:
@@ -50,7 +47,6 @@ class SessionRunner:
         self.terminal_statuses = terminal_statuses
         self._workspace: Workspace | None = None
         self._pending_questions: list[str] = []  # OQ-7: queue, not overwrite
-        self._question_sent_via_notifier = False
 
         if merge_config is None:
             merge_config = MergeConfig()
@@ -65,6 +61,12 @@ class SessionRunner:
             self._workspace = self.workspace_mgr.create(self.issue)
         if self._workspace.is_new and self.hooks_config:
             self._run_hook(self.hooks_config.after_create, "after_create", fatal=True)
+
+    def _run_hook(self, script: str | None, name: str, fatal: bool = False) -> bool:
+        """Delegate hook execution to hooks module."""
+        timeout = self.hooks_config.timeout_s if self.hooks_config else DEFAULT_HOOK_TIMEOUT_S
+        ws_path = self._workspace.path if self._workspace else None
+        return run_hook(self.workspace_mgr, ws_path, script, name, timeout, fatal)
 
     def _run_agent_cycle(self, prompt: str) -> bool:
         """Run one agent start->event-loop->terminate cycle. Returns False to stop."""
@@ -110,33 +112,38 @@ class SessionRunner:
             resume_count += 1
             prompt = resume_prompt
 
-    def _run_hook(self, script: str | None, name: str, fatal: bool = False) -> bool:
-        """Execute a hook script. Returns True on success."""
-        if not script or not self._workspace:
-            return True
-        log.info(f"Running {name} hook...")
-        timeout = self.hooks_config.timeout_s if self.hooks_config else DEFAULT_HOOK_TIMEOUT_S
-        if hasattr(self.workspace_mgr, "run_hook"):
-            ok = self.workspace_mgr.run_hook(self._workspace.path, script, timeout)
-        else:
-            try:
-                subprocess.run(
-                    ["sh", "-c", script], cwd=str(self._workspace.path),
-                    timeout=timeout, check=True, capture_output=True,
-                )
-                ok = True
-            except Exception as e:
-                log.warning(f"{name} hook failed: {e}")
-                ok = False
-        if not ok and fatal:
-            log.error(f"{name} hook failed (fatal)")
-        return ok
+    # ── Event loop ────────────────────────────────────────────
+
+    def _event_loop(self):
+        last_reconcile = time.monotonic()
+        question_time: float | None = None  # OQ-4: track when question was asked
+
+        for event in self.agent.stream_events():
+            self.state_mgr.append_raw(event.raw)
+
+            result = self._dispatch_event(event)
+            if result == "STOP":
+                break
+            if result == "QUESTION_ASKED":
+                question_time = time.monotonic()
+
+            # OQ-4: if @@QUESTION@@ was seen but @@WAITING@@ hasn't arrived
+            if self._should_force_waiting(question_time):
+                log.warning("@@WAITING@@ not received — forcing wait")
+                self._on_waiting()
+                question_time = None
+
+            last_reconcile = self._maybe_reconcile(last_reconcile)
+
+        # OQ-1: handle pending questions after agent exits
+        if self._pending_questions:
+            log.info("Agent exited with pending question(s). Collecting answer...")
+            self._on_waiting()
 
     def _dispatch_event(self, event) -> str | None:
         """Dispatch a single agent event. Returns 'STOP' to break the loop."""
         if event.type == AgentEventType.TEXT:
             return self._handle_text(event.content)
-
         if event.type == AgentEventType.TOOL_CALL:
             self.state_mgr.append_conversation("tool_call", event.content)
         elif event.type == AgentEventType.TOOL_RESULT:
@@ -162,33 +169,6 @@ class SessionRunner:
         self.state_mgr.append_conversation("system", content)
         return None
 
-    def _event_loop(self):
-        last_reconcile = time.monotonic()
-        question_time: float | None = None  # OQ-4: track when question was asked
-
-        for event in self.agent.stream_events():
-            self.state_mgr.append_raw(event.raw)
-
-            result = self._dispatch_event(event)
-            if result == "STOP":
-                break
-            if result == "QUESTION_ASKED":
-                question_time = time.monotonic()
-
-            # OQ-4: if @@QUESTION@@ was seen but @@WAITING@@ hasn't arrived
-            if self._should_force_waiting(question_time):
-                log.warning("@@WAITING@@ not received — forcing wait")
-                self._on_waiting()
-                question_time = None
-
-            # Reconciliation
-            last_reconcile = self._maybe_reconcile(last_reconcile)
-
-        # OQ-1: handle pending questions after agent exits
-        if self._pending_questions:
-            log.info("Agent exited with pending question(s). Collecting answer...")
-            self._on_waiting()
-
     def _should_force_waiting(self, question_time: float | None) -> bool:
         """Check if we should force a @@WAITING@@ due to timeout."""
         return (question_time is not None
@@ -202,6 +182,8 @@ class SessionRunner:
                 self.state_mgr.update_status("cancelled:external")
             return time.monotonic()
         return last_reconcile
+
+    # ── Text / marker handling ────────────────────────────────
 
     def _handle_text(self, text: str) -> str | None:
         self.state_mgr.append_conversation("assistant", text)
@@ -254,153 +236,33 @@ class SessionRunner:
                 end = pos
         return after[:end].strip()
 
+    # ── Q&A delegation ────────────────────────────────────────
+
     def _on_question(self, question: str):
-        step = self.state_mgr.load_state().step
-        self.state_mgr.update_status("waiting:question")
-        self.tracker.add_comment(
-            self.issue.id, f"❓ **Question (step {step}):** {question}")
-        self.tracker.add_label(self.issue.id, "needs-human-input")
-        self.state_mgr.append_conversation("question", question)
-
-        self._question_sent_via_notifier = self.notifier.send_question(
-            self.issue.id, question, self.issue.identifier)
-        if not self._question_sent_via_notifier:
-            self.notifier.notify(f"❓ [{self.issue.identifier}]: {question}")
-
-        self._pending_questions.append(question)  # OQ-7: queue
+        handle_question(
+            question, self.state_mgr, self.tracker, self.notifier,
+            self.issue, self._pending_questions)
 
     def _on_waiting(self):
-        if not self._pending_questions:
-            log.warning("@@WAITING@@ without pending question — ignoring")
-            return
-
-        question = self._pending_questions.pop(0)  # OQ-7: pop oldest
-        self.state_mgr.signal_waiting(question)
-        log.info("Waiting for answer. Container may be paused.")
-
-        answer = collect_answer(
-            self.state_mgr, self.notifier, self.tracker, self.issue.id)
-
-        self.state_mgr.clear_waiting()
-        self.state_mgr.add_qa(question, answer)
-        self.tracker.remove_label(self.issue.id, "needs-human-input")
-        self.tracker.add_comment(self.issue.id, f"💬 Answer: {answer[:ANSWER_PREVIEW_LEN]}")
-
-        self._deliver_answer(answer)
-
-    def _deliver_answer(self, answer: str):
-        """Send answer to agent or mark for restart if agent exited."""
-        if not self.agent.is_alive():
-            log.info("Agent exited (expected in -p mode). Will restart with answer.")
-            self.state_mgr.update_status("suspended:answer-ready")
-            return
-        self.agent.send_input(answer)
-        self.state_mgr.update_status("working")
-        log.info("Answer sent to agent stdin.")
+        handle_waiting(
+            self.state_mgr, self.notifier, self.tracker,
+            self.issue, self.agent, self._pending_questions)
 
     def _on_done(self):
         """Mark as done. Review/merge happens in _post_run after agent exits."""
         self._commit_wip(f"resolve {self.issue.identifier}")
         self.state_mgr.update_status("done:pending-review")
 
-    def _notify_done(self, state):
-        """Post proof-of-work summary and notify."""
-        self.state_mgr.update_status("waiting:review")
-        diff = self.workspace_mgr.diff_stat(self._workspace.path) if self._workspace else "N/A"
-        ticks = "```"
-
-        summary_lines = [f"- {cp.description}" for cp in state.checkpoints]
-        summary = "\n".join(summary_lines) if summary_lines else "No checkpoints recorded."
-
-        proof = (
-            f"🏁 **Work complete — awaiting review**\n\n"
-            f"**Summary:**\n{summary}\n\n"
-            f"**Q&A exchanges:** {len(state.human_answers)}\n"
-            f"**Changes:**\n{ticks}\n{diff}\n{ticks}"
-        )
-        self.tracker.add_comment(self.issue.id, proof)
-        self.tracker.add_label(self.issue.id, "needs-review")
-        self.tracker.remove_label(self.issue.id, "agent-in-progress")
-        self.notifier.notify(
-            f"🏁 {self.issue.identifier} done. nightshift accept/reject/revise {self.issue.identifier}"
-        )
+    # ── Post-run delegation ───────────────────────────────────
 
     def _post_run(self) -> str | None:
         """Returns resume prompt if auto-resuming, None if terminal."""
-        st = self.state_mgr.load_state()
+        return post_run_action(
+            self.state_mgr, self.workspace_mgr, self._workspace,
+            self.tracker, self.notifier, self.issue, self.agent,
+            self._build_resume, self._commit_wip)
 
-        if st.status == "suspended:answer-ready":
-            return self._resume_with_answer(st)
-        if st.status == "done:pending-review":
-            self._notify_done(st)
-            return None
-        if st.status in ("completed", "cancelled:review-rejected"):
-            return None
-        if st.status == "cancelled:external":
-            self.tracker.add_comment(self.issue.id, "🛑 Stopped: closed externally.")
-            self.notifier.notify(f"🛑 {self.issue.identifier} stopped.")
-            return None
-        if st.status in ("suspended:context-limit", "suspended:stall"):
-            return self._prepare_resume(st.status.split(":")[1])
-        if st.status == "working":
-            self._commit_wip("max-turns")
-            return self._prepare_resume("max-turns")
-        # Unexpected
-        self._commit_wip("unexpected exit")
-        self.state_mgr.update_status("suspended:unexpected")
-        self._build_resume()
-        self.notifier.notify(f"⚠️ {self.issue.identifier} ended unexpectedly.")
-        return None
-
-    def _resume_with_answer(self, st) -> str:
-        """Restart agent with collected answer via --resume."""
-        answer = st.human_answers[-1].answer if st.human_answers else ""
-        self.state_mgr.update_status("working")
-        self.state_mgr.append_conversation("human_answer_sent", answer)
-        log.info("Restarting agent with answer via --resume")
-        return answer
-
-    def _prepare_resume(self, reason: str) -> str:
-        """Build resume prompt and notify. Returns the prompt for the loop."""
-        self._build_resume()
-        self._maybe_summarize_checkpoints()
-        self.tracker.add_comment(self.issue.id, f"🔄 {reason} — auto-resuming...")
-        self.notifier.notify(f"{reason} for {self.issue.identifier}. Resuming.")
-        self.state_mgr.update_status("working")
-        return self.state_mgr.read_resume_prompt()
-
-    def _maybe_summarize_checkpoints(self):
-        """Compress checkpoint history when it gets long."""
-        state = self.state_mgr.load_state()
-        if len(state.checkpoints) <= CHECKPOINT_SUMMARIZE_THRESHOLD:
-            return
-        cp_text = "\n".join(
-            f"Step {c.step}: {c.description}" for c in state.checkpoints
-        )
-        try:
-            self._run_summarizer(cp_text)
-        except Exception as e:
-            log.warning(f"Checkpoint summarization failed: {e}")
-
-    def _run_summarizer(self, cp_text: str):
-        """Use agent to summarize checkpoints, updating resume prompt."""
-        self.agent.start(
-            prompt=f"Summarize these checkpoints to {CHECKPOINT_SUMMARY_COUNT} key decisions. "
-                   f"Output only the summary:\n\n{cp_text}",
-            workspace=self._workspace.path if self._workspace else Path("/tmp"),
-            max_turns=1,
-        )
-        summary_parts = []
-        for event in self.agent.stream_events():
-            if event.type == AgentEventType.TEXT:
-                summary_parts.append(event.content)
-            elif event.type in (AgentEventType.PROCESS_EXIT, AgentEventType.STALL):
-                break
-        self.agent.terminate()
-
-        summary = " ".join(summary_parts).strip()
-        if summary:
-            self._build_resume(checkpoint_summary=summary)
+    # ── Workspace helpers ─────────────────────────────────────
 
     def _issue_is_terminal(self) -> bool:
         self.tracker.sync()

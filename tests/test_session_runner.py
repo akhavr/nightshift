@@ -14,6 +14,7 @@ from core.config.models import HooksConfig, MergeConfig
 from core.state import StateManager, SessionState
 from core.session import SessionRunner, MAX_RESUMES
 from core.answer_collector import collect_answer
+from core.post_run import notify_done, maybe_summarize_checkpoints
 
 # Re-use mocks from conftest
 from tests.conftest import (
@@ -627,29 +628,31 @@ class TestCommitCheckpoint:
 class TestNotifyDone:
     def test_notify_done_posts_summary(self, tmp_path):
         runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path)
-        runner._workspace = Workspace(path=tmp_path, branch="test")
+        ws = Workspace(path=tmp_path, branch="test")
         state_mgr.add_checkpoint("step one", 1, "abc1234")
         st = state_mgr.load_state()
-        runner._notify_done(st)
+        issue = make_test_issue()
+        notify_done(state_mgr, ws_mgr, ws, tracker, notifier, issue, st)
         comments = tracker.get_comments("test-001")
         assert any("Work complete" in c.body for c in comments)
         assert any("step one" in c.body for c in comments)
-        issue = tracker.issues["test-001"]
-        assert "needs-review" in issue.labels
+        issue_obj = tracker.issues["test-001"]
+        assert "needs-review" in issue_obj.labels
 
     def test_notify_done_no_checkpoints(self, tmp_path):
         runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path)
-        runner._workspace = Workspace(path=tmp_path, branch="test")
+        ws = Workspace(path=tmp_path, branch="test")
         st = state_mgr.load_state()
-        runner._notify_done(st)
+        issue = make_test_issue()
+        notify_done(state_mgr, ws_mgr, ws, tracker, notifier, issue, st)
         comments = tracker.get_comments("test-001")
         assert any("No checkpoints recorded" in c.body for c in comments)
 
     def test_notify_done_no_workspace(self, tmp_path):
-        runner, *_, state_mgr = _make_runner(tmp_path)
-        runner._workspace = None
+        runner, _, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path)
         st = state_mgr.load_state()
-        runner._notify_done(st)
+        issue = make_test_issue()
+        notify_done(state_mgr, ws_mgr, None, tracker, notifier, issue, st)
         # Should use "N/A" for diff
 
 
@@ -660,7 +663,9 @@ class TestMaybeSummarizeCheckpoints:
         state_mgr = runner.state_mgr
         for i in range(5):
             state_mgr.add_checkpoint(f"step {i}", i, f"commit{i}")
-        runner._maybe_summarize_checkpoints()
+        maybe_summarize_checkpoints(
+            state_mgr, agent, runner._workspace,
+            runner._build_resume)
         # Agent should NOT have been started for summarization
 
     def test_long_checkpoint_list_triggers_summarization(self, tmp_path):
@@ -675,7 +680,9 @@ class TestMaybeSummarizeCheckpoints:
             state_mgr.add_checkpoint(f"step {i}", i, f"commit{i}")
         # Pre-increment cycle since _make_runner doesn't call start
         summarize_agent._cycle = 0
-        runner._maybe_summarize_checkpoints()
+        maybe_summarize_checkpoints(
+            state_mgr, summarize_agent, runner._workspace,
+            runner._build_resume)
         assert summarize_agent.started
 
 
