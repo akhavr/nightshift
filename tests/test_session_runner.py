@@ -664,7 +664,7 @@ class TestMaybeSummarizeCheckpoints:
         for i in range(5):
             state_mgr.add_checkpoint(f"step {i}", i, f"commit{i}")
         maybe_summarize_checkpoints(
-            state_mgr, agent, runner._workspace, runner.workspace_mgr,
+            state_mgr, agent, runner._workspace,
             runner._build_resume)
         # Agent should NOT have been started for summarization
 
@@ -682,7 +682,7 @@ class TestMaybeSummarizeCheckpoints:
         summarize_agent._cycle = 0
         maybe_summarize_checkpoints(
             state_mgr, summarize_agent, runner._workspace,
-            runner.workspace_mgr, runner._build_resume)
+            runner._build_resume)
         assert summarize_agent.started
 
 

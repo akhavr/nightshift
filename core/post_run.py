@@ -114,7 +114,7 @@ def prepare_resume(
 ) -> str:
     """Build resume prompt and notify. Returns the prompt for the loop."""
     build_resume_fn()
-    maybe_summarize_checkpoints(state_mgr, agent, workspace, workspace_mgr, build_resume_fn)
+    maybe_summarize_checkpoints(state_mgr, agent, workspace, build_resume_fn)
     tracker.add_comment(issue.id, f"🔄 {reason} — auto-resuming...")
     notifier.notify(f"{reason} for {issue.identifier}. Resuming.")
     state_mgr.update_status("working")
@@ -125,7 +125,6 @@ def maybe_summarize_checkpoints(
     state_mgr: StateManager,
     agent: CodingAgent,
     workspace: Workspace | None,
-    workspace_mgr: WorkspaceManager,
     build_resume_fn,
 ):
     """Compress checkpoint history when it gets long."""

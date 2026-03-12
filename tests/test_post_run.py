@@ -141,7 +141,7 @@ class TestMaybeSummarizeCheckpoints:
         agent, _, _, ws_mgr, sm, ws, _ = _setup(tmp_path)
         for i in range(5):
             sm.add_checkpoint(f"step {i}", i, f"commit{i}")
-        maybe_summarize_checkpoints(sm, agent, ws, ws_mgr, lambda **kw: None)
+        maybe_summarize_checkpoints(sm, agent, ws, lambda **kw: None)
         assert not agent.started
 
     def test_triggers_on_long_list(self, tmp_path):
@@ -151,5 +151,5 @@ class TestMaybeSummarizeCheckpoints:
         _, _, _, ws_mgr, sm, ws, _ = _setup(tmp_path)
         for i in range(12):
             sm.add_checkpoint(f"step {i}", i, f"commit{i}")
-        maybe_summarize_checkpoints(sm, summarize_agent, ws, ws_mgr, lambda **kw: None)
+        maybe_summarize_checkpoints(sm, summarize_agent, ws, lambda **kw: None)
         assert summarize_agent.started
