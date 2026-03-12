@@ -5,14 +5,10 @@ Works with any adapters implementing the protocols.
 
 import logging
 import time
-from pathlib import Path
 
 from core.config import MergeConfig
 from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
-from core.post_run import (
-    post_run_action,
-    CHECKPOINT_SUMMARIZE_THRESHOLD, CHECKPOINT_SUMMARY_COUNT,
-)
+from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
 from core.protocols import (
     CodingAgent, IssueTracker, Notifier, WorkspaceManager,
