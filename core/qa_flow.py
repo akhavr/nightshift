@@ -12,6 +12,8 @@ from core.state import StateManager
 
 log = logging.getLogger(__name__)
 
+TITLE_MAX_LEN = 60  # truncation length for issue titles in notifications
+
 
 def handle_question(
     question: str,
@@ -32,7 +34,7 @@ def handle_question(
     sent_via_notifier = notifier.send_question(
         issue.id, question, issue.identifier)
     if not sent_via_notifier:
-        notifier.notify(f"❓ [{issue.identifier}]: {question}")
+        notifier.notify(f"❓ [{issue.identifier}] {issue.title[:TITLE_MAX_LEN]}: {question}")
 
     pending_questions.append(question)
     return sent_via_notifier
