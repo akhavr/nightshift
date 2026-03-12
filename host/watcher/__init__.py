@@ -44,6 +44,7 @@ from host.watcher.command_executor import CommandExecutor  # noqa: E402
 from host.watcher.review_orchestrator import ReviewOrchestrator  # noqa: E402
 from host.watcher.session_monitor import SessionMonitor  # noqa: E402
 from host.watcher.host_watcher import HostWatcher  # noqa: E402
+from host.watcher import lifecycle_comments  # noqa: E402
 from host.watcher.main import main  # noqa: E402
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "ReviewOrchestrator",
     "SessionMonitor",
     "HostWatcher",
+    "lifecycle_comments",
     "main",
     "HAS_REQUESTS",
     "_ACTIVE_STATUSES",

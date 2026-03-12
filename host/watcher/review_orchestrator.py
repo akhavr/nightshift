@@ -15,6 +15,7 @@ from host.constants import (
 from host.session_utils import read_state, update_status as _update_status
 from core.config import load_workflow
 from core.review import parse_nightshift_command
+from host.watcher.lifecycle_comments import post_done, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
 from host.watcher.verdict_handler import VerdictHandler
 from host.watcher.command_executor import CommandExecutor
@@ -46,6 +47,7 @@ class ReviewOrchestrator:
         self._launch_background = launch_background
         self._last_poll = 0.0
         self._rounds: dict[str, int] = {}
+        self._posted_done: set[str] = set()
 
         self.verdicts = VerdictHandler(
             sessions_dir, repo_dir, telegram,
@@ -105,8 +107,7 @@ class ReviewOrchestrator:
             return
 
         review_md = self.repo_dir / "REVIEW.md"
-        if not review_md.exists():
-            return
+        waiting_sessions = []
 
         for session_dir in self.sessions_dir.iterdir():
             if not session_dir.is_dir() or session_dir.name.startswith("review-"):
@@ -122,8 +123,22 @@ class ReviewOrchestrator:
             if state.get("status") != "waiting:review":
                 continue
             issue_id = state.get("issue_id", "")
-            if issue_id:
-                self.maybe_launch_review(sid, session_dir, issue_id, review_md)
+            if not issue_id:
+                continue
+
+            # Post done comment once per session (regardless of REVIEW.md)
+            if sid not in self._posted_done:
+                self._posted_done.add(sid)
+                cp_count = read_checkpoint_count(session_dir)
+                post_done(self._get_tracker, issue_id, sid, cp_count)
+
+            waiting_sessions.append((sid, session_dir, issue_id))
+
+        if not review_md.exists():
+            return
+
+        for sid, session_dir, issue_id in waiting_sessions:
+            self.maybe_launch_review(sid, session_dir, issue_id, review_md)
 
     def maybe_launch_review(self, sid: str, session_dir: Path,
                             issue_id: str, review_md: Path):
@@ -206,6 +221,7 @@ class ReviewOrchestrator:
         if verdict == "approve":
             self.verdicts.handle_reviewer_approve(coder_sid, coder_dir, issue_id)
         elif verdict == "revise":
+            self._posted_done.discard(coder_sid)
             self.verdicts.handle_reviewer_revise(coder_sid, coder_dir, issue_id, session_dir)
 
         self.cleanup_review_session(sid, session_dir)
@@ -312,6 +328,7 @@ class ReviewOrchestrator:
             return
 
         if cmd == "revise":
+            self._posted_done.discard(sid)
             self.do_revise(sid, issue_id, session_dir)
         elif cmd == "accept":
             self.do_cli_command(sid, "accept", issue_id)
