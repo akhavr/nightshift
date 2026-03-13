@@ -1,6 +1,5 @@
 """Tests for notification level filtering (REQ-010)."""
 
-import os
 from unittest.mock import patch, MagicMock
 
 from core.protocols import NotificationLevel, should_notify
