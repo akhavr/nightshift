@@ -120,7 +120,8 @@ def prepare_resume(
     build_resume_fn()
     maybe_summarize_checkpoints(state_mgr, agent, workspace, build_resume_fn)
     tracker.add_comment(issue.id, f"🔄 {reason} — auto-resuming...")
-    notifier.notify(f"{reason} for {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}. Resuming.")
+    notifier.notify(f"{reason} for {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}. Resuming.",
+                    level=NotificationLevel.ALL)
     state_mgr.update_status("working")
     return state_mgr.read_resume_prompt()
 

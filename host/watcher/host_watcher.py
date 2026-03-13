@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from host.constants import REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S
-from core.config import load_workflow, create_tracker, NotifierConfig
+from core.config import load_workflow, create_tracker
 from host.watcher.telegram_relay import TelegramRelay
 from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
@@ -58,8 +58,8 @@ class HostWatcher:
     def _telegram_level_from_config(self) -> str:
         """Read notification level for the telegram notifier from WORKFLOW.md."""
         try:
-            cfg = load_workflow(self.repo_dir / "WORKFLOW.md")
-            for nc in cfg.notifications:
+            self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            for nc in self._config.notifications:
                 if nc.kind == "telegram":
                     return nc.level
         except Exception as e:
@@ -69,7 +69,8 @@ class HostWatcher:
     def _get_tracker(self):
         """Lazy-init tracker from WORKFLOW.md."""
         if self._tracker is None:
-            self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            if self._config is None:
+                self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
             self._tracker = create_tracker(self._config, repo_dir=str(self.repo_dir))
         return self._tracker
 
