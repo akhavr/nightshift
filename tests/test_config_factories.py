@@ -217,8 +217,8 @@ class TestCreateNotifiers:
             result = create_notifiers(cfg)
 
         assert len(result) == 2
-        tg_cls.assert_called_once_with(token="t", chat_id="1")
-        wh_cls.assert_called_once_with(url="http://x")
+        tg_cls.assert_called_once_with(token="t", chat_id="1", level="all")
+        wh_cls.assert_called_once_with(url="http://x", level="all")
 
     def test_telegram_receives_tracker(self):
         cfg = WorkflowConfig(
@@ -232,7 +232,7 @@ class TestCreateNotifiers:
         with patch("core.config.factories.importlib.import_module", return_value=mod):
             create_notifiers(cfg, tracker=tracker)
 
-        mock_cls.assert_called_once_with(token="t", tracker=tracker)
+        mock_cls.assert_called_once_with(token="t", level="all", tracker=tracker)
 
     def test_non_telegram_does_not_receive_tracker(self):
         cfg = WorkflowConfig(
@@ -246,7 +246,7 @@ class TestCreateNotifiers:
         with patch("core.config.factories.importlib.import_module", return_value=mod):
             create_notifiers(cfg, tracker=tracker)
 
-        mock_cls.assert_called_once_with(url="http://x")
+        mock_cls.assert_called_once_with(url="http://x", level="all")
 
     def test_empty_notifications(self):
         cfg = WorkflowConfig(notifications=[])

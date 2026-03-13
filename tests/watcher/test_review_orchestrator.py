@@ -203,7 +203,7 @@ class TestHandleReviewerApprove:
         w = _make_watcher(tmp_path, tg_enabled=True)
         coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing")
         tg_calls = []
-        w.telegram.notify = lambda msg: tg_calls.append(msg)
+        w.telegram.notify = lambda msg, **kw: tg_calls.append(msg)
         tracker = MagicMock()
         w._tracker = tracker
 
@@ -332,7 +332,7 @@ class TestHandleReviewerRevise:
         review_dir.mkdir()
         (review_dir / "conversation.jsonl").write_text("")
         tg_calls = []
-        w.telegram.notify = lambda msg: tg_calls.append(msg)
+        w.telegram.notify = lambda msg, **kw: tg_calls.append(msg)
         w._tracker = MagicMock()
         w._tracker.get_comments.return_value = []
         w.reviews._launch_background = lambda cmd, sid: None
