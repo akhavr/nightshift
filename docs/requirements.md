@@ -59,9 +59,9 @@ When a REVIEW.md template exists, the system automatically launches a reviewer a
 - **Status:** covered
 
 ### REQ-010: Notifications via pluggable channels
-The system sends notifications (status updates, questions, completion) through configurable channels (Telegram, webhook, Slack). Notifications include a project name prefix so multi-project setups are distinguishable.
+The system sends notifications (status updates, questions, completion) through configurable channels (Telegram, webhook, Slack). Notifications include a project name prefix so multi-project setups are distinguishable. Each notifier supports a `level` setting (`questions`, `actions`, `all`) to filter notification verbosity — `questions` delivers only human-input-needed alerts, `actions` adds done/error/escalation, `all` (default) sends everything.
 
-- **Tests:** test_notifier_prefix.py, test_composite_notifier.py
+- **Tests:** test_notifier_prefix.py, test_composite_notifier.py, test_notification_level.py
 - **Status:** covered
 
 ### REQ-011: Configuration via WORKFLOW.md
@@ -155,6 +155,7 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | test_git_utils.py | REQ-001, REQ-006 |
 | test_launch.py | REQ-001, REQ-018 |
 | test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015 |
+| test_notification_level.py | REQ-010 |
 | test_notifier_prefix.py | REQ-010 |
 | test_post_container.py | REQ-005, REQ-018 |
 | test_prompts.py | REQ-004, REQ-011 |
