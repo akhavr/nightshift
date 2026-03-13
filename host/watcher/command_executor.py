@@ -10,6 +10,7 @@ from host.constants import (
     SHORT_ID_LEN,
 )
 from host.session_utils import update_status as _update_status
+from core.protocols import NotificationLevel
 from core.review import collect_review_feedback, build_revise_prompt
 from host.watcher.telegram_relay import TelegramRelay
 
@@ -105,12 +106,14 @@ class CommandExecutor:
         log.error(f"[{sid}] nightshift {command} failed (attempt {attempts}, "
                   f"retry in {backoff_m}m): {error_msg}")
         self.telegram.notify(f"\u26a0\ufe0f `nightshift {command}` failed for `{sid}` "
-                             f"(attempt {attempts}, retry in {backoff_m}m):\n\n{error_msg}")
+                             f"(attempt {attempts}, retry in {backoff_m}m):\n\n{error_msg}",
+                             level=NotificationLevel.ALL)
 
     def _handle_cli_success(self, sid: str, command: str, result):
         """Handle a successful CLI command."""
         log.info(f"[{sid}] nightshift {command} completed")
-        self.telegram.notify(f"\u2705 `nightshift {command}` completed for `{sid}`")
+        self.telegram.notify(f"\u2705 `nightshift {command}` completed for `{sid}`",
+                             level=NotificationLevel.ALL)
         self._command_failures.pop(sid, None)
         if result.stdout.strip():
             log.info(f"[{sid}] {result.stdout.strip()}")

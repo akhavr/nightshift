@@ -104,7 +104,8 @@ class TestDockerUtils:
         w._tracker = tracker
         w.monitor.cleanup_session = MagicMock()
 
-        with patch("host.watcher.docker_stop") as mock_stop:
+        with patch("host.watcher.docker_stop") as mock_stop, \
+             patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_closed_issues()
 
         mock_stop.assert_called_once_with("nightshift-abc")

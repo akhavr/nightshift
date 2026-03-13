@@ -161,7 +161,8 @@ class VerdictHandler:
             _update_status(coder_dir, "working")
             self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")
-            self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.")
+            self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.",
+                                level=NotificationLevel.ALL)
 
             reason = "\n".join(parts)
             post_revise(self._get_tracker, issue_id, coder_sid, reason)

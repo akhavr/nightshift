@@ -53,6 +53,15 @@ class TestWebhookLevelFiltering:
         n.notify("anything")
         mock_post.assert_called_once()
 
+    @patch("adapters.notifiers.webhook.requests.post")
+    def test_webhook_send_question_bypasses_level_filter(self, mock_post):
+        """send_question uses QUESTIONS level so it passes even with questions-only config."""
+        from adapters.notifiers.webhook import WebhookNotifier
+        n = WebhookNotifier(url="http://example.com/hook", level="questions")
+        result = n.send_question("issue-1", "What color?", "abc")
+        assert result is False
+        mock_post.assert_called_once()
+
 
 class FakeTracker:
     def add_comment(self, *a, **kw): pass

@@ -31,7 +31,7 @@ class WebhookNotifier:
                 log.warning(f"Webhook notify failed: {e}")
 
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool:
-        self.notify(f"❓ [{short_id}] {question}"); return False
+        self.notify(f"❓ [{short_id}] {question}", level=NotificationLevel.QUESTIONS); return False
 
     def check_answer(self, issue_id: str) -> Optional[str]:
         return None

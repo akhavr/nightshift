@@ -9,6 +9,7 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
 )
+from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
 from host.session_utils import read_state
 from core.config import load_workflow
@@ -136,9 +137,6 @@ class SessionMonitor:
                 log.warning(f"[{sid}] Failed to read state for closed-issue check: {e}")
                 continue
 
-            if state.get("status") in ("working", "starting"):
-                continue
-
             issue_id = state.get("issue_id", "")
             if not issue_id:
                 continue
@@ -153,8 +151,17 @@ class SessionMonitor:
             if not issue or issue.status not in ("closed",):
                 continue
 
+            # Stop the container before cleanup to avoid pulling
+            # the session dir out from under a running container.
             container = f"nightshift-{sid}"
             _pkg().docker_stop(container)
+
+            # Verify container is actually gone; if still running,
+            # defer cleanup to the next poll cycle.
+            status = _pkg().docker_container_status(container)
+            if status in ("running", "paused"):
+                log.warning(f"[{sid}] Container still {status} after stop -- deferring cleanup")
+                continue
 
             log.info(f"[{sid}] Issue closed -- cleaning up worktree and session")
             self.cleanup_session(sid, issue_id, session_dir)
@@ -243,7 +250,8 @@ class SessionMonitor:
             self._recently_launched[sid] = time.time()
             active_count += 1
             log.info(f"Auto-start: launching {issue.identifier} -- {issue.title[:TITLE_TRUNCATE_LEN]}")
-            self.telegram.notify(f"\U0001f680 Auto-starting `{issue.identifier}`: {issue.title[:TITLE_TRUNCATE_LEN]}")
+            self.telegram.notify(f"\U0001f680 Auto-starting `{issue.identifier}`: {issue.title[:TITLE_TRUNCATE_LEN]}",
+                                level=NotificationLevel.ALL)
 
             post_start(self._get_tracker, issue.id, sid, title=issue.title)
 
