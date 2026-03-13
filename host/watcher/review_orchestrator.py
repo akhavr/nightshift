@@ -12,6 +12,7 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, SHORT_ID_LEN, DEFAULT_MAX_REVIEW_ROUNDS,
 )
+from core.protocols import NotificationLevel
 from host.session_utils import read_state, update_status as _update_status
 from core.config import load_workflow
 from core.review import parse_nightshift_command
@@ -179,7 +180,8 @@ class ReviewOrchestrator:
         self.telegram.notify(
             f"\u26a0\ufe0f `{sid}` hit max review rounds ({max_rounds}). "
             f"Escalating to human review.\n"
-            f"`nightshift accept/reject/revise {issue_id}`")
+            f"`nightshift accept/reject/revise {issue_id}`",
+            level=NotificationLevel.ACTIONS)
 
     def check_reviewer_done(self):
         """Check if reviewer sessions have finished, handle verdict."""

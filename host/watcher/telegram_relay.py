@@ -8,6 +8,7 @@ from host.constants import (
     TG_LONG_POLL_TIMEOUT_S, TG_HTTP_TIMEOUT_S, TG_POST_TIMEOUT_S,
     TG_MESSAGE_SOFT_LIMIT, TG_TRUNCATION_POINT,
 )
+from core.protocols import NotificationLevel, should_notify
 from core.review import parse_nightshift_command
 
 log = logging.getLogger("watcher")
@@ -22,7 +23,8 @@ def _pkg():
 class TelegramRelay:
     """Telegram communication: polling, sending notifications, Q&A questions, acks."""
 
-    def __init__(self, token: str, chat_id: str, project_name: str, sessions_dir: Path):
+    def __init__(self, token: str, chat_id: str, project_name: str, sessions_dir: Path,
+                 level: str = "all"):
         self.token = token
         self.chat_id = chat_id
         self.project_name = project_name
@@ -31,6 +33,7 @@ class TelegramRelay:
         # host.watcher.HAS_REQUESTS take effect.
         self.enabled = _pkg().HAS_REQUESTS and bool(token and chat_id)
         self._offset = 0
+        self._level = NotificationLevel[level.upper()]
 
     def poll_all(self, paused: dict) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
         """Single Telegram poll -- routes messages to Q&A answers or review commands."""
@@ -96,9 +99,11 @@ class TelegramRelay:
                 return session_dir.name
         return None
 
-    def notify(self, text: str):
+    def notify(self, text: str, *, level: NotificationLevel = NotificationLevel.ALL):
         """Send a plain notification to Telegram (no reply expected)."""
         if not self.enabled:
+            return
+        if not should_notify(self._level, level):
             return
         text = f"[{self.project_name}] {text}"
         if len(text) > TG_MESSAGE_SOFT_LIMIT:

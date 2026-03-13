@@ -29,6 +29,7 @@ class WorkspaceConfig:
 @dataclass
 class NotifierConfig:
     kind: str
+    level: str = "all"
     extra: dict[str, Any] = field(default_factory=dict)
 
 

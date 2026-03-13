@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Optional
 import requests
-from core.protocols import Notifier
+from core.protocols import Notifier, NotificationLevel, should_notify
 from adapters.notifiers._utils import project_prefix
 
 HTTP_REQUEST_TIMEOUT_S = 10  # Default timeout for outgoing HTTP calls
@@ -13,8 +13,9 @@ log = logging.getLogger(__name__)
 
 
 class WebhookNotifier:
-    def __init__(self, url: str | None = None):
+    def __init__(self, url: str | None = None, level: str = "all"):
         self.url = url or os.environ.get("NOTIFY_WEBHOOK_URL", "")
+        self._level = NotificationLevel[level.upper()]
 
     def start(self) -> None:
         pass
@@ -22,7 +23,8 @@ class WebhookNotifier:
     def stop(self) -> None:
         pass
 
-    def notify(self, message: str) -> None:
+    def notify(self, message: str, *, level: NotificationLevel = NotificationLevel.ALL) -> None:
+        if not should_notify(self._level, level): return
         if self.url:
             try: requests.post(self.url, json={"text": project_prefix(message)}, timeout=HTTP_REQUEST_TIMEOUT_S)
             except Exception as e:

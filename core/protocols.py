@@ -110,11 +110,23 @@ class WorkspaceManager(Protocol):
 
 # ── Notifications ─────────────────────────────────────────
 
+class NotificationLevel(Enum):
+    """Severity levels for notifications, ordered by increasing verbosity."""
+    QUESTIONS = auto()   # only Q&A needing human input
+    ACTIONS = auto()     # questions + done/accept/reject/escalation
+    ALL = auto()         # everything (default, backward compat)
+
+
+def should_notify(configured_level: "NotificationLevel", message_level: "NotificationLevel") -> bool:
+    """Return True if a message at message_level should be sent given configured_level."""
+    return message_level.value <= configured_level.value
+
+
 @runtime_checkable
 class Notifier(Protocol):
     def start(self) -> None: ...
     def stop(self) -> None: ...
-    def notify(self, message: str) -> None: ...
+    def notify(self, message: str, *, level: NotificationLevel = NotificationLevel.ALL) -> None: ...
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool: ...
     def check_answer(self, issue_id: str) -> Optional[str]: ...
     def clear_pending(self, issue_id: str) -> None: ...

@@ -12,7 +12,7 @@ from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
 from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
 from core.protocols import (
-    CodingAgent, IssueTracker, Notifier, WorkspaceManager,
+    CodingAgent, IssueTracker, Notifier, NotificationLevel, WorkspaceManager,
     AgentEventType, MarkerType, parse_marker, TrackerIssue, Workspace,
 )
 from core.qa_flow import handle_question, handle_waiting
@@ -75,7 +75,8 @@ class SessionRunner:
             if not self._run_hook(self.hooks_config.before_run, "before_run", fatal=True):
                 self.state_mgr.update_status("suspended:hook-failure")
                 self.notifier.notify(
-                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]}: before_run hook failed.")
+                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]}: before_run hook failed.",
+                    level=NotificationLevel.ACTIONS)
                 return False
 
         self.state_mgr.append_conversation("user", prompt)
@@ -101,7 +102,8 @@ class SessionRunner:
                 log.error(f"Hit max resumes ({MAX_RESUMES}). Stopping.")
                 self.state_mgr.update_status("suspended:max-resumes")
                 self.notifier.notify(
-                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]} hit {MAX_RESUMES} resumes. Manual --resume needed.")
+                    f"⚠️ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]} hit {MAX_RESUMES} resumes. Manual --resume needed.",
+                    level=NotificationLevel.ACTIONS)
                 break
 
             if not self._run_agent_cycle(prompt):

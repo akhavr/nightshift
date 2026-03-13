@@ -92,10 +92,12 @@ def _parse_workspace(raw: dict, config: WorkflowConfig):
 def _parse_notifications(raw: dict, config: WorkflowConfig):
     if "notifications" not in raw:
         return
+    known_keys = {"kind", "level"}
     for n in raw["notifications"]:
         config.notifications.append(NotifierConfig(
             kind=n.get("kind", "webhook"),
-            extra={k: v for k, v in n.items() if k != "kind"},
+            level=n.get("level", "all"),
+            extra={k: v for k, v in n.items() if k not in known_keys},
         ))
 
 
