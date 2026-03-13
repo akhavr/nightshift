@@ -172,16 +172,24 @@ class TestCheckClosedIssues:
 
         tracker.get_issue.assert_not_called()
 
-    def test_working_session_skipped(self, tmp_path):
+    def test_working_session_cleaned_when_issue_closed(self, tmp_path):
+        """Working sessions should also be cleaned up when the issue is closed."""
         w = _make_watcher(tmp_path)
         w.monitor._last_closed_check = 0.0
         _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         tracker = MagicMock()
+        issue = _make_issue("issue-abc", status="closed")
+        tracker.get_issue.return_value = issue
         w._tracker = tracker
 
-        w.monitor.check_closed_issues()
+        cleaned = []
+        w.monitor.cleanup_session = lambda sid, iid, sd: cleaned.append(sid)
 
-        tracker.get_issue.assert_not_called()
+        with patch("host.watcher.docker_stop"), \
+             patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_closed_issues()
+
+        assert "abc" in cleaned
 
     def test_closed_issue_triggers_cleanup(self, tmp_path):
         w = _make_watcher(tmp_path)
@@ -195,10 +203,51 @@ class TestCheckClosedIssues:
         cleaned = []
         w.monitor.cleanup_session = lambda sid, iid, sd: cleaned.append(sid)
 
-        with patch("host.watcher.docker_stop"):
+        with patch("host.watcher.docker_stop"), \
+             patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_closed_issues()
 
         assert "abc" in cleaned
+
+    def test_cleanup_deferred_when_container_still_running(self, tmp_path):
+        """If docker_stop fails to stop the container, cleanup is deferred."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_closed_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        issue = _make_issue("issue-abc", status="closed")
+        tracker.get_issue.return_value = issue
+        w._tracker = tracker
+
+        cleaned = []
+        w.monitor.cleanup_session = lambda sid, iid, sdir: cleaned.append(sid)
+
+        with patch("host.watcher.docker_stop"), \
+             patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_closed_issues()
+
+        assert cleaned == []
+        # Session dir should still exist
+        assert sd.exists()
+
+    def test_cleanup_deferred_when_container_paused(self, tmp_path):
+        """Paused containers should also defer cleanup."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_closed_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        tracker = MagicMock()
+        issue = _make_issue("issue-abc", status="closed")
+        tracker.get_issue.return_value = issue
+        w._tracker = tracker
+
+        cleaned = []
+        w.monitor.cleanup_session = lambda sid, iid, sdir: cleaned.append(sid)
+
+        with patch("host.watcher.docker_stop"), \
+             patch("host.watcher.docker_container_status", return_value="paused"):
+            w.monitor.check_closed_issues()
+
+        assert cleaned == []
 
     def test_open_issue_not_cleaned(self, tmp_path):
         w = _make_watcher(tmp_path)
