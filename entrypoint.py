@@ -113,6 +113,7 @@ def main():
         terminal_statuses=tuple(config.terminal_statuses),
         merge_config=config.merge,
         hooks_config=config.hooks,
+        workspace_config=config.workspace,
     )
 
     try:

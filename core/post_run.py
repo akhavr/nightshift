@@ -11,6 +11,7 @@ from core.protocols import (
     TrackerIssue, Workspace, WorkspaceManager,
 )
 from core.constants import TITLE_TRUNCATE_LEN
+from core.rebase import attempt_pre_review_rebase
 from core.state import StateManager
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,8 @@ def post_run_action(
     agent: CodingAgent,
     build_resume_fn,
     commit_wip_fn,
+    base_branch: str = "master",
+    test_command: str | None = None,
 ) -> str | None:
     """Determine what to do after an agent cycle. Returns resume prompt or None."""
     st = state_mgr.load_state()
@@ -36,6 +39,12 @@ def post_run_action(
     if st.status == "suspended:answer-ready":
         return resume_with_answer(state_mgr, st)
     if st.status == "done:pending-review":
+        resume_prompt = attempt_pre_review_rebase(
+            workspace_mgr, workspace, base_branch, test_command)
+        if resume_prompt is not None:
+            tracker.add_comment(issue.id, "🔄 Rebase needed — resuming agent to fix...")
+            state_mgr.update_status("working")
+            return resume_prompt
         notify_done(state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st)
         return None
     if st.status in ("completed", "cancelled:review-rejected"):

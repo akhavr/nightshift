@@ -86,6 +86,7 @@ def _parse_workspace(raw: dict, config: WorkflowConfig):
         kind=w.get("kind", "worktree"),
         base_branch=w.get("base_branch", "master"),
         root=w.get("root", ".worktrees"),
+        test_command=w.get("test_command"),
     )
 
 

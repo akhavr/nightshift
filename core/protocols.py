@@ -97,6 +97,13 @@ class Workspace:
     is_new: bool = False
 
 
+@dataclass
+class RebaseResult:
+    """Outcome of a rebase attempt."""
+    success: bool
+    conflict_details: str = ""
+
+
 @runtime_checkable
 class WorkspaceManager(Protocol):
     def create(self, issue: TrackerIssue) -> Workspace: ...
@@ -106,6 +113,7 @@ class WorkspaceManager(Protocol):
     def has_changes(self, workspace: Path) -> bool: ...
     def diff_stat(self, workspace: Path, base: str = "master") -> str: ...
     def get_current_commit(self, workspace: Path) -> str: ...
+    def rebase(self, workspace: Path, base_branch: str = "master") -> RebaseResult: ...
 
 
 # ── Notifications ─────────────────────────────────────────

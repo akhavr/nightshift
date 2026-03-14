@@ -34,10 +34,10 @@ Agent work is not merged automatically. On completion, the system posts a proof-
 - **Tests:** test_marker_reliability.py, test_review.py, test_review_step.py, test_post_container.py, test_cli_helpers.py, test_session_runner.py
 - **Status:** covered
 
-### REQ-006: Accept (merge) agent work
-A human can accept agent work via CLI, which merges the agent branch into the base branch, detects unresolved conflict markers, handles conflicts, cleans up worktrees, and closes the issue.
+### REQ-006: Merge and conflict handling
+A human can accept agent work via CLI, which merges the agent branch into the base branch, detects unresolved conflict markers, handles conflicts, cleans up worktrees, and closes the issue. Before submitting for review, the agent automatically rebases onto the latest base branch and re-runs tests; if conflicts or test failures occur, the agent is resumed to fix them.
 
-- **Tests:** test_accept_reject.py, test_cli_helpers.py, test_git_utils.py
+- **Tests:** test_accept_reject.py, test_cli_helpers.py, test_git_utils.py, test_rebase.py, test_post_run.py (TestPostRunRebase)
 - **Status:** covered
 
 ### REQ-007: Reject agent work
@@ -157,7 +157,9 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015 |
 | test_notifier_prefix.py | REQ-010 |
 | test_post_container.py | REQ-005, REQ-018 |
+| test_post_run.py | REQ-005, REQ-006 |
 | test_prompts.py | REQ-004, REQ-011 |
+| test_rebase.py | REQ-006 |
 | test_review.py | REQ-005, REQ-008 |
 | test_review_step.py | REQ-005, REQ-008, REQ-009, REQ-011 |
 | test_search.py | REQ-011 |

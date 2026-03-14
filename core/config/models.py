@@ -24,6 +24,7 @@ class WorkspaceConfig:
     kind: str = "worktree"
     base_branch: str = "master"
     root: str = ".worktrees"
+    test_command: str | None = None  # shell command to verify code after rebase
 
 
 @dataclass
