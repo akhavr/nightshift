@@ -14,7 +14,7 @@ from core.protocols import RebaseResult, Workspace, WorkspaceManager
 
 log = logging.getLogger(__name__)
 
-REBASE_TIMEOUT_S = 120  # timeout for test command execution
+TEST_COMMAND_TIMEOUT_S = 120  # timeout for test command execution
 
 
 def attempt_pre_review_rebase(
@@ -56,7 +56,7 @@ def _run_test_command(workspace_path: Path, test_command: str) -> str | None:
             ["sh", "-c", test_command],
             cwd=str(workspace_path),
             capture_output=True, text=True,
-            timeout=REBASE_TIMEOUT_S,
+            timeout=TEST_COMMAND_TIMEOUT_S,
         )
         if result.returncode == 0:
             return None
@@ -64,7 +64,7 @@ def _run_test_command(workspace_path: Path, test_command: str) -> str | None:
         stderr = result.stderr[-1000:] if len(result.stderr) > 1000 else result.stderr
         return f"Exit code {result.returncode}\nstdout:\n{output}\nstderr:\n{stderr}"
     except subprocess.TimeoutExpired:
-        return f"Test command timed out after {REBASE_TIMEOUT_S}s"
+        return f"Test command timed out after {TEST_COMMAND_TIMEOUT_S}s"
     except Exception as e:
         return f"Test command error: {e}"
 

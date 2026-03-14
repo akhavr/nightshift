@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from core.protocols import RebaseResult, Workspace
 from core.rebase import (
@@ -10,7 +10,7 @@ from core.rebase import (
     _run_test_command,
     _build_rebase_conflict_prompt,
     _build_test_failure_prompt,
-    REBASE_TIMEOUT_S,
+    TEST_COMMAND_TIMEOUT_S,
 )
 from tests.conftest import MockWorkspaceManager
 
@@ -89,7 +89,7 @@ class TestRunTestCommand:
         assert "FAIL" in result
 
     def test_timeout_returns_message(self, tmp_path):
-        with patch("core.rebase.REBASE_TIMEOUT_S", 0):
+        with patch("core.rebase.TEST_COMMAND_TIMEOUT_S", 0):
             with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 0)):
                 result = _run_test_command(tmp_path, "sleep 999")
         assert result is not None
