@@ -7,7 +7,7 @@ from typing import Optional, Iterator
 from core.protocols import (
     CodingAgent, IssueTracker, Notifier, WorkspaceManager,
     TrackerIssue, TrackerComment, AgentEvent, AgentEventType,
-    Workspace,
+    Workspace, RebaseResult,
 )
 
 
@@ -134,6 +134,8 @@ class MockWorkspaceManager:
         self.cleaned: list[str] = []
         self.finalized: list[str] = []
         self.commits: list[str] = []
+        self.rebase_result: RebaseResult = RebaseResult(success=True)
+        self.rebase_calls: list[tuple[Path, str]] = []
 
     def create(self, issue: TrackerIssue) -> Workspace:
         ws_path = self.tmp_path / f"ws-{issue.identifier}"
@@ -159,6 +161,10 @@ class MockWorkspaceManager:
 
     def get_current_commit(self, workspace: Path) -> str:
         return "abc1234"
+
+    def rebase(self, workspace: Path, base_branch: str = "master") -> RebaseResult:
+        self.rebase_calls.append((workspace, base_branch))
+        return self.rebase_result
 
     def run_hook(self, workspace: Path, script: str | None, timeout_s: int = 60) -> bool:
         return True

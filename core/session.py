@@ -6,7 +6,7 @@ Works with any adapters implementing the protocols.
 import logging
 import time
 
-from core.config import MergeConfig
+from core.config import MergeConfig, WorkspaceConfig
 from core.constants import TITLE_TRUNCATE_LEN
 from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
 from core.post_run import post_run_action
@@ -36,6 +36,7 @@ class SessionRunner:
         terminal_statuses: tuple[str, ...] = ("closed",),
         merge_config: "MergeConfig | None" = None,
         hooks_config: "HooksConfig | None" = None,
+        workspace_config: "WorkspaceConfig | None" = None,
     ):
         self.agent = agent
         self.tracker = tracker
@@ -53,6 +54,10 @@ class SessionRunner:
             merge_config = MergeConfig()
         self.merge_config = merge_config
         self.hooks_config = hooks_config
+
+        if workspace_config is None:
+            workspace_config = WorkspaceConfig()
+        self.workspace_config = workspace_config
 
     def _init_workspace(self, workspace: Workspace | None):
         """Set up workspace and run after_create hook if new."""
@@ -261,7 +266,9 @@ class SessionRunner:
         return post_run_action(
             self.state_mgr, self.workspace_mgr, self._workspace,
             self.tracker, self.notifier, self.issue, self.agent,
-            self._build_resume, self._commit_wip)
+            self._build_resume, self._commit_wip,
+            base_branch=self.workspace_config.base_branch,
+            test_command=self.workspace_config.test_command)
 
     # ── Workspace helpers ─────────────────────────────────────
 

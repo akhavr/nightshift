@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from core.protocols import WorkspaceManager, Workspace, TrackerIssue
+from core.protocols import WorkspaceManager, Workspace, TrackerIssue, RebaseResult
 
 HOOK_TIMEOUT_S = 60
 
@@ -90,6 +90,40 @@ class GitWorktreeManager:
             ).decode().strip()
         except (subprocess.CalledProcessError, FileNotFoundError):
             return "none"
+
+    def rebase(self, workspace: Path, base_branch: str = "master") -> RebaseResult:
+        """Fetch latest base branch and rebase the worktree branch onto it."""
+        # Fetch latest from remote (ignore failure — remote may not exist)
+        fetch_result = subprocess.run(
+            ["git", "fetch", "origin", base_branch],
+            cwd=str(workspace), capture_output=True, text=True,
+        )
+        # Use fetched remote ref if available, otherwise local base branch
+        rebase_target = f"origin/{base_branch}" if fetch_result.returncode == 0 else base_branch
+
+        result = subprocess.run(
+            ["git", "rebase", rebase_target],
+            cwd=str(workspace), capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return RebaseResult(success=True)
+
+        # Collect conflict details before aborting
+        diff_result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=U"],
+            cwd=str(workspace), capture_output=True, text=True,
+        )
+        conflict_files = diff_result.stdout.strip()
+        details = f"Rebase failed.\nstderr: {result.stderr.strip()}"
+        if conflict_files:
+            details += f"\nConflicting files:\n{conflict_files}"
+
+        # Abort the failed rebase to restore a clean state
+        subprocess.run(
+            ["git", "rebase", "--abort"],
+            cwd=str(workspace), capture_output=True, text=True,
+        )
+        return RebaseResult(success=False, conflict_details=details)
 
     def run_hook(self, workspace: Path, script: str | None,
                  timeout_s: int = HOOK_TIMEOUT_S) -> bool:
