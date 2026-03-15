@@ -4,6 +4,24 @@ import subprocess
 from pathlib import Path
 
 
+def fetch_and_resolve_ref(repo: Path, branch: str) -> str:
+    """Fetch a branch from origin and return the best available ref.
+
+    Fetches `origin/<branch>`, then checks if the remote ref exists.
+    Returns `origin/<branch>` if available, otherwise falls back to the
+    local `<branch>` ref.
+    """
+    subprocess.run(
+        ["git", "fetch", "origin", branch],
+        cwd=str(repo), capture_output=True, text=True,
+    )
+    fetch_ok = subprocess.run(
+        ["git", "rev-parse", "--verify", f"origin/{branch}"],
+        cwd=str(repo), capture_output=True,
+    ).returncode == 0
+    return f"origin/{branch}" if fetch_ok else branch
+
+
 def detect_default_branch(repo: Path) -> str:
     """Detect the default branch (main, master, etc.)."""
     result = subprocess.run(

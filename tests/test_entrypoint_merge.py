@@ -5,7 +5,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from entrypoint import _read_merge_instructions, MERGE_NEEDED_FILENAME
+from core.constants import MERGE_NEEDED_FILENAME
+from entrypoint import _read_merge_instructions
 
 
 class TestReadMergeInstructions:
@@ -107,6 +108,62 @@ class TestBuildPromptWithMerge:
 
         assert "MERGE NEEDED" in result
         assert "Continue working on the bug" in result
+
+    @patch("entrypoint.render_template", return_value="rebuilt base prompt")
+    def test_resume_no_resume_prompt_with_merge_rebuilds_prompt(
+            self, mock_render, tmp_path):
+        """When resume=True, no resume-prompt.md, but merge-needed.txt exists,
+        merge instructions are prepended to a rebuilt base prompt."""
+        from entrypoint import _build_prompt
+
+        config = MagicMock()
+        config.prompt_template = "template"
+        issue = MagicMock()
+        issue.identifier = "test-002"
+        issue.title = "Fix bug"
+        issue.body = "Details"
+        state_mgr = MagicMock()
+        state_mgr.read_resume_prompt.return_value = None  # no resume-prompt.md
+        tracker = MagicMock()
+
+        with patch("entrypoint._read_merge_instructions") as mock_read:
+            mock_read.return_value = "MERGE NEEDED: merge master first"
+
+            result = _build_prompt(config, issue, "", MagicMock(),
+                                   state_mgr, tracker, "test-002",
+                                   resume=True, step="")
+
+        assert "MERGE NEEDED" in result
+        assert "rebuilt base prompt" in result
+        tracker.add_comment.assert_called_once()
+        state_mgr.update_status.assert_called_once_with("working")
+
+    @patch("entrypoint.build_initial_prompt", return_value="fallback prompt")
+    def test_resume_no_resume_prompt_merge_uses_fallback(
+            self, mock_fallback, tmp_path):
+        """When resume=True, no resume-prompt.md, no template, but merge-needed.txt
+        exists, uses fallback prompt builder."""
+        from entrypoint import _build_prompt
+
+        config = MagicMock()
+        config.prompt_template = None  # no template
+        issue = MagicMock()
+        issue.identifier = "test-003"
+        issue.title = "Fix bug"
+        issue.body = "Details"
+        state_mgr = MagicMock()
+        state_mgr.read_resume_prompt.return_value = None
+        tracker = MagicMock()
+
+        with patch("entrypoint._read_merge_instructions") as mock_read:
+            mock_read.return_value = "MERGE NEEDED: merge master first"
+
+            result = _build_prompt(config, issue, "", MagicMock(),
+                                   state_mgr, tracker, "test-003",
+                                   resume=True, step="")
+
+        assert "MERGE NEEDED" in result
+        assert "fallback prompt" in result
 
     @patch("entrypoint.render_template", return_value="template prompt")
     def test_no_merge_file_resume_prompt_unchanged(self, mock_render, tmp_path):

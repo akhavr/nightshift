@@ -10,6 +10,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.constants import MERGE_NEEDED_FILENAME
+from host.git_utils import fetch_and_resolve_ref
 from host.session_utils import force_remove_dir
 
 
@@ -53,9 +55,6 @@ def create_worktree(repo: Path, wt_path: Path, branch: str,
     print(f"Created worktree at {wt_path}")
 
 
-MERGE_NEEDED_FILENAME = "merge-needed.txt"
-
-
 def merge_base_into_worktree(repo: Path, wt_path: Path,
                              base_branch: str,
                              session_dir: Path | None = None) -> str:
@@ -68,18 +67,7 @@ def merge_base_into_worktree(repo: Path, wt_path: Path,
         "conflict" — merge had conflicts; aborted and merge-needed.txt written
         "noop"     — base has not diverged, nothing to merge
     """
-    # Fetch latest from remote (ignore failure — remote may not exist)
-    subprocess.run(
-        ["git", "fetch", "origin", base_branch],
-        cwd=str(wt_path), capture_output=True, text=True,
-    )
-
-    # Try merging the remote ref first, fall back to local
-    fetch_ok = subprocess.run(
-        ["git", "rev-parse", "--verify", f"origin/{base_branch}"],
-        cwd=str(wt_path), capture_output=True,
-    ).returncode == 0
-    merge_target = f"origin/{base_branch}" if fetch_ok else base_branch
+    merge_target = fetch_and_resolve_ref(wt_path, base_branch)
 
     # Check if there is anything to merge (is base ahead of us?)
     merge_base = subprocess.run(

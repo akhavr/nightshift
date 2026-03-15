@@ -10,6 +10,7 @@ from pathlib import Path
 from host.constants import (
     SHORT_ID_LEN, FILE_LIST_PREVIEW_LEN, CONFLICT_FILE_PREVIEW_LEN,
 )
+from host.git_utils import fetch_and_resolve_ref
 from host.session_utils import update_status
 
 BEHIND_BASE_COMMIT_PREVIEW = 10  # max commits to show in behind-base warning
@@ -21,18 +22,7 @@ def check_branch_not_behind_base(repo: Path, branch: str, base: str) -> str | No
     Returns None if the branch is up to date, or a message describing
     the divergence if the branch is behind.
     """
-    # Fetch latest base
-    subprocess.run(
-        ["git", "fetch", "origin", base],
-        cwd=str(repo), capture_output=True, text=True,
-    )
-
-    # Use remote ref if available, fall back to local
-    fetch_ok = subprocess.run(
-        ["git", "rev-parse", "--verify", f"origin/{base}"],
-        cwd=str(repo), capture_output=True,
-    ).returncode == 0
-    base_ref = f"origin/{base}" if fetch_ok else base
+    base_ref = fetch_and_resolve_ref(repo, base)
 
     # Find commits in base that are not in the agent branch
     result = subprocess.run(

@@ -16,6 +16,7 @@ from core.config import (
     load_workflow, create_agent, create_tracker,
     create_workspace_mgr, create_notifiers,
 )
+from core.constants import MERGE_NEEDED_FILENAME
 from core.prompts import render_template, build_initial_prompt
 from core.protocols import Workspace
 from core.state import StateManager
@@ -43,9 +44,6 @@ def _read_diff() -> str:
     if diff_path.exists():
         return diff_path.read_text().strip()
     return "N/A"
-
-
-MERGE_NEEDED_FILENAME = "merge-needed.txt"
 
 
 def _read_merge_instructions(session_dir: str) -> str | None:

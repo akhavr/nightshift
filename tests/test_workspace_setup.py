@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from host.workspace_setup import merge_base_into_worktree, MERGE_NEEDED_FILENAME
+from core.constants import MERGE_NEEDED_FILENAME
+from host.workspace_setup import merge_base_into_worktree
 
 
 def _init_repo(tmp_path):
