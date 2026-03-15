@@ -80,6 +80,18 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
         names["worktree_name"], issue_id, names["short_id"], max_turns,
         step, is_resume, workflow_path, image,
     )
+
+    # Save the worktree .git file — the container rewrites it to /repo-git/...
+    # which is invalid on the host. Restore after container exits.
+    worktree_git = Path(workspace_mount) / ".git"
+    original_git_content = None
+    if worktree_git.is_file():
+        original_git_content = worktree_git.read_text()
+
     print(f"Launching container {names['container_name']}...")
     result = subprocess.run(docker_cmd)
+
+    if original_git_content is not None and worktree_git.is_file():
+        worktree_git.write_text(original_git_content)
+
     return result.returncode
