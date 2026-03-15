@@ -53,6 +53,44 @@ def create_worktree(repo: Path, wt_path: Path, branch: str,
     print(f"Created worktree at {wt_path}")
 
 
+def merge_base_into_worktree(repo: Path, wt_path: Path,
+                             base_branch: str) -> None:
+    """Merge latest base branch into the agent worktree branch.
+
+    Keeps the agent branch up to date with upstream changes. If the merge
+    has conflicts, they are left for the agent to resolve.
+    """
+    # Fetch latest from remote (ignore failure — remote may not exist)
+    subprocess.run(
+        ["git", "fetch", "origin", base_branch],
+        cwd=str(wt_path), capture_output=True, text=True,
+    )
+
+    # Try merging the remote ref first, fall back to local
+    fetch_ok = subprocess.run(
+        ["git", "rev-parse", "--verify", f"origin/{base_branch}"],
+        cwd=str(wt_path), capture_output=True,
+    ).returncode == 0
+    merge_target = f"origin/{base_branch}" if fetch_ok else base_branch
+
+    result = subprocess.run(
+        ["git", "merge", merge_target, "--no-edit",
+         "-m", f"Merge {merge_target} into agent branch"],
+        cwd=str(wt_path), capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"Merged {merge_target} into agent branch")
+    else:
+        # Abort the failed merge — agent will get a clean state
+        # and the pre-review rebase will catch divergence later
+        subprocess.run(
+            ["git", "merge", "--abort"],
+            cwd=str(wt_path), capture_output=True,
+        )
+        print(f"Warning: merge from {merge_target} had conflicts (aborted). "
+              f"Agent will work from current state.", file=sys.stderr)
+
+
 def setup_workspace(config, repo: Path, names: dict, is_resume: bool,
                     issue_id: str) -> str:
     """Create worktree or validate resume, returning the workspace mount path."""
@@ -68,6 +106,9 @@ def setup_workspace(config, repo: Path, names: dict, is_resume: bool,
         if not (session_dir / "state.json").exists():
             print(f"No session state at {session_dir}", file=sys.stderr)
             sys.exit(1)
+        # Merge latest base branch into agent branch before resuming
+        if not names.get("is_review"):
+            merge_base_into_worktree(repo, wt_path, names["base_branch"])
         print(f"Resuming session for {names['session_name']}")
 
     return str(wt_path)
