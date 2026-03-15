@@ -40,6 +40,11 @@ class GitBugTracker:
         self._proc_lock = threading.Lock()
         self._has_remote: bool | None = None  # lazy-detected on first sync
 
+    @staticmethod
+    def _short(issue_id: str) -> str:
+        """Truncate issue ID to SHORT_ID_LEN for git-bug CLI compatibility."""
+        return issue_id[:SHORT_ID_LEN]
+
     def _run(self, *args: str, timeout: int = _CMD_TIMEOUT_S, ignore_rc: set[int] | None = None) -> str:
         for attempt in range(_LOCK_RETRIES):
             if self._shutdown.is_set():
@@ -148,7 +153,7 @@ class GitBugTracker:
                     lock.unlink(missing_ok=True)
 
     def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
-        raw = self._run("bug", "show", issue_id, "-f", "json")
+        raw = self._run("bug", "show", self._short(issue_id), "-f", "json")
         if not raw: return None
         try:
             d = json.loads(raw)
@@ -177,7 +182,7 @@ class GitBugTracker:
             return []
 
     def get_comments(self, issue_id: str) -> list[TrackerComment]:
-        raw = self._run("bug", "show", issue_id, "-f", "json")
+        raw = self._run("bug", "show", self._short(issue_id), "-f", "json")
         if not raw: return []
         try:
             return [
@@ -191,17 +196,17 @@ class GitBugTracker:
             return []
 
     def add_comment(self, issue_id: str, body: str) -> None:
-        self._run("bug", "comment", "new", issue_id, "-m", body)
+        self._run("bug", "comment", "new", self._short(issue_id), "-m", body)
 
     def set_status(self, issue_id: str, status: str) -> None:
         cmd = "close" if status == "closed" else "open"
-        self._run("bug", "status", cmd, issue_id)
+        self._run("bug", "status", cmd, self._short(issue_id))
 
     def add_label(self, issue_id: str, label: str) -> None:
-        self._run("bug", "label", "new", issue_id, label, ignore_rc={1})
+        self._run("bug", "label", "new", self._short(issue_id), label, ignore_rc={1})
 
     def remove_label(self, issue_id: str, label: str) -> None:
-        self._run("bug", "label", "rm", issue_id, label, ignore_rc={1})
+        self._run("bug", "label", "rm", self._short(issue_id), label, ignore_rc={1})
 
     _NO_REMOTE_MARKERS = ("remote not found", "unable to resolve URL for remote")
 
