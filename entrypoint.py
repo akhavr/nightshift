@@ -16,6 +16,7 @@ from core.config import (
     load_workflow, create_agent, create_tracker,
     create_workspace_mgr, create_notifiers,
 )
+from core.constants import MERGE_NEEDED_FILENAME
 from core.prompts import render_template, build_initial_prompt
 from core.protocols import Workspace
 from core.state import StateManager
@@ -45,12 +46,74 @@ def _read_diff() -> str:
     return "N/A"
 
 
+def _read_merge_instructions(session_dir: str) -> str | None:
+    """Read and consume merge-needed.txt if it exists.
+
+    Returns merge instructions string, or None if no merge is needed.
+    The file is deleted after reading so it is only consumed once.
+    """
+    merge_path = Path(session_dir) / MERGE_NEEDED_FILENAME
+    if not merge_path.exists():
+        return None
+
+    content = merge_path.read_text().strip()
+    merge_path.unlink()
+    log.info("Consumed %s — agent will be instructed to merge", MERGE_NEEDED_FILENAME)
+
+    # Parse the merge target from the file
+    lines = content.split("\n")
+    base_branch = ""
+    for line in lines:
+        if line.startswith("base_branch:"):
+            base_branch = line.split(":", 1)[1].strip()
+            break
+
+    conflict_details = ""
+    sep_idx = content.find("---\n")
+    if sep_idx != -1:
+        conflict_details = content[sep_idx + 4:].strip()
+
+    return (
+        f"MERGE NEEDED: The base branch ({base_branch}) has advanced while you were "
+        f"working. Before continuing your task, you must merge the latest changes.\n\n"
+        f"Conflict details from the host-side merge attempt:\n"
+        f"{conflict_details}\n\n"
+        f"Please:\n"
+        f"1. Run `git fetch origin {base_branch}` to get latest changes\n"
+        f"2. Run `git merge origin/{base_branch}` (or `git merge {base_branch}`)\n"
+        f"3. Resolve any merge conflicts\n"
+        f"4. Commit the merge\n"
+        f"5. Run the test suite to confirm no regressions\n"
+        f"6. Then continue with your original task\n"
+    )
+
+
 def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
                   issue_id, resume, step):
     """Build or load the agent prompt."""
     if resume and (p := state_mgr.read_resume_prompt()):
         tracker.add_comment(issue_id, f"🤖 Resuming from step {state_mgr.load_state().step}...")
+        # Prepend merge instructions if merge-needed.txt exists
+        merge_instructions = _read_merge_instructions("/session")
+        if merge_instructions:
+            p = merge_instructions + "\n---\n\n" + p
         return p
+
+    # On resume without a resume-prompt, still check for merge instructions
+    if resume:
+        merge_instructions = _read_merge_instructions("/session")
+        if merge_instructions:
+            tracker.add_comment(issue_id, f"🤖 Resuming with merge instructions...")
+            state_mgr.update_status("working")
+            base_prompt = ""
+            if config.prompt_template:
+                base_prompt = render_template(
+                    config.prompt_template, issue=issue,
+                    related_context=related, attempt=None,
+                )
+            else:
+                base_prompt = build_initial_prompt(issue.title, issue.body, related)
+            return merge_instructions + "\n---\n\n" + base_prompt
 
     tracker.add_label(issue_id, "agent-in-progress")
     tracker.add_comment(issue_id, f"🤖 Starting on {issue.identifier}")
