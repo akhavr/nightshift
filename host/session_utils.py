@@ -58,7 +58,7 @@ def force_remove_dir(path: Path) -> None:
     """Remove a directory, handling root-owned files from Docker."""
     try:
         shutil.rmtree(path)
-    except PermissionError:
+    except (PermissionError, OSError):
         subprocess.run(
             ["docker", "run", "--rm",
              "-v", f"{path}:/cleanup:rw",
