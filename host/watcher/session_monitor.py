@@ -8,10 +8,11 @@ from pathlib import Path
 
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
+    MAX_ORPHAN_RESUMES,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
-from host.session_utils import read_state
+from host.session_utils import read_state, write_state
 from core.config import load_workflow
 from host.watcher.lifecycle_comments import post_start, post_resume, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
@@ -93,7 +94,33 @@ class SessionMonitor:
         if not issue_id:
             return
 
-        log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}). Auto-resuming.")
+        orphan_resumes = state.get("orphan_resumes", 0)
+        if orphan_resumes >= MAX_ORPHAN_RESUMES:
+            title = state.get("title", issue_id[:SHORT_ID_LEN])
+            log.error(f"[{sid}] Hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
+                      f"Task may be too complex — stopping.")
+            state["status"] = "suspended:too-complex"
+            write_state(session_dir, state)
+            try:
+                tracker = self._get_tracker()
+                tracker.add_comment(issue_id,
+                    f"🛑 Auto-resume limit reached ({MAX_ORPHAN_RESUMES} orphan restarts). "
+                    f"The agent keeps crashing at the same point — the task is likely "
+                    f"too complex for a single issue. Please split it into smaller sub-tasks "
+                    f"and re-file.")
+            except Exception as e:
+                log.warning(f"[{sid}] Failed to post too-complex comment: {e}")
+            self.telegram.notify(
+                f"🛑 `{sid}` hit {MAX_ORPHAN_RESUMES} orphan restarts. "
+                f"Task too complex — needs splitting. Session suspended.",
+                level=NotificationLevel.ACTIONS)
+            return
+
+        state["orphan_resumes"] = orphan_resumes + 1
+        write_state(session_dir, state)
+
+        log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}, "
+                 f"orphan_resume {orphan_resumes + 1}/{MAX_ORPHAN_RESUMES}). Auto-resuming.")
         self._recently_launched[sid] = time.time()
 
         session_dir = self.sessions_dir / sid

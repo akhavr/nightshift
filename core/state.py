@@ -31,6 +31,7 @@ class SessionState:
     status: str = "starting"
     step: int = 0
     started_at: str = ""
+    orphan_resumes: int = 0
     checkpoints: list[Checkpoint] = field(default_factory=list)
     human_answers: list[QAExchange] = field(default_factory=list)
 

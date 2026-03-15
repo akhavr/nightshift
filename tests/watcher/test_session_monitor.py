@@ -136,6 +136,69 @@ class TestCheckOrphanedSessions:
         step_idx = cmd.index("--step")
         assert cmd[step_idx + 1] == "review"
 
+    def test_orphan_resume_increments_counter(self, tmp_path):
+        """Each orphan resume should increment orphan_resumes in state.json."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert "abc" in launched
+        state = json.loads((sd / "state.json").read_text())
+        assert state["orphan_resumes"] == 1
+
+    def test_orphan_resume_limit_stops_session(self, tmp_path):
+        """After MAX_ORPHAN_RESUMES, session should be suspended, not resumed."""
+        from host.constants import MAX_ORPHAN_RESUMES
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        # Set orphan_resumes to the limit
+        state = json.loads((sd / "state.json").read_text())
+        state["orphan_resumes"] = MAX_ORPHAN_RESUMES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "suspended:too-complex"
+        tracker.add_comment.assert_called_once()
+        assert "too complex" in tracker.add_comment.call_args[0][1].lower()
+
+    def test_orphan_resume_limit_posts_telegram(self, tmp_path):
+        """When limit is hit, a Telegram notification should be sent."""
+        from host.constants import MAX_ORPHAN_RESUMES
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["orphan_resumes"] = MAX_ORPHAN_RESUMES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        tracker = MagicMock()
+        w._tracker = tracker
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+        assert any("too complex" in n.lower() for n in notified)
+
     def test_orphaned_review_session_with_review_md(self, tmp_path):
         """Review session resume should pass --workflow REVIEW.md when it exists."""
         w = _make_watcher(tmp_path)
