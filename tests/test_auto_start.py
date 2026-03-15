@@ -265,7 +265,7 @@ class TestWatcherAutoStart:
         watcher.monitor._launch_background = lambda cmd, sid: None
 
         tg_messages = []
-        watcher.telegram.notify = lambda msg: tg_messages.append(msg)
+        watcher.telegram.notify = lambda msg, **kw: tg_messages.append(msg)
 
         watcher.monitor.check_new_issues()
 

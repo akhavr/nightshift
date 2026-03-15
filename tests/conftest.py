@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Iterator
 
 from core.protocols import (
-    CodingAgent, IssueTracker, Notifier, WorkspaceManager,
+    CodingAgent, IssueTracker, Notifier, NotificationLevel, WorkspaceManager,
     TrackerIssue, TrackerComment, AgentEvent, AgentEventType,
     Workspace, RebaseResult,
 )
@@ -109,7 +109,7 @@ class MockNotifier:
     def stop(self) -> None:
         pass
 
-    def notify(self, message: str) -> None:
+    def notify(self, message: str, *, level: NotificationLevel = NotificationLevel.ALL) -> None:
         self.notifications.append(message)
 
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool:

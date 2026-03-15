@@ -10,6 +10,7 @@ from typing import Optional
 from host.constants import SHORT_ID_LEN
 from host.session_utils import update_status as _update_status
 from core.config import load_workflow
+from core.protocols import NotificationLevel
 from core.review import (
     parse_nightshift_command, strip_nightshift_command,
     build_revise_prompt,
@@ -87,7 +88,8 @@ class VerdictHandler:
 
             self.telegram.notify(
                 f"\u2705 Automated review *approved* `{coder_sid}`.\n"
-                f"Human review: `nightshift accept/reject/revise {issue_id}`")
+                f"Human review: `nightshift accept/reject/revise {issue_id}`",
+                level=NotificationLevel.ACTIONS)
 
             self._post_approval_to_tracker(coder_sid, issue_id)
         except Exception as e:
@@ -159,7 +161,8 @@ class VerdictHandler:
             _update_status(coder_dir, "working")
             self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")
-            self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.")
+            self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.",
+                                level=NotificationLevel.ALL)
 
             reason = "\n".join(parts)
             post_revise(self._get_tracker, issue_id, coder_sid, reason)

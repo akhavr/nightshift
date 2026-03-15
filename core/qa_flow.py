@@ -7,7 +7,7 @@ question raised -> notifier/tracker updated -> answer collected -> delivered.
 import logging
 
 from core.answer_collector import collect_answer, ANSWER_PREVIEW_LEN
-from core.protocols import CodingAgent, IssueTracker, Notifier, TrackerIssue
+from core.protocols import CodingAgent, IssueTracker, Notifier, NotificationLevel, TrackerIssue
 from core.constants import TITLE_TRUNCATE_LEN
 from core.state import StateManager
 
@@ -33,7 +33,8 @@ def handle_question(
     sent_via_notifier = notifier.send_question(
         issue.id, question, issue.identifier)
     if not sent_via_notifier:
-        notifier.notify(f"❓ [{issue.identifier}] {issue.title[:TITLE_TRUNCATE_LEN]}: {question}")
+        notifier.notify(f"❓ [{issue.identifier}] {issue.title[:TITLE_TRUNCATE_LEN]}: {question}",
+                        level=NotificationLevel.QUESTIONS)
 
     pending_questions.append(question)
     return sent_via_notifier

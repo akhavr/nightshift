@@ -36,11 +36,13 @@ class HostWatcher:
         self._config = None
         self._recently_launched: dict[str, float] = {}
 
+        tg_level = self._telegram_level_from_config()
         self.telegram = TelegramRelay(
             os.environ.get("TELEGRAM_BOT_TOKEN", ""),
             os.environ.get("TELEGRAM_CHAT_ID", ""),
             repo_dir.name,
             sessions_dir,
+            level=tg_level,
         )
         self.qa = QAHandler(sessions_dir, self.telegram, self._get_tracker)
         self.reviews = ReviewOrchestrator(
@@ -53,10 +55,22 @@ class HostWatcher:
             self._recently_launched, self._launch_background,
         )
 
+    def _telegram_level_from_config(self) -> str:
+        """Read notification level for the telegram notifier from WORKFLOW.md."""
+        try:
+            self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            for nc in self._config.notifications:
+                if nc.kind == "telegram":
+                    return nc.level
+        except Exception as e:
+            log.debug(f"Could not read notification level from WORKFLOW.md: {e}")
+        return "all"
+
     def _get_tracker(self):
         """Lazy-init tracker from WORKFLOW.md."""
         if self._tracker is None:
-            self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            if self._config is None:
+                self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
             self._tracker = create_tracker(self._config, repo_dir=str(self.repo_dir))
         return self._tracker
 

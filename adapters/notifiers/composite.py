@@ -1,7 +1,7 @@
 """Composite notifier — broadcasts to all, Q&A through primary."""
 
 from typing import Optional
-from core.protocols import Notifier
+from core.protocols import Notifier, NotificationLevel
 
 
 class CompositeNotifier:
@@ -13,9 +13,9 @@ class CompositeNotifier:
         # Webhooks return False from send_question, indicating no round-trip
         self._primary = notifiers[0] if notifiers else None
 
-    def notify(self, message: str) -> None:
+    def notify(self, message: str, *, level: NotificationLevel = NotificationLevel.ALL) -> None:
         for n in self.notifiers:
-            n.notify(message)
+            n.notify(message, level=level)
 
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool:
         # Send through primary (Telegram etc.) for Q&A

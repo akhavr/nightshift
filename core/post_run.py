@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 from core.protocols import (
-    AgentEventType, CodingAgent, IssueTracker, Notifier,
+    AgentEventType, CodingAgent, IssueTracker, Notifier, NotificationLevel,
     TrackerIssue, Workspace, WorkspaceManager,
 )
 from core.constants import TITLE_TRUNCATE_LEN
@@ -51,7 +51,8 @@ def post_run_action(
         return None
     if st.status == "cancelled:external":
         tracker.add_comment(issue.id, "🛑 Stopped: closed externally.")
-        notifier.notify(f"🛑 {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — stopped.")
+        notifier.notify(f"🛑 {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — stopped.",
+                        level=NotificationLevel.ACTIONS)
         return None
     if st.status in ("suspended:context-limit", "suspended:stall"):
         reason = st.status.split(":")[1]
@@ -67,7 +68,8 @@ def post_run_action(
     commit_wip_fn("unexpected exit")
     state_mgr.update_status("suspended:unexpected")
     build_resume_fn()
-    notifier.notify(f"⚠️ {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — ended unexpectedly.")
+    notifier.notify(f"⚠️ {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — ended unexpectedly.",
+                    level=NotificationLevel.ACTIONS)
     return None
 
 
@@ -99,7 +101,8 @@ def notify_done(
     tracker.remove_label(issue.id, "agent-in-progress")
     notifier.notify(
         f"🏁 {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — done."
-        f" nightshift accept/reject/revise {issue.identifier}"
+        f" nightshift accept/reject/revise {issue.identifier}",
+        level=NotificationLevel.ACTIONS,
     )
 
 
@@ -126,7 +129,8 @@ def prepare_resume(
     build_resume_fn()
     maybe_summarize_checkpoints(state_mgr, agent, workspace, build_resume_fn)
     tracker.add_comment(issue.id, f"🔄 {reason} — auto-resuming...")
-    notifier.notify(f"{reason} for {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}. Resuming.")
+    notifier.notify(f"{reason} for {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}. Resuming.",
+                    level=NotificationLevel.ALL)
     state_mgr.update_status("working")
     return state_mgr.read_resume_prompt()
 

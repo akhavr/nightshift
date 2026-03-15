@@ -8,7 +8,7 @@ import time
 from typing import Optional
 
 import requests
-from core.protocols import Notifier, IssueTracker, SHORT_ID_LEN
+from core.protocols import Notifier, IssueTracker, NotificationLevel, should_notify, SHORT_ID_LEN
 from adapters.notifiers._utils import project_prefix
 
 HTTP_REQUEST_TIMEOUT_S = 10   # Default timeout for outgoing HTTP calls
@@ -21,11 +21,13 @@ log = logging.getLogger(__name__)
 
 class TelegramNotifier:
     def __init__(self, tracker: IssueTracker,
-                 token: str | None = None, chat_id: str | None = None):
+                 token: str | None = None, chat_id: str | None = None,
+                 level: str = "all"):
         self.tracker = tracker
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
         self.enabled = bool(self.token and self.chat_id)
+        self._level = NotificationLevel[level.upper()]
         self._pending: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._offset = 0
@@ -39,8 +41,9 @@ class TelegramNotifier:
     def stop(self):
         self._running = False
 
-    def notify(self, message: str) -> None:
+    def notify(self, message: str, *, level: NotificationLevel = NotificationLevel.ALL) -> None:
         if not self.enabled: return
+        if not should_notify(self._level, level): return
         try:
             requests.post(
                 f"https://api.telegram.org/bot{self.token}/sendMessage",

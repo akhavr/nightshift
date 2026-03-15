@@ -73,7 +73,7 @@ def create_notifiers(config: WorkflowConfig, tracker=None) -> list:
     """Create all configured notifiers."""
     notifiers = []
     for nc in config.notifications:
-        kwargs = {**nc.extra}
+        kwargs = {**nc.extra, "level": nc.level}
         if nc.kind == "telegram" and tracker:
             kwargs["tracker"] = tracker
         try:
