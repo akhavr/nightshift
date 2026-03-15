@@ -17,6 +17,7 @@ from host.env import load_all_dotenv
 from host.merge import (
     resolve_merge_ref, check_working_tree_clean,
     merge_with_rebase_fallback, verify_no_conflict_markers,
+    check_branch_not_behind_base,
 )
 from host.session_utils import (
     get_repo_root,
@@ -371,6 +372,13 @@ def cmd_accept(a):
 
     merge_ref = resolve_merge_ref(r, branch, wt)
     check_working_tree_clean(r, base, config, a.issue_id, _report_accept_failure)
+
+    # Verify agent branch is not behind base
+    behind_msg = check_branch_not_behind_base(r, branch, base)
+    if behind_msg:
+        print(behind_msg, file=sys.stderr)
+        _report_accept_failure(config, r, a.issue_id, behind_msg)
+        sys.exit(1)
 
     # Show what will be merged
     subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))

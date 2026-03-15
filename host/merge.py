@@ -12,6 +12,53 @@ from host.constants import (
 )
 from host.session_utils import update_status
 
+BEHIND_BASE_COMMIT_PREVIEW = 10  # max commits to show in behind-base warning
+
+
+def check_branch_not_behind_base(repo: Path, branch: str, base: str) -> str | None:
+    """Check if the agent branch is behind the base branch.
+
+    Returns None if the branch is up to date, or a message describing
+    the divergence if the branch is behind.
+    """
+    # Fetch latest base
+    subprocess.run(
+        ["git", "fetch", "origin", base],
+        cwd=str(repo), capture_output=True, text=True,
+    )
+
+    # Use remote ref if available, fall back to local
+    fetch_ok = subprocess.run(
+        ["git", "rev-parse", "--verify", f"origin/{base}"],
+        cwd=str(repo), capture_output=True,
+    ).returncode == 0
+    base_ref = f"origin/{base}" if fetch_ok else base
+
+    # Find commits in base that are not in the agent branch
+    result = subprocess.run(
+        ["git", "log", "--oneline", f"{branch}..{base_ref}"],
+        cwd=str(repo), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None  # can't determine, allow merge to proceed
+
+    behind_commits = result.stdout.strip()
+    if not behind_commits:
+        return None  # up to date
+
+    lines = behind_commits.splitlines()
+    preview = "\n".join(lines[:BEHIND_BASE_COMMIT_PREVIEW])
+    suffix = ""
+    if len(lines) > BEHIND_BASE_COMMIT_PREVIEW:
+        suffix = f"\n... and {len(lines) - BEHIND_BASE_COMMIT_PREVIEW} more"
+
+    return (
+        f"Agent branch `{branch}` is behind `{base}` by "
+        f"{len(lines)} commit(s):\n{preview}{suffix}\n\n"
+        f"Run `nightshift resume <issue-id>` to merge latest base "
+        f"branch into the agent branch before accepting."
+    )
+
 
 def resolve_merge_ref(repo: Path, branch: str, worktree: Path) -> str:
     """Find the merge source: branch ref or worktree HEAD. Exits on failure."""

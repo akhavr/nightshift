@@ -53,12 +53,20 @@ def create_worktree(repo: Path, wt_path: Path, branch: str,
     print(f"Created worktree at {wt_path}")
 
 
+MERGE_NEEDED_FILENAME = "merge-needed.txt"
+
+
 def merge_base_into_worktree(repo: Path, wt_path: Path,
-                             base_branch: str) -> None:
+                             base_branch: str,
+                             session_dir: Path | None = None) -> str:
     """Merge latest base branch into the agent worktree branch.
 
-    Keeps the agent branch up to date with upstream changes. If the merge
-    has conflicts, they are left for the agent to resolve.
+    Keeps the agent branch up to date with upstream changes.
+
+    Returns:
+        "clean"    — merge succeeded (or base had not advanced)
+        "conflict" — merge had conflicts; aborted and merge-needed.txt written
+        "noop"     — base has not diverged, nothing to merge
     """
     # Fetch latest from remote (ignore failure — remote may not exist)
     subprocess.run(
@@ -73,6 +81,20 @@ def merge_base_into_worktree(repo: Path, wt_path: Path,
     ).returncode == 0
     merge_target = f"origin/{base_branch}" if fetch_ok else base_branch
 
+    # Check if there is anything to merge (is base ahead of us?)
+    merge_base = subprocess.run(
+        ["git", "merge-base", "HEAD", merge_target],
+        cwd=str(wt_path), capture_output=True, text=True,
+    )
+    target_rev = subprocess.run(
+        ["git", "rev-parse", merge_target],
+        cwd=str(wt_path), capture_output=True, text=True,
+    )
+    if (merge_base.returncode == 0 and target_rev.returncode == 0
+            and merge_base.stdout.strip() == target_rev.stdout.strip()):
+        print(f"Base branch {merge_target} has not advanced — nothing to merge")
+        return "noop"
+
     result = subprocess.run(
         ["git", "merge", merge_target, "--no-edit",
          "-m", f"Merge {merge_target} into agent branch"],
@@ -80,15 +102,31 @@ def merge_base_into_worktree(repo: Path, wt_path: Path,
     )
     if result.returncode == 0:
         print(f"Merged {merge_target} into agent branch")
-    else:
-        # Abort the failed merge — agent will get a clean state
-        # and the pre-review rebase will catch divergence later
-        subprocess.run(
-            ["git", "merge", "--abort"],
-            cwd=str(wt_path), capture_output=True,
+        return "clean"
+
+    # Collect conflict details before aborting
+    conflict_output = result.stdout + "\n" + result.stderr
+
+    # Abort the failed merge — agent will get a clean state
+    subprocess.run(
+        ["git", "merge", "--abort"],
+        cwd=str(wt_path), capture_output=True,
+    )
+
+    # Write merge-needed.txt so the container can instruct the agent
+    if session_dir is not None:
+        merge_needed = session_dir / MERGE_NEEDED_FILENAME
+        merge_needed.write_text(
+            f"merge_target: {merge_target}\n"
+            f"base_branch: {base_branch}\n"
+            f"---\n"
+            f"{conflict_output.strip()}\n"
         )
-        print(f"Warning: merge from {merge_target} had conflicts (aborted). "
-              f"Agent will work from current state.", file=sys.stderr)
+        print(f"Wrote {MERGE_NEEDED_FILENAME} with conflict details")
+
+    print(f"Warning: merge from {merge_target} had conflicts (aborted). "
+          f"Agent will be instructed to merge.", file=sys.stderr)
+    return "conflict"
 
 
 def setup_workspace(config, repo: Path, names: dict, is_resume: bool,
@@ -108,7 +146,8 @@ def setup_workspace(config, repo: Path, names: dict, is_resume: bool,
             sys.exit(1)
         # Merge latest base branch into agent branch before resuming
         if not names.get("is_review"):
-            merge_base_into_worktree(repo, wt_path, names["base_branch"])
+            merge_base_into_worktree(repo, wt_path, names["base_branch"],
+                                     session_dir=session_dir)
         print(f"Resuming session for {names['session_name']}")
 
     return str(wt_path)

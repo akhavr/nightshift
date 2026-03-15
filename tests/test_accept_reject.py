@@ -7,7 +7,10 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from host.merge import check_conflict_markers as _check_conflict_markers
+from host.merge import (
+    check_conflict_markers as _check_conflict_markers,
+    check_branch_not_behind_base,
+)
 
 
 def test_cli_has_accept_command():
@@ -190,3 +193,113 @@ def test_accept_aborts_on_conflict_markers(tmp_path):
     mock_report.assert_called_once()
     call_msg = mock_report.call_args[0][3]
     assert "conflict markers" in call_msg
+
+
+class TestCheckBranchNotBehindBase:
+
+    def test_returns_none_when_up_to_date(self, tmp_path):
+        """No divergence means branch is up to date."""
+        repo, run = _init_repo(tmp_path)
+
+        run("git", "checkout", "-b", "agent/test1")
+        (repo / "agent.txt").write_text("work\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "agent work")
+        run("git", "checkout", "main")
+
+        result = check_branch_not_behind_base(repo, "agent/test1", "main")
+        assert result is None
+
+    def test_returns_message_when_behind(self, tmp_path):
+        """Agent branch behind base should return a warning message."""
+        repo, run = _init_repo(tmp_path)
+
+        # Create agent branch first
+        run("git", "checkout", "-b", "agent/test2")
+        (repo / "agent.txt").write_text("work\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "agent work")
+
+        # Now advance main
+        run("git", "checkout", "main")
+        (repo / "new_feature.txt").write_text("from main\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "main advance")
+
+        result = check_branch_not_behind_base(repo, "agent/test2", "main")
+        assert result is not None
+        assert "behind" in result
+        assert "agent/test2" in result
+        assert "nightshift resume" in result
+
+    def test_returns_none_when_agent_includes_base(self, tmp_path):
+        """After a merge, agent should no longer be behind."""
+        repo, run = _init_repo(tmp_path)
+
+        run("git", "checkout", "-b", "agent/test3")
+        (repo / "agent.txt").write_text("work\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "agent work")
+
+        # Advance main
+        run("git", "checkout", "main")
+        (repo / "new.txt").write_text("from main\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "main advance")
+
+        # Merge main into agent branch
+        run("git", "checkout", "agent/test3")
+        run("git", "merge", "main", "--no-edit")
+        run("git", "checkout", "main")
+
+        result = check_branch_not_behind_base(repo, "agent/test3", "main")
+        assert result is None
+
+
+class TestAcceptRejectsBehindBase:
+
+    def test_accept_exits_when_branch_behind_base(self, tmp_path):
+        """cmd_accept should reject if agent branch is behind base."""
+        repo, run = _init_repo(tmp_path)
+
+        # Create agent branch
+        run("git", "checkout", "-b", "agent/bbb123")
+        (repo / "agent.txt").write_text("work\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "agent work")
+
+        # Advance main
+        run("git", "checkout", "main")
+        (repo / "main_new.txt").write_text("new on main\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "main advance")
+
+        # Setup session
+        ns_dir = repo / ".nightshift" / "sessions" / "bbb123"
+        ns_dir.mkdir(parents=True)
+        (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+        (repo / "WORKFLOW.md").write_text(
+            "---\n"
+            "agent:\n  kind: claude-code\n"
+            "tracker:\n  kind: git-bug\n"
+            "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+            "---\nPrompt\n"
+        )
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="bbb123"), \
+             patch("host.cli.create_tracker") as mock_tracker, \
+             patch("host.cli._report_accept_failure") as mock_report:
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "bbb123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_accept(args)
+
+            assert exc_info.value.code == 1
+            mock_report.assert_called_once()
+            call_msg = mock_report.call_args[0][3]
+            assert "behind" in call_msg
