@@ -102,6 +102,16 @@ class TestPostRunAction:
         assert result is None
         assert sm.load_state().status == "suspended:auth-failure"
 
+    def test_auth_failure_permanent_returns_none(self, tmp_path):
+        """Permanent auth failure is also terminal."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("suspended:auth-failure-permanent")
+        result = post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None)
+        assert result is None
+        assert sm.load_state().status == "suspended:auth-failure-permanent"
+
     def test_unexpected_status(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
         sm.update_status("some-weird-status")

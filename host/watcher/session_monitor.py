@@ -8,7 +8,7 @@ from pathlib import Path
 
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
-    MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S,
+    MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -127,9 +127,14 @@ class SessionMonitor:
         self._recently_launched[sid] = time.time()
 
         session_dir = self.sessions_dir / sid
+        self._resume_session(sid, issue_id, reason="orphaned (container gone)")
+
+    def _resume_session(self, sid: str, issue_id: str, reason: str):
+        """Post lifecycle comment and launch a resume for the given session."""
+        session_dir = self.sessions_dir / sid
         checkpoint_count = read_checkpoint_count(session_dir)
         post_resume(self._get_tracker, issue_id, sid,
-                    reason="orphaned (container gone)", checkpoint_count=checkpoint_count)
+                    reason=reason, checkpoint_count=checkpoint_count)
 
         is_review = sid.startswith("review-")
         cmd = [
@@ -174,27 +179,26 @@ class SessionMonitor:
             if not issue_id:
                 continue
 
-            log.info(f"[{sid}] Auth-failure session — retrying (token may have been refreshed)")
+            auth_retries = state.get("auth_retries", 0)
+            if auth_retries >= MAX_AUTH_RETRIES:
+                log.warning(f"[{sid}] Auth retry limit reached ({MAX_AUTH_RETRIES}). "
+                            f"Token still invalid — giving up.")
+                state["status"] = "suspended:auth-failure-permanent"
+                write_state(session_dir, state)
+                self.telegram.notify(
+                    f"🔑 `{sid}` hit {MAX_AUTH_RETRIES} auth retries — token still invalid. "
+                    f"Giving up. Fix credentials and `nightshift resume` manually.",
+                    level=NotificationLevel.ACTIONS)
+                continue
+
+            log.info(f"[{sid}] Auth-failure session — retrying (token may have been refreshed, "
+                     f"attempt {auth_retries + 1}/{MAX_AUTH_RETRIES})")
+            state["auth_retries"] = auth_retries + 1
             state["status"] = "working"
             write_state(session_dir, state)
             self._recently_launched[sid] = time.time()
 
-            checkpoint_count = read_checkpoint_count(session_dir)
-            post_resume(self._get_tracker, issue_id, sid,
-                        reason="auth-failure retry", checkpoint_count=checkpoint_count)
-
-            is_review = sid.startswith("review-")
-            cmd = [
-                sys.executable,
-                str(_HOST_DIR / "launch.py"),
-                issue_id, "--resume",
-            ]
-            if is_review:
-                review_md = self.repo_dir / "REVIEW.md"
-                cmd += ["--step", "review"]
-                if review_md.exists():
-                    cmd += ["--workflow", str(review_md)]
-            self._launch_background(cmd, sid)
+            self._resume_session(sid, issue_id, reason="auth-failure retry")
 
     def check_closed_issues(self):
         """Detect sessions whose issues have been closed -- clean up worktree + session."""
