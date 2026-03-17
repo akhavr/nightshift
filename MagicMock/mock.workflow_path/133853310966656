@@ -10,7 +10,7 @@ tracker:
 
 workspace:
   kind: worktree
-  base_branch: main
+  base_branch: develop
   root: .worktrees
 
 notifications:

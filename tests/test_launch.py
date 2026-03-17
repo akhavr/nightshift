@@ -451,6 +451,7 @@ class TestMain:
         repo.mkdir()
         (repo / ".git").mkdir()
         (repo / ".worktrees").mkdir()
+        (repo / "WORKFLOW.md").write_text("---\n---\n")
         mock_repo_root.return_value = repo
 
         mock_load_wf.return_value = WorkflowConfig(
@@ -484,6 +485,7 @@ class TestMain:
         repo.mkdir()
         (repo / ".git").mkdir()
         (repo / ".worktrees").mkdir()
+        (repo / "WORKFLOW.md").write_text("---\n---\n")
         mock_repo_root.return_value = repo
 
         mock_load_wf.return_value = WorkflowConfig(
@@ -512,6 +514,7 @@ class TestMain:
         repo.mkdir()
         (repo / ".git").mkdir()
         (repo / ".worktrees").mkdir()
+        (repo / "WORKFLOW.md").write_text("---\n---\n")
         mock_repo_root.return_value = repo
 
         short_id = "abc123def456"

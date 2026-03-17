@@ -435,7 +435,7 @@ class TestCmdInitEdgeCases:
         """cmd_init exits when not inside a git repository."""
         with patch("host.cli.repo_root", side_effect=subprocess.CalledProcessError(1, "git")), \
              pytest.raises(SystemExit) as exc_info:
-            cmd_init(_make_args(force=False))
+            cmd_init(_make_args(force=False, workflow_path=None))
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
         assert "Not inside a git repository" in err
@@ -445,7 +445,7 @@ class TestCmdInitEdgeCases:
         repo, run = _init_repo(tmp_path, branch_name="develop")
 
         with patch("host.cli.repo_root", return_value=repo):
-            cmd_init(_make_args(force=False))
+            cmd_init(_make_args(force=False, workflow_path=None))
 
         content = (repo / "WORKFLOW.md").read_text()
         assert "base_branch: develop" in content
@@ -456,7 +456,7 @@ class TestCmdInitEdgeCases:
         (repo / ".gitignore").write_text("*.pyc\n__pycache__/")
 
         with patch("host.cli.repo_root", return_value=repo):
-            cmd_init(_make_args(force=False))
+            cmd_init(_make_args(force=False, workflow_path=None))
 
         content = (repo / ".gitignore").read_text()
         assert "*.pyc" in content
@@ -484,7 +484,7 @@ class TestCmdCleanupEdgeCases:
              patch("host.cli.resolve_session", return_value="nosess123456"), \
              patch("host.session_utils.subprocess.run") as mock_git:
             mock_git.return_value = MagicMock(returncode=0)
-            cmd_cleanup(_make_args(issue_id="nosess123456", keep_session=False))
+            cmd_cleanup(_make_args(issue_id="nosess123456", keep_session=False, workflow=None))
 
         out = capsys.readouterr().out
         assert "nosess123456" in out

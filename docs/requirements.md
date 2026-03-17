@@ -64,10 +64,10 @@ The system sends notifications (status updates, questions, completion) through c
 - **Tests:** test_notifier_prefix.py, test_composite_notifier.py, test_notification_level.py
 - **Status:** covered
 
-### REQ-011: Configuration via WORKFLOW.md
-All adapter selection, runtime settings, hooks, and prompt templates are configured through a YAML-front-matter WORKFLOW.md file. Environment variables are resolved with `$VAR` syntax.
+### REQ-011: Configuration via workflow file with per-repo discovery
+All adapter selection, runtime settings, hooks, and prompt templates are configured through a YAML-front-matter workflow file. Environment variables are resolved with `$VAR` syntax. Workflow file discovery follows a priority order: CLI `--workflow` flag > `.nightshift.yaml` pointer in repo root > `WORKFLOW.md` in repo root. `nightshift init --workflow-path` scaffolds workflow files at custom locations and writes the `.nightshift.yaml` pointer.
 
-- **Tests:** test_auto_start.py (config parsing), test_review_step.py (config parsing), test_config_factories.py, test_prompts.py, test_search.py
+- **Tests:** test_auto_start.py (config parsing), test_review_step.py (config parsing), test_config_factories.py, test_prompts.py, test_search.py, test_config_discovery.py (discovery order, pointer read/write, init --workflow-path, error messages)
 - **Status:** covered
 
 ### REQ-012: CLI for all operations
