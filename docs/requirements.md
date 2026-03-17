@@ -167,12 +167,13 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | test_session_runner.py | REQ-002, REQ-003, REQ-004, REQ-015, REQ-021 |
 | test_session_utils_host.py | REQ-001, REQ-002, REQ-007, REQ-012 |
 | test_static_tracker.py | REQ-016 |
-| test_stream_parser.py | REQ-014 |
+| test_stream_parser.py | REQ-004, REQ-014 |
 | test_watcher.py | REQ-017, REQ-019, REQ-020 |
 | test_worktree_git_fix.py | REQ-001 |
 | oq1_stdin_test.py | REQ-003 |
 | watcher/test_graceful_shutdown.py | REQ-002 |
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
+| watcher/test_session_monitor.py | REQ-002, REQ-004 |
 
 ---
 
