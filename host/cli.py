@@ -87,6 +87,7 @@ def cmd_answer(a):
 
 def cmd_watcher(a):
     wf = _resolve_workflow(a)
+    print(f"Using workflow: {wf}")
     log_file = repo_root() / ".nightshift" / "watcher.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
