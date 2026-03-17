@@ -484,21 +484,21 @@ def test_cmd_revise_session_not_found(tmp_path, capsys):
 
 
 def test_cmd_revise_wrong_status(tmp_path, capsys):
-    """revise exits with error when session status is not waiting:review."""
+    """revise exits with error when session status is not revisable."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    sd = repo / ".nightshift" / "sessions" / "working12345"
+    sd = repo / ".nightshift" / "sessions" / "done12345678"
     sd.mkdir(parents=True)
-    (sd / "state.json").write_text(json.dumps({"status": "working", "step": 2}))
+    (sd / "state.json").write_text(json.dumps({"status": "done", "step": 2}))
 
     with patch("host.cli.repo_root", return_value=repo), \
-         patch("host.cli.resolve_session", return_value="working12345"), \
+         patch("host.cli.resolve_session", return_value="done12345678"), \
          pytest.raises(SystemExit) as exc_info:
-        cmd_revise(_make_args(issue_id="working12345", workflow=None, message=None))
+        cmd_revise(_make_args(issue_id="done12345678", workflow=None, message=None))
 
     assert exc_info.value.code == 1
     err = capsys.readouterr().err
-    assert "not awaiting review" in err
+    assert "not revisable" in err
 
 
 def test_cmd_revise_success(tmp_path, capsys):
@@ -589,6 +589,139 @@ def test_cmd_revise_accepts_waiting_human_review(tmp_path, capsys):
 
     state = json.loads((sd / "state.json").read_text())
     assert state["status"] == "working"
+
+
+def test_cmd_revise_working_session_stops_and_relaunches(tmp_path, capsys):
+    """revise on a working session stops the container, writes prompt, relaunches."""
+    repo, run = _init_repo(tmp_path)
+    sd = repo / ".nightshift" / "sessions" / "workrev12345"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "working", "step": 3, "checkpoints": []})
+    )
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="workrev12345"), \
+         patch("host.cli.docker_stop", return_value=True) as mock_stop, \
+         patch("subprocess.run") as mock_subproc:
+        cmd_revise(_make_args(
+            issue_id="workrev12345",
+            workflow=str(repo / "WORKFLOW.md"),
+            message="Stop, the requirements changed. Use the new API.",
+        ))
+
+    # Container should have been stopped
+    mock_stop.assert_called_once_with("nightshift-workrev12345")
+
+    # resume-prompt.md should contain the mid-flight prompt
+    resume_prompt = sd / "resume-prompt.md"
+    assert resume_prompt.exists()
+    content = resume_prompt.read_text()
+    assert "Mid-flight Course Correction" in content
+    assert "Use the new API" in content
+
+    # state should remain working
+    state = json.loads((sd / "state.json").read_text())
+    assert state["status"] == "working"
+
+    # launch.py --resume should have been called
+    launch_call = mock_subproc.call_args_list[-1]
+    cmd_args = launch_call[0][0]
+    assert "--resume" in cmd_args
+
+
+def test_cmd_revise_starting_session(tmp_path, capsys):
+    """revise also works on 'starting' status sessions."""
+    repo, run = _init_repo(tmp_path)
+    sd = repo / ".nightshift" / "sessions" / "start1234567"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "starting", "step": 0, "checkpoints": []})
+    )
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="start1234567"), \
+         patch("host.cli.docker_stop", return_value=True), \
+         patch("subprocess.run"):
+        cmd_revise(_make_args(
+            issue_id="start1234567",
+            workflow=str(repo / "WORKFLOW.md"),
+            message="Wrong issue data, use the updated spec.",
+        ))
+
+    state = json.loads((sd / "state.json").read_text())
+    assert state["status"] == "working"
+    assert "updated spec" in (sd / "resume-prompt.md").read_text()
+
+
+def test_cmd_revise_working_requires_message(tmp_path, capsys):
+    """revise on a working session requires an inline message."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "nomsg1234567"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "working", "step": 1, "checkpoints": []})
+    )
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="nomsg1234567"), \
+         pytest.raises(SystemExit) as exc_info:
+        cmd_revise(_make_args(issue_id="nomsg1234567", workflow=None, message=None))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "message is required" in err
+
+
+def test_cmd_revise_working_warns_on_stop_failure(tmp_path, capsys):
+    """revise prints a warning if docker stop fails (container may not be running)."""
+    repo, run = _init_repo(tmp_path)
+    sd = repo / ".nightshift" / "sessions" / "stopfail1234"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "working", "step": 2, "checkpoints": []})
+    )
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="stopfail1234"), \
+         patch("host.cli.docker_stop", return_value=False), \
+         patch("subprocess.run"):
+        cmd_revise(_make_args(
+            issue_id="stopfail1234",
+            workflow=str(repo / "WORKFLOW.md"),
+            message="Change direction please.",
+        ))
+
+    err = capsys.readouterr().err
+    assert "may not be running" in err
+
+    # Should still write prompt and proceed
+    assert (sd / "resume-prompt.md").exists()
 
 
 # ── cmd_cleanup ───────────────────────────────────────────────────────────────

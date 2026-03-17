@@ -46,10 +46,10 @@ A human can reject agent work via CLI, which discards the worktree, branch, and 
 - **Tests:** test_accept_reject.py, test_session_utils_host.py
 - **Status:** covered
 
-### REQ-008: Revise agent work after review
-A human (or automated reviewer) can request revisions. The system collects review feedback from tracker comments and restarts the agent with a revise prompt.
+### REQ-008: Revise agent work after review or mid-flight
+A human (or automated reviewer) can request revisions. For sessions in review (`waiting:review`, `waiting:human-review`), the system collects review feedback from tracker comments and restarts the agent with a revise prompt. For running sessions (`working`, `starting`), the system stops the container, writes the operator's inline message as a course-correction prompt, and relaunches with `--resume`.
 
-- **Tests:** test_review.py, test_review_step.py, test_assistant_text_logging.py
+- **Tests:** test_review.py, test_review_step.py, test_assistant_text_logging.py, test_cli_commands.py (mid-flight revise tests)
 - **Status:** covered
 
 ### REQ-009: Automated code review
