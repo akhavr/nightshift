@@ -535,6 +535,32 @@ def _build_mid_flight_prompt(message: str) -> str:
     return "\n".join(parts)
 
 
+def _stop_and_build_mid_flight(sid: str, sd, message: str) -> str:
+    """Stop a running container and return a mid-flight course-correction prompt."""
+    container = f"nightshift-{sid}"
+    print(f"Stopping container {container}...")
+    if not docker_stop(container):
+        print(f"Warning: container {container} may not be running",
+              file=sys.stderr)
+    print(f"Revising working session {sid} with inline feedback")
+    return _build_mid_flight_prompt(message)
+
+
+def _collect_review_feedback(wf, repo, issue_id: str, inline) -> str:
+    """Collect tracker comments and return a review revision prompt."""
+    config = load_workflow(wf)
+    tracker = create_tracker(config, repo_dir=str(repo))
+    review_comments = collect_review_feedback(tracker, issue_id)
+    feedback = build_revise_prompt(review_comments, inline)
+    if not feedback.strip() or (not review_comments and not inline):
+        print("No review feedback found. Add comments to the issue "
+              "or pass inline feedback.", file=sys.stderr)
+        sys.exit(1)
+    print(f"Revising {issue_id} with {len(review_comments)} comment(s)" +
+          (f" + inline feedback" if inline else ""))
+    return feedback
+
+
 def cmd_revise(a):
     """Resume agent with review feedback or mid-flight course correction."""
     r = repo_root()
@@ -562,35 +588,12 @@ def cmd_revise(a):
     wf = _resolve_workflow(a)
 
     if status in WORKING_STATUSES:
-        container = f"nightshift-{sid}"
-        print(f"Stopping container {container}...")
-        if not docker_stop(container):
-            print(f"Warning: container {container} may not be running",
-                  file=sys.stderr)
+        feedback = _stop_and_build_mid_flight(sid, sd, inline)
+    else:
+        feedback = _collect_review_feedback(wf, r, a.issue_id, inline)
 
-        feedback = _build_mid_flight_prompt(inline)
-        (sd / "resume-prompt.md").write_text(feedback)
-        update_status(sd, "working")
-
-        print(f"Revising working session {sid} with inline feedback")
-
-    else:  # REVIEW_STATUSES
-        config = load_workflow(wf)
-        tracker = create_tracker(config, repo_dir=str(r))
-        review_comments = collect_review_feedback(tracker, a.issue_id)
-
-        feedback = build_revise_prompt(review_comments, inline)
-
-        if not feedback.strip() or (not review_comments and not inline):
-            print("No review feedback found. Add comments to the issue "
-                  "or pass inline feedback.", file=sys.stderr)
-            sys.exit(1)
-
-        (sd / "resume-prompt.md").write_text(feedback)
-        update_status(sd, "working")
-
-        print(f"Revising {sid} with {len(review_comments)} comment(s)" +
-              (f" + inline feedback" if inline else ""))
+    (sd / "resume-prompt.md").write_text(feedback)
+    update_status(sd, "working")
 
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
@@ -636,7 +639,7 @@ def _register_session_commands(s):
     sp.add_argument("issue_id")
     sp.set_defaults(func=cmd_reject)
 
-    sp = s.add_parser("revise", help="Resume agent with review feedback")
+    sp = s.add_parser("revise", help="Resume agent with review feedback or mid-flight correction")
     sp.add_argument("issue_id")
     sp.add_argument("message", nargs="?", default=None, help="Inline review feedback")
     sp.set_defaults(func=cmd_revise)

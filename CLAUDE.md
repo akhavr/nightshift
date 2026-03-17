@@ -21,7 +21,7 @@ nightshift status                        # show all session statuses
 nightshift logs <issue-id>               # tail raw agent output
 nightshift history <issue-id>            # conversation timeline (-f to follow)
 nightshift accept <issue-id>             # merge agent branch into base, clean up
-nightshift revise <issue-id> -m "msg"    # request revisions (review or mid-flight)
+nightshift revise <issue-id> "msg"       # request revisions (review or mid-flight)
 nightshift reject <issue-id>             # discard agent work, remove worktree + session
 nightshift cleanup <issue-id>            # remove worktree (optionally keep session)
 nightshift watcher                       # start host watcher (pause/unpause, Telegram)
