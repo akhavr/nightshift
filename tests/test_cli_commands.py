@@ -19,6 +19,7 @@ from host.cli import (
     cmd_cleanup,
     _read_issue_title,
     _truncate_title,
+    _format_history_line,
 )
 
 
@@ -293,7 +294,7 @@ def test_cmd_history_prints_entries(tmp_path, capsys):
 
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="hist1234abcd"):
-        cmd_history(_make_args(issue_id="hist1234abcd"))
+        cmd_history(_make_args(issue_id="hist1234abcd", follow=False))
 
     out = capsys.readouterr().out
     assert "thought" in out
@@ -312,10 +313,83 @@ def test_cmd_history_missing_file(tmp_path, capsys):
 
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="nohist12abcd"):
-        cmd_history(_make_args(issue_id="nohist12abcd"))
+        cmd_history(_make_args(issue_id="nohist12abcd", follow=False))
 
     err = capsys.readouterr().err
     assert "No history." in err
+
+
+def test_format_history_line_valid():
+    """_format_history_line returns formatted string for valid JSON."""
+    line = json.dumps({"timestamp": "2024-01-01T10:00:00Z", "role": "thought",
+                       "content": "Hello world"})
+    result = _format_history_line(line)
+    assert result is not None
+    assert "thought" in result
+    assert "Hello world" in result
+
+
+def test_format_history_line_invalid():
+    """_format_history_line returns None for malformed input."""
+    assert _format_history_line("not-json") is None
+    assert _format_history_line("") is None
+
+
+def test_cmd_history_follow_prints_new_lines(tmp_path, capsys):
+    """history --follow prints new lines appended after initial read."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "follow12abcd"
+    sd.mkdir(parents=True)
+    cf = sd / "conversation.jsonl"
+
+    initial = {"timestamp": "2024-01-01T10:00:00Z", "role": "thought",
+               "content": "Initial entry"}
+    cf.write_text(json.dumps(initial) + "\n")
+
+    new_entry = json.dumps({"timestamp": "2024-01-01T10:01:00Z",
+                            "role": "checkpoint",
+                            "content": "New entry from follow"}) + "\n"
+
+    sleep_call_count = 0
+
+    def fake_sleep(_duration):
+        nonlocal sleep_call_count
+        sleep_call_count += 1
+        if sleep_call_count == 1:
+            # Append a new line on the first sleep (no new data yet)
+            with open(cf, "a") as fh:
+                fh.write(new_entry)
+        elif sleep_call_count >= 3:
+            raise KeyboardInterrupt
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="follow12abcd"), \
+         patch("host.cli.time.sleep", side_effect=fake_sleep):
+        cmd_history(_make_args(issue_id="follow12abcd", follow=True))
+
+    out = capsys.readouterr().out
+    assert "Initial entry" in out
+    assert "New entry from follow" in out
+
+
+def test_cmd_history_no_follow_by_default(tmp_path, capsys):
+    """history without --follow exits after printing existing entries."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "nofol123abcd"
+    sd.mkdir(parents=True)
+
+    entry = {"timestamp": "2024-01-01T10:00:00Z", "role": "thought",
+             "content": "Just an entry"}
+    (sd / "conversation.jsonl").write_text(json.dumps(entry) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="nofol123abcd"):
+        cmd_history(_make_args(issue_id="nofol123abcd", follow=False))
+
+    out = capsys.readouterr().out
+    assert "Just an entry" in out
 
 
 # ── cmd_init ─────────────────────────────────────────────────────────────────
