@@ -31,6 +31,8 @@ def main():
                    help="Disable automatic starting of new issues")
     p.add_argument("--log-file", default=None,
                    help="Log to file instead of stderr")
+    p.add_argument("--workflow", default=None,
+                   help="Path to workflow file (resolved by CLI)")
     a = p.parse_args()
 
     # Reconfigure logging to file if requested
@@ -54,5 +56,7 @@ def main():
     except subprocess.CalledProcessError:
         repo = Path.cwd()
 
-    watcher = HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start)
+    workflow_path = Path(a.workflow) if a.workflow else None
+    watcher = HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start,
+                          workflow_path=workflow_path)
     watcher.run(shutdown_event=shutdown_event)

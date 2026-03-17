@@ -27,11 +27,13 @@ class HostWatcher:
     - monitor: SessionMonitor (orphan detection, closed issues, auto-start)
     """
 
-    def __init__(self, sessions_dir: Path, repo_dir: Path, auto_start: bool = True):
+    def __init__(self, sessions_dir: Path, repo_dir: Path, auto_start: bool = True,
+                 workflow_path: Path | None = None):
         self.sessions_dir = sessions_dir
         self.repo_dir = repo_dir
         self.auto_start = auto_start
-        self._auto_start_config = None  # Lazy-loaded from WORKFLOW.md
+        self.workflow_path = workflow_path or (repo_dir / "WORKFLOW.md")
+        self._auto_start_config = None  # Lazy-loaded from workflow
         self._tracker = None
         self._config = None
         self._recently_launched: dict[str, float] = {}
@@ -48,17 +50,19 @@ class HostWatcher:
         self.reviews = ReviewOrchestrator(
             sessions_dir, repo_dir, self.telegram,
             self._get_tracker, self._recently_launched, self._launch_background,
+            workflow_path=self.workflow_path,
         )
         self.monitor = SessionMonitor(
             sessions_dir, repo_dir, auto_start, self.telegram,
             self._get_tracker, self._get_auto_start_config,
             self._recently_launched, self._launch_background,
+            workflow_path=self.workflow_path,
         )
 
     def _telegram_level_from_config(self) -> str:
-        """Read notification level for the telegram notifier from WORKFLOW.md."""
+        """Read notification level for the telegram notifier from workflow config."""
         try:
-            self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            self._config = load_workflow(self.workflow_path)
             for nc in self._config.notifications:
                 if nc.kind == "telegram":
                     return nc.level
@@ -67,18 +71,18 @@ class HostWatcher:
         return "all"
 
     def _get_tracker(self):
-        """Lazy-init tracker from WORKFLOW.md."""
+        """Lazy-init tracker from workflow config."""
         if self._tracker is None:
             if self._config is None:
-                self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+                self._config = load_workflow(self.workflow_path)
             self._tracker = create_tracker(self._config, repo_dir=str(self.repo_dir))
         return self._tracker
 
     def _get_auto_start_config(self):
-        """Lazy-load auto_start config from WORKFLOW.md."""
+        """Lazy-load auto_start config from workflow config."""
         if self._auto_start_config is None:
             if self._config is None:
-                self._config = load_workflow(self.repo_dir / "WORKFLOW.md")
+                self._config = load_workflow(self.workflow_path)
             self._auto_start_config = self._config.auto_start
         return self._auto_start_config
 

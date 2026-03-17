@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import SHORT_ID_LEN, DISPLAY_SEPARATOR_WIDTH, LOG_PREVIEW_LEN
+from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
 from host.merge import (
     resolve_merge_ref, check_working_tree_clean,
@@ -50,20 +51,25 @@ def resolve_session(issue_id: str) -> str:
     return issue_id[:SHORT_ID_LEN]
 
 
+def _resolve_workflow(a) -> Path:
+    """Resolve workflow path using discovery order."""
+    return _discover_workflow(repo_root(), getattr(a, "workflow", None))
+
+
 def cmd_start(a):
+    wf = _resolve_workflow(a)
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"), a.issue_id]
     if a.max_turns:
         cmd += ["--max-turns", str(a.max_turns)]
-    if a.workflow:
-        cmd += ["--workflow", a.workflow]
+    cmd += ["--workflow", str(wf)]
     subprocess.run(cmd)
 
 
 def cmd_resume(a):
+    wf = _resolve_workflow(a)
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
-    if a.workflow:
-        cmd += ["--workflow", a.workflow]
+    cmd += ["--workflow", str(wf)]
     subprocess.run(cmd)
 
 
@@ -79,12 +85,14 @@ def cmd_answer(a):
 
 
 def cmd_watcher(a):
+    wf = _resolve_workflow(a)
     log_file = repo_root() / ".nightshift" / "watcher.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable, "-m", "host.watcher",
         "--sessions-dir", str(sessions_dir()),
         "--log-file", str(log_file),
+        "--workflow", str(wf),
     ]
     if a.no_auto_start:
         cmd.append("--no-auto-start")
@@ -318,7 +326,15 @@ def cmd_init(a):
     default_branch = _detect_default_branch(root)
     workflow_content = DEFAULT_WORKFLOW_MD.replace("base_branch: main", f"base_branch: {default_branch}")
 
-    _scaffold_file(root / "WORKFLOW.md", workflow_content, a.force, f"base_branch: {default_branch}")
+    workflow_path = Path(a.workflow_path).expanduser().resolve() if a.workflow_path else root / "WORKFLOW.md"
+    workflow_path.parent.mkdir(parents=True, exist_ok=True)
+    _scaffold_file(workflow_path, workflow_content, a.force, f"base_branch: {default_branch}")
+
+    # If workflow is outside the repo root, write .nightshift.yaml pointer
+    if a.workflow_path:
+        config_file = write_local_config(root, str(workflow_path))
+        print(f"Created {config_file} (points to {workflow_path})")
+
     _scaffold_file(root / "REVIEW.md", DEFAULT_REVIEW_MD, a.force)
     _scaffold_file(root / ".env.example", DEFAULT_ENV_EXAMPLE, a.force)
 
@@ -329,7 +345,7 @@ def cmd_init(a):
     _update_gitignore(root)
 
     print("\nNext steps:")
-    print("  1. Review and customize WORKFLOW.md (notifications, auto_start, base_branch)")
+    print(f"  1. Review and customize {workflow_path.name} (notifications, auto_start, base_branch)")
     print("  2. Optionally: cp .env.example .env && edit (not needed if vars are already exported)")
     print("  3. Run: nightshift start <issue-id>")
 
@@ -365,7 +381,7 @@ def cmd_accept(a):
     """Merge agent branch into base branch, then clean up."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
-    config = load_workflow(a.workflow or r / "WORKFLOW.md")
+    config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
     base = config.workspace.base_branch
     wt = r / config.workspace.root / f"agent-{sid}"
@@ -409,7 +425,7 @@ def cmd_reject(a):
     """Discard agent work: remove worktree, branch, and session."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
-    config = load_workflow(r / "WORKFLOW.md")
+    config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
 
     result = subprocess.run(
@@ -454,7 +470,7 @@ def cmd_revise(a):
               file=sys.stderr)
         sys.exit(1)
 
-    config = load_workflow(a.workflow or r / "WORKFLOW.md")
+    config = load_workflow(_resolve_workflow(a))
     tracker = create_tracker(config, repo_dir=str(r))
     review_comments = collect_review_feedback(tracker, a.issue_id)
 
@@ -472,17 +488,17 @@ def cmd_revise(a):
     print(f"Revising {sid} with {len(review_comments)} comment(s)" +
           (f" + inline feedback" if inline else ""))
 
+    wf = _resolve_workflow(a)
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
-    if a.workflow:
-        cmd += ["--workflow", a.workflow]
+    cmd += ["--workflow", str(wf)]
     subprocess.run(cmd)
 
 
 def cmd_cleanup(a):
     r = repo_root()
     sid = resolve_session(a.issue_id)
-    config = load_workflow(r / "WORKFLOW.md")
+    config = load_workflow(_resolve_workflow(a))
 
     wt = r / config.workspace.root / f"agent-{sid}"
     remove_worktree(r, wt, f"agent/{sid}")
@@ -554,6 +570,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sp = s.add_parser("init", help="Scaffold WORKFLOW.md and .env.example")
     sp.add_argument("--force", action="store_true", help="Overwrite existing files")
+    sp.add_argument("--workflow-path", default=None,
+                    help="Custom location for workflow file (writes .nightshift.yaml pointer)")
     sp.set_defaults(func=cmd_init)
 
     return p

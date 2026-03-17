@@ -36,10 +36,12 @@ class SessionMonitor:
 
     def __init__(self, sessions_dir: Path, repo_dir: Path, auto_start: bool,
                  telegram: TelegramRelay, get_tracker, get_auto_start_config,
-                 recently_launched: dict, launch_background):
+                 recently_launched: dict, launch_background,
+                 workflow_path: Path | None = None):
         self.sessions_dir = sessions_dir
         self.repo_dir = repo_dir
         self.auto_start = auto_start
+        self.workflow_path = workflow_path or (repo_dir / "WORKFLOW.md")
         self.telegram = telegram
         self._get_tracker = get_tracker
         self._get_auto_start_config = get_auto_start_config
@@ -196,7 +198,7 @@ class SessionMonitor:
     def cleanup_session(self, sid: str, issue_id: str, session_dir: Path):
         """Remove worktree, branch, and session directory."""
         try:
-            config = load_workflow(self.repo_dir / "WORKFLOW.md")
+            config = load_workflow(self.workflow_path)
             wt = self.repo_dir / config.workspace.root / f"agent-{sid}"
             branch = f"agent/{sid}"
 

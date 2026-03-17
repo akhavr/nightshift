@@ -198,7 +198,7 @@ def test_cmd_init_creates_files(tmp_path, capsys):
     repo, run = _init_repo(tmp_path)
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_init(_make_args(force=False))
+        cmd_init(_make_args(force=False, workflow_path=None))
 
     assert (repo / "WORKFLOW.md").exists()
     assert (repo / "REVIEW.md").exists()
@@ -212,7 +212,7 @@ def test_cmd_init_does_not_overwrite_without_force(tmp_path, capsys):
     (repo / "WORKFLOW.md").write_text("# original")
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_init(_make_args(force=False))
+        cmd_init(_make_args(force=False, workflow_path=None))
 
     # Original content should be preserved
     assert (repo / "WORKFLOW.md").read_text() == "# original"
@@ -239,7 +239,7 @@ def test_cmd_init_updates_gitignore(tmp_path, capsys):
     repo, run = _init_repo(tmp_path)
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_init(_make_args(force=False))
+        cmd_init(_make_args(force=False, workflow_path=None))
 
     gitignore = (repo / ".gitignore").read_text()
     assert ".env" in gitignore
@@ -253,7 +253,7 @@ def test_cmd_init_no_duplicate_gitignore_entries(tmp_path, capsys):
     (repo / ".gitignore").write_text(".env\n.worktrees/\n.nightshift/\n")
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_init(_make_args(force=False))
+        cmd_init(_make_args(force=False, workflow_path=None))
 
     gitignore_content = (repo / ".gitignore").read_text()
     out = capsys.readouterr().out
