@@ -158,6 +158,14 @@ class SessionRunner:
             self.state_mgr.append_conversation("tool_result", event.content)
         elif event.type == AgentEventType.SYSTEM:
             return self._handle_system_event(event.content)
+        elif event.type == AgentEventType.AUTH_FAILURE:
+            log.error(f"Auth failure: {event.content}")
+            self._commit_wip("auth failure")
+            self.state_mgr.update_status("suspended:auth-failure")
+            self.notifier.notify(
+                f"🔑 {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]}: auth failure — token may be expired. Refresh and resume.",
+                level=NotificationLevel.ACTIONS)
+            return "STOP"
         elif event.type == AgentEventType.STALL:
             log.warning(f"Stall: {event.content}")
             self._commit_wip("stalled")

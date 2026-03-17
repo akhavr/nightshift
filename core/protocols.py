@@ -59,6 +59,7 @@ class AgentEventType(Enum):
     SYSTEM = auto()
     PROCESS_EXIT = auto()
     STALL = auto()
+    AUTH_FAILURE = auto()
     UNKNOWN = auto()
 
 

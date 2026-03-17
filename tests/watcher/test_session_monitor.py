@@ -220,6 +220,116 @@ class TestCheckOrphanedSessions:
 
 
 # ---------------------------------------------------------------------------
+# check_auth_failures tests
+# ---------------------------------------------------------------------------
+
+class TestCheckAuthFailures:
+    def test_skipped_within_retry_interval(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_auth_retry_check = time.time()
+        _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.monitor.check_auth_failures()
+        assert launched == []
+
+    def test_auth_failure_session_retried(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_auth_retry_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.monitor.check_auth_failures()
+
+        assert "abc" in launched
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "working"
+
+    def test_non_auth_failure_not_retried(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_auth_retry_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="suspended:stall", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.monitor.check_auth_failures()
+        assert launched == []
+
+    def test_auth_retry_sets_recently_launched(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_auth_retry_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
+        w.monitor._launch_background = lambda cmd, sid: None
+
+        w.monitor.check_auth_failures()
+        assert "abc" in w._recently_launched
+
+    def test_auth_retry_review_session_includes_step(self, tmp_path):
+        """Review sessions should get --step review on auth retry."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_auth_retry_check = 0.0
+        _make_session(w.sessions_dir, "review-abc", status="suspended:auth-failure", issue_id="issue-abc")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        w.monitor.check_auth_failures()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        step_idx = cmd.index("--step")
+        assert cmd[step_idx + 1] == "review"
+
+    def test_auth_retry_increments_counter(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_auth_retry_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
+        w.monitor._launch_background = lambda cmd, sid: None
+
+        w.monitor.check_auth_failures()
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["auth_retries"] == 1
+
+    def test_auth_retry_limit_stops_retrying(self, tmp_path):
+        """After MAX_AUTH_RETRIES, session becomes suspended:auth-failure-permanent."""
+        from host.constants import MAX_AUTH_RETRIES
+        w = _make_watcher(tmp_path)
+        w.monitor._last_auth_retry_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["auth_retries"] = MAX_AUTH_RETRIES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        w.monitor.check_auth_failures()
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "suspended:auth-failure-permanent"
+
+    def test_auth_retry_limit_notifies_telegram(self, tmp_path):
+        from host.constants import MAX_AUTH_RETRIES
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        w.monitor._last_auth_retry_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["auth_retries"] = MAX_AUTH_RETRIES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+        w.monitor._launch_background = lambda cmd, sid: None
+
+        w.monitor.check_auth_failures()
+
+        assert any("giving up" in n.lower() for n in notified)
+
+
+# ---------------------------------------------------------------------------
 # check_closed_issues tests
 # ---------------------------------------------------------------------------
 

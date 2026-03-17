@@ -198,3 +198,109 @@ def test_parse_empty_and_invalid():
     assert agent._parse("   ") is None
     assert agent._parse("not json") is None
     assert agent._parse("{}") is not None  # unknown type
+
+
+# ── Auth failure detection ─────────────────────────────────
+
+class TestAuthFailureDetection:
+    def test_error_event_with_invalid_api_key(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "error",
+            "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert "invalid x-api-key" in ev.content
+
+    def test_error_event_with_expired_token(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "error",
+            "error": {"type": "authentication_error", "message": "Token has expired"},
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_error_event_string_format(self):
+        """Error field as a plain string instead of dict."""
+        agent = make_agent()
+        line = json.dumps({
+            "type": "error",
+            "error": "authentication_error: invalid_api_key",
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_result_event_with_auth_error(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "result",
+            "subtype": "error",
+            "result": "Authentication error: invalid_api_key",
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_system_event_with_auth_error(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "system",
+            "message": "Could not authenticate with the API",
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_non_auth_error_stays_system(self):
+        """A regular error event should NOT be flagged as auth failure."""
+        agent = make_agent()
+        line = json.dumps({
+            "type": "error",
+            "error": {"type": "rate_limit_error", "message": "Rate limit exceeded"},
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.SYSTEM
+        assert "error:" in ev.content
+
+    def test_non_auth_result_stays_system(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "result",
+            "result": "Task completed successfully",
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.SYSTEM
+
+    def test_permission_error_detected(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "error",
+            "error": {"type": "permission_error", "message": "permission_error: access denied"},
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_unauthorized_detected(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "system",
+            "message": "Unauthorized: please check your API credentials",
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_is_auth_failure_static_method(self):
+        from adapters.agents.claude_code import ClaudeCodeAgent
+        assert ClaudeCodeAgent._is_auth_failure("invalid_api_key") is True
+        assert ClaudeCodeAgent._is_auth_failure("AUTHENTICATION_ERROR") is True
+        assert ClaudeCodeAgent._is_auth_failure("rate limit exceeded") is False
+        assert ClaudeCodeAgent._is_auth_failure("") is False

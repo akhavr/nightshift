@@ -8,7 +8,7 @@ from pathlib import Path
 
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
-    MAX_ORPHAN_RESUMES,
+    MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -50,6 +50,7 @@ class SessionMonitor:
         self._last_orphan_check = 0.0
         self._last_closed_check = 0.0
         self._last_auto_start_poll = 0.0
+        self._last_auth_retry_check = 0.0
         self._known_issue_ids: set[str] = set()
 
     def check_orphaned_sessions(self):
@@ -126,9 +127,14 @@ class SessionMonitor:
         self._recently_launched[sid] = time.time()
 
         session_dir = self.sessions_dir / sid
+        self._resume_session(sid, issue_id, reason="orphaned (container gone)")
+
+    def _resume_session(self, sid: str, issue_id: str, reason: str):
+        """Post lifecycle comment and launch a resume for the given session."""
+        session_dir = self.sessions_dir / sid
         checkpoint_count = read_checkpoint_count(session_dir)
         post_resume(self._get_tracker, issue_id, sid,
-                    reason="orphaned (container gone)", checkpoint_count=checkpoint_count)
+                    reason=reason, checkpoint_count=checkpoint_count)
 
         is_review = sid.startswith("review-")
         cmd = [
@@ -142,6 +148,57 @@ class SessionMonitor:
             if review_md.exists():
                 cmd += ["--workflow", str(review_md)]
         self._launch_background(cmd, sid)
+
+    def check_auth_failures(self):
+        """Retry sessions suspended due to auth failure on a slow interval."""
+        now = time.time()
+        if now - self._last_auth_retry_check < AUTH_RETRY_INTERVAL_S:
+            return
+        self._last_auth_retry_check = now
+
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not (session_dir / "state.json").exists():
+                continue
+
+            try:
+                state = read_state(session_dir)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"[{sid}] Failed to read state for auth-retry check: {e}")
+                continue
+
+            if state.get("status") != "suspended:auth-failure":
+                continue
+
+            issue_id = state.get("issue_id", "")
+            if not issue_id:
+                continue
+
+            auth_retries = state.get("auth_retries", 0)
+            if auth_retries >= MAX_AUTH_RETRIES:
+                log.warning(f"[{sid}] Auth retry limit reached ({MAX_AUTH_RETRIES}). "
+                            f"Token still invalid — giving up.")
+                state["status"] = "suspended:auth-failure-permanent"
+                write_state(session_dir, state)
+                self.telegram.notify(
+                    f"🔑 `{sid}` hit {MAX_AUTH_RETRIES} auth retries — token still invalid. "
+                    f"Giving up. Fix credentials and `nightshift resume` manually.",
+                    level=NotificationLevel.ACTIONS)
+                continue
+
+            log.info(f"[{sid}] Auth-failure session — retrying (token may have been refreshed, "
+                     f"attempt {auth_retries + 1}/{MAX_AUTH_RETRIES})")
+            state["auth_retries"] = auth_retries + 1
+            state["status"] = "working"
+            write_state(session_dir, state)
+            self._recently_launched[sid] = time.time()
+
+            self._resume_session(sid, issue_id, reason="auth-failure retry")
 
     def check_closed_issues(self):
         """Detect sessions whose issues have been closed -- clean up worktree + session."""

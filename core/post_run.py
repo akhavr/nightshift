@@ -47,7 +47,8 @@ def post_run_action(
             return resume_prompt
         notify_done(state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st)
         return None
-    if st.status in ("completed", "cancelled:review-rejected"):
+    if st.status in ("completed", "cancelled:review-rejected",
+                      "suspended:auth-failure", "suspended:auth-failure-permanent"):
         return None
     if st.status == "cancelled:external":
         tracker.add_comment(issue.id, "🛑 Stopped: closed externally.")
