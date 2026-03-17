@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from host.docker_utils import docker_remove
+
 
 _PASSTHROUGH_ENV_VARS = (
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
@@ -80,6 +82,12 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
         names["worktree_name"], issue_id, names["short_id"], max_turns,
         step, is_resume, workflow_path, image,
     )
+
+    # Remove any stale container with the same name (e.g. leftover from a
+    # previous run that exited without cleanup). docker rm -f is a no-op if
+    # the container doesn't exist.
+    container_name = names["container_name"]
+    docker_remove(container_name)
 
     # Save the worktree .git file — the container rewrites it to /repo-git/...
     # which is invalid on the host. Restore after container exits.

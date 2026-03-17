@@ -27,6 +27,16 @@ def docker_stop(container: str) -> bool:
     ).returncode == 0
 
 
+def docker_remove(container: str) -> bool:
+    """Force-remove a Docker container. Returns True on success.
+
+    This is a no-op if the container doesn't exist (docker rm -f exits 0).
+    """
+    return subprocess.run(
+        ["docker", "rm", "-f", container], capture_output=True,
+    ).returncode == 0
+
+
 def docker_container_status(container: str) -> str | None:
     """Get the status of a Docker container (running, paused, etc.).
 

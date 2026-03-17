@@ -7,7 +7,8 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.docker_utils import (
-    docker_pause, docker_unpause, docker_stop, docker_container_status,
+    docker_pause, docker_unpause, docker_stop, docker_remove,
+    docker_container_status,
 )
 
 
@@ -48,6 +49,21 @@ class TestDockerStop:
         with patch("host.docker_utils.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1)
             assert docker_stop("test-container") is False
+
+
+class TestDockerRemove:
+    def test_remove_success(self):
+        with patch("host.docker_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            assert docker_remove("test-container") is True
+            mock_run.assert_called_once_with(
+                ["docker", "rm", "-f", "test-container"], capture_output=True,
+            )
+
+    def test_remove_failure(self):
+        with patch("host.docker_utils.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1)
+            assert docker_remove("test-container") is False
 
 
 class TestDockerContainerStatus:
