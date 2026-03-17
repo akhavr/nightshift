@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -107,19 +108,22 @@ def cmd_watcher(a):
 TITLE_MAX_LEN = 40
 
 
-def _read_issue_title(session_dir: Path) -> str:
-    """Read issue title from state.json or fall back to issue.json."""
-    try:
-        state = json.loads((session_dir / "state.json").read_text())
-        title = state.get("issue_title", "")
-        if title:
-            return title
-    except Exception:
-        pass
+def _read_issue_title(session_dir: Path, state: dict | None = None) -> str:
+    """Read issue title from state dict/state.json or fall back to issue.json."""
+    if state is None:
+        try:
+            state = json.loads((session_dir / "state.json").read_text())
+        except Exception as e:
+            logging.debug("Failed to read state.json for title in %s: %s", session_dir, e)
+            state = {}
+    title = state.get("issue_title", "")
+    if title:
+        return title
     try:
         issue = json.loads((session_dir / "issue.json").read_text())
         return issue.get("title", "")
-    except Exception:
+    except Exception as e:
+        logging.debug("Failed to read issue.json for title in %s: %s", session_dir, e)
         return ""
 
 
@@ -140,7 +144,7 @@ def cmd_status(a):
         sid = f.parent.name
         try:
             s = json.loads(f.read_text())
-            title = _truncate_title(_read_issue_title(f.parent))
+            title = _truncate_title(_read_issue_title(f.parent, state=s))
             print(f"{sid:<14} {s.get('status','?'):<26} "
                   f"{s.get('step',0):>5} {len(s.get('checkpoints',[])):>4}"
                   f"  {title}")
