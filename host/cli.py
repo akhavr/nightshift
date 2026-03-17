@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
-from host.constants import SHORT_ID_LEN, DISPLAY_SEPARATOR_WIDTH, LOG_PREVIEW_LEN
+from host.constants import SHORT_ID_LEN, LOG_PREVIEW_LEN
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
 from host.merge import (
@@ -140,7 +140,6 @@ def cmd_status(a):
     if not sd.exists():
         print("No sessions."); return
     print(f"{'SESSION':<14} {'STATUS':<26} {'STEP':>5} {'CPS':>4}  {'TITLE'}")
-    print("-" * DISPLAY_SEPARATOR_WIDTH)
     for f in sorted(sd.glob("*/state.json")):
         sid = f.parent.name
         try:
