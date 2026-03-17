@@ -330,7 +330,7 @@ def cmd_init(a):
     workflow_path.parent.mkdir(parents=True, exist_ok=True)
     _scaffold_file(workflow_path, workflow_content, a.force, f"base_branch: {default_branch}")
 
-    # If workflow is outside the repo root, write .nightshift.yaml pointer
+    # If custom workflow path was specified, write .nightshift.yaml pointer
     if a.workflow_path:
         config_file = write_local_config(root, str(workflow_path))
         print(f"Created {config_file} (points to {workflow_path})")
@@ -470,7 +470,8 @@ def cmd_revise(a):
               file=sys.stderr)
         sys.exit(1)
 
-    config = load_workflow(_resolve_workflow(a))
+    wf = _resolve_workflow(a)
+    config = load_workflow(wf)
     tracker = create_tracker(config, repo_dir=str(r))
     review_comments = collect_review_feedback(tracker, a.issue_id)
 
@@ -488,7 +489,6 @@ def cmd_revise(a):
     print(f"Revising {sid} with {len(review_comments)} comment(s)" +
           (f" + inline feedback" if inline else ""))
 
-    wf = _resolve_workflow(a)
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
     cmd += ["--workflow", str(wf)]
