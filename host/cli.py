@@ -17,6 +17,7 @@ from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import SHORT_ID_LEN, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
+from host.docker_utils import docker_stop
 from host.merge import (
     resolve_merge_ref, check_working_tree_clean,
     merge_with_rebase_fallback, verify_no_conflict_markers,
@@ -515,8 +516,27 @@ def cmd_reject(a):
     print(f"Rejected and cleaned up {sid}")
 
 
+WORKING_STATUSES = ("working", "starting")
+REVIEW_STATUSES = ("waiting:review", "waiting:human-review")
+
+
+def _build_mid_flight_prompt(message: str) -> str:
+    """Build a resume prompt for mid-flight course correction."""
+    parts = [
+        "## Mid-flight Course Correction\n",
+        "The operator has stopped your session to provide new direction:\n",
+        f"**Operator:** {message}\n",
+        "\n## Instructions",
+        "Follow the operator's guidance above.",
+        "The codebase already has your previous work on this branch.",
+        "Same marker rules apply (@@LOG@@, @@CHECKPOINT@@, @@DONE@@, etc.).",
+        "When done: @@DONE@@",
+    ]
+    return "\n".join(parts)
+
+
 def cmd_revise(a):
-    """Resume agent with review feedback."""
+    """Resume agent with review feedback or mid-flight course correction."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
     sd = sessions_dir() / sid
@@ -526,30 +546,51 @@ def cmd_revise(a):
         sys.exit(1)
 
     state = read_state(sd)
-    if state.get("status") not in ("waiting:review", "waiting:human-review"):
-        print(f"Session {sid} is not awaiting review (status: {state.get('status')})",
-              file=sys.stderr)
+    status = state.get("status")
+    inline = a.message if hasattr(a, "message") and a.message else None
+
+    if status in WORKING_STATUSES:
+        if not inline:
+            print("A message is required when revising a working session.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        container = f"nightshift-{sid}"
+        print(f"Stopping container {container}...")
+        if not docker_stop(container):
+            print(f"Warning: container {container} may not be running",
+                  file=sys.stderr)
+
+        feedback = _build_mid_flight_prompt(inline)
+        (sd / "resume-prompt.md").write_text(feedback)
+        update_status(sd, "working")
+
+        print(f"Revising working session {sid} with inline feedback")
+
+    elif status in REVIEW_STATUSES:
+        wf = _resolve_workflow(a)
+        config = load_workflow(wf)
+        tracker = create_tracker(config, repo_dir=str(r))
+        review_comments = collect_review_feedback(tracker, a.issue_id)
+
+        feedback = build_revise_prompt(review_comments, inline)
+
+        if not feedback.strip() or (not review_comments and not inline):
+            print("No review feedback found. Add comments to the issue "
+                  "or pass inline feedback.", file=sys.stderr)
+            sys.exit(1)
+
+        (sd / "resume-prompt.md").write_text(feedback)
+        update_status(sd, "working")
+
+        print(f"Revising {sid} with {len(review_comments)} comment(s)" +
+              (f" + inline feedback" if inline else ""))
+    else:
+        print(f"Session {sid} is not revisable "
+              f"(status: {status})", file=sys.stderr)
         sys.exit(1)
 
     wf = _resolve_workflow(a)
-    config = load_workflow(wf)
-    tracker = create_tracker(config, repo_dir=str(r))
-    review_comments = collect_review_feedback(tracker, a.issue_id)
-
-    inline = a.message if hasattr(a, "message") and a.message else None
-    feedback = build_revise_prompt(review_comments, inline)
-
-    if not feedback.strip() or (not review_comments and not inline):
-        print("No review feedback found. Add comments to the issue or pass inline feedback.",
-              file=sys.stderr)
-        sys.exit(1)
-
-    (sd / "resume-prompt.md").write_text(feedback)
-    update_status(sd, "working")
-
-    print(f"Revising {sid} with {len(review_comments)} comment(s)" +
-          (f" + inline feedback" if inline else ""))
-
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
     cmd += ["--workflow", str(wf)]
