@@ -259,3 +259,23 @@ class TestCmdWatcherWorkflowArg:
             assert "--workflow" in cmd
             wf_idx = cmd.index("--workflow")
             assert cmd[wf_idx + 1] == str(wf)
+
+    def test_cmd_watcher_prints_workflow_path(self, tmp_path, capsys):
+        """cmd_watcher prints the resolved workflow path on startup."""
+        from host.cli import cmd_watcher
+
+        args = MagicMock()
+        args.no_auto_start = False
+        args.workflow = None
+
+        wf = tmp_path / "WORKFLOW.md"
+        wf.write_text("---\n---\n")
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli.sessions_dir", return_value=tmp_path / "sessions"), \
+             patch("host.cli.os.execvpe"):
+            (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+            cmd_watcher(args)
+
+            captured = capsys.readouterr()
+            assert f"Using workflow: {wf}" in captured.out
