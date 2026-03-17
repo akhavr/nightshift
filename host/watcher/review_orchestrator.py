@@ -39,9 +39,11 @@ class ReviewOrchestrator:
     def __init__(self, sessions_dir: Path, repo_dir: Path,
                  telegram: TelegramRelay,
                  get_tracker, recently_launched: dict,
-                 launch_background):
+                 launch_background,
+                 workflow_path: Path | None = None):
         self.sessions_dir = sessions_dir
         self.repo_dir = repo_dir
+        self.workflow_path = workflow_path or (repo_dir / "WORKFLOW.md")
         self.telegram = telegram
         self._get_tracker = get_tracker
         self._recently_launched = recently_launched
@@ -234,7 +236,7 @@ class ReviewOrchestrator:
             coder_sid = review_sid[len("review-"):]
 
             review_md = self.repo_dir / "REVIEW.md"
-            config = load_workflow(review_md) if review_md.exists() else load_workflow(self.repo_dir / "WORKFLOW.md")
+            config = load_workflow(review_md) if review_md.exists() else load_workflow(self.workflow_path)
 
             wt = self.repo_dir / config.workspace.root / f"review-{coder_sid}"
             branch = f"review/{coder_sid}"

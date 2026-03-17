@@ -294,11 +294,13 @@ class TestCmdWatcherExecvpe:
         """cmd_watcher replaces the process via os.execvpe so signals reach watcher directly."""
         args = MagicMock()
         args.no_auto_start = False
+        args.workflow = None
 
         with patch("host.cli.repo_root", return_value=tmp_path), \
              patch("host.cli.sessions_dir", return_value=tmp_path / "sessions"), \
              patch("host.cli.os.execvpe") as mock_exec:
             (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "WORKFLOW.md").write_text("---\n---\n")
             cmd_watcher(args)
 
             mock_exec.assert_called_once()
@@ -311,11 +313,13 @@ class TestCmdWatcherExecvpe:
         """cmd_watcher passes --no-auto-start flag when set."""
         args = MagicMock()
         args.no_auto_start = True
+        args.workflow = None
 
         with patch("host.cli.repo_root", return_value=tmp_path), \
              patch("host.cli.sessions_dir", return_value=tmp_path / "sessions"), \
              patch("host.cli.os.execvpe") as mock_exec:
             (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "WORKFLOW.md").write_text("---\n---\n")
             cmd_watcher(args)
 
             cmd = mock_exec.call_args[0][1]
@@ -325,11 +329,13 @@ class TestCmdWatcherExecvpe:
         """cmd_watcher sets PYTHONPATH to agent-worker root in the exec env."""
         args = MagicMock()
         args.no_auto_start = False
+        args.workflow = None
 
         with patch("host.cli.repo_root", return_value=tmp_path), \
              patch("host.cli.sessions_dir", return_value=tmp_path / "sessions"), \
              patch("host.cli.os.execvpe") as mock_exec:
             (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "WORKFLOW.md").write_text("---\n---\n")
             cmd_watcher(args)
 
             env = mock_exec.call_args[0][2]  # third positional arg is env dict

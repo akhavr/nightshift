@@ -14,6 +14,7 @@ from pathlib import Path
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
+from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
@@ -101,7 +102,7 @@ def main():
     repo = get_repo_root()
     load_all_dotenv(repo / ".env")
 
-    workflow_path = args.workflow or repo / "WORKFLOW.md"
+    workflow_path = discover_workflow(repo, args.workflow)
     config = load_workflow(workflow_path)
     max_turns = args.max_turns or config.agent.max_turns
     names = _resolve_names(args.issue_id, args.step, config)

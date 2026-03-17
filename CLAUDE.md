@@ -78,6 +78,7 @@ Key core modules:
 - `docker_utils.py` — Docker container management (pause/unpause/stop/status).
 - `merge.py` — Merge execution and conflict validation logic extracted from cli.py.
 - `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.
+- `config_discovery.py` — Workflow file discovery: CLI flag > `.nightshift.yaml` pointer > `WORKFLOW.md` default. Also writes `.nightshift.yaml` for `init --workflow-path`.
 
 **`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, runs `SessionRunner`.
 
@@ -113,9 +114,9 @@ Key core modules:
 
 **Target: 80% line coverage.** Check with: `.venv/bin/python -m coverage run -m pytest tests/ && .venv/bin/python -m coverage report`
 
-Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). 655 tests across `tests/` and `tests/watcher/`.
+Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). 675 tests across `tests/` and `tests/watcher/`.
 
-Key test files: `test_stream_parser.py`, `test_marker_reliability.py`, `oq1_stdin_test.py`, `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_cli_commands.py`, `test_cli_helpers.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py`, `test_review.py`, `test_auto_start.py`, `test_session_runner.py`, `test_hooks.py`, `test_post_run.py`, `test_qa_flow.py`, `test_prompts.py`, `test_config_factories.py`, `test_docker_utils.py`, `test_git_utils.py`, `test_composite_notifier.py`, `test_notifier_prefix.py`, `test_notification_level.py`, `test_rebase.py`, `test_search.py`, `test_session_utils_host.py`, `test_launch.py`, `test_post_container.py`, `test_assistant_text_logging.py`, `test_workspace_setup.py`, `test_entrypoint_merge.py`, `watcher/test_qa_handler.py`, `watcher/test_host_watcher.py`, `watcher/test_review_orchestrator.py`, `watcher/test_telegram_relay.py`, `watcher/test_session_monitor.py`, `watcher/test_graceful_shutdown.py`, `watcher/test_lifecycle_comments.py`.
+Key test files: `test_stream_parser.py`, `test_marker_reliability.py`, `oq1_stdin_test.py`, `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_cli_commands.py`, `test_cli_helpers.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py`, `test_review.py`, `test_auto_start.py`, `test_session_runner.py`, `test_hooks.py`, `test_post_run.py`, `test_qa_flow.py`, `test_prompts.py`, `test_config_factories.py`, `test_config_discovery.py`, `test_docker_utils.py`, `test_git_utils.py`, `test_composite_notifier.py`, `test_notifier_prefix.py`, `test_notification_level.py`, `test_rebase.py`, `test_search.py`, `test_session_utils_host.py`, `test_launch.py`, `test_post_container.py`, `test_assistant_text_logging.py`, `test_workspace_setup.py`, `test_entrypoint_merge.py`, `watcher/test_qa_handler.py`, `watcher/test_host_watcher.py`, `watcher/test_review_orchestrator.py`, `watcher/test_telegram_relay.py`, `watcher/test_session_monitor.py`, `watcher/test_graceful_shutdown.py`, `watcher/test_lifecycle_comments.py`.
 
 Remaining coverage gaps:
 - `adapters/trackers/git_bug.py` — git-bug CLI interaction (hard to test without git-bug binary)
