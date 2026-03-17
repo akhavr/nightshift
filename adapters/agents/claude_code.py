@@ -161,6 +161,9 @@ class ClaudeCodeAgent:
             return self._parse_user_event(ev, raw)
 
         if t == "result":
+            if ev.get("subtype") == "success":
+                self._extra_events.append(AgentEvent(
+                    type=AgentEventType.TEXT, content="@@DONE@@", raw=raw))
             return AgentEvent(type=AgentEventType.SYSTEM,
                               content=ev.get("result", ""), raw=raw)
 
