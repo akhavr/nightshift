@@ -3,14 +3,11 @@
 Builds the `docker run` command for launching the agent container.
 """
 
-import logging
 import os
 import subprocess
 from pathlib import Path
 
 from host.docker_utils import docker_remove
-
-log = logging.getLogger(__name__)
 
 
 _PASSTHROUGH_ENV_VARS = (
