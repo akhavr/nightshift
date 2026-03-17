@@ -23,6 +23,20 @@ PROCESS_TERMINATE_TIMEOUT_S = 10  # Wait before kill on terminate
 TOOL_RESULT_PREVIEW_LEN = 500
 TOOL_INPUT_PREVIEW_LEN = 300
 
+# Patterns that indicate authentication/authorization failures
+AUTH_FAILURE_PATTERNS = (
+    "invalid_api_key",
+    "authentication_error",
+    "authorization_error",
+    "invalid x-api-key",
+    "permission_error",
+    "api key is invalid",
+    "token has expired",
+    "expired token",
+    "unauthorized",
+    "could not authenticate",
+)
+
 
 class ClaudeCodeAgent:
     def __init__(
@@ -133,6 +147,12 @@ class ClaudeCodeAgent:
                     content=str(result_content)[:TOOL_RESULT_PREVIEW_LEN], raw=raw)
         return None
 
+    @staticmethod
+    def _is_auth_failure(text: str) -> bool:
+        """Check if a message indicates an authentication/authorization failure."""
+        lower = text.lower()
+        return any(pattern in lower for pattern in AUTH_FAILURE_PATTERNS)
+
     def _parse(self, raw: str) -> Optional[AgentEvent]:
         """Parse a stream-json line into an AgentEvent."""
         if not raw.strip(): return None
@@ -161,18 +181,35 @@ class ClaudeCodeAgent:
             return self._parse_user_event(ev, raw)
 
         if t == "result":
+            result_text = ev.get("result", "")
+            if self._is_auth_failure(result_text):
+                return AgentEvent(type=AgentEventType.AUTH_FAILURE,
+                                  content=result_text, raw=raw)
             if ev.get("subtype") == "success":
                 self._extra_events.append(AgentEvent(
                     type=AgentEventType.TEXT, content="@@DONE@@", raw=raw))
             return AgentEvent(type=AgentEventType.SYSTEM,
-                              content=ev.get("result", ""), raw=raw)
+                              content=result_text, raw=raw)
+
+        if t == "error":
+            error_msg = ev.get("error", {})
+            error_text = error_msg.get("message", "") if isinstance(error_msg, dict) else str(error_msg)
+            if self._is_auth_failure(error_text):
+                return AgentEvent(type=AgentEventType.AUTH_FAILURE,
+                                  content=error_text, raw=raw)
+            return AgentEvent(type=AgentEventType.SYSTEM,
+                              content=f"error: {error_text}", raw=raw)
 
         if t == "rate_limit_event":
             return None
 
         if t == "system":
+            msg_text = ev.get("message", "")
+            if self._is_auth_failure(msg_text):
+                return AgentEvent(type=AgentEventType.AUTH_FAILURE,
+                                  content=msg_text, raw=raw)
             return AgentEvent(type=AgentEventType.SYSTEM,
-                              content=ev.get("message", ""), raw=raw)
+                              content=msg_text, raw=raw)
 
         return AgentEvent(type=AgentEventType.UNKNOWN, raw=raw)
 

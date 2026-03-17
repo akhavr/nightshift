@@ -11,9 +11,9 @@ The system creates a git worktree per issue and runs the coding agent inside a D
 - **Status:** covered
 
 ### REQ-002: Session lifecycle management
-The system tracks session state (working, suspended, waiting, done) with atomic JSON persistence and exposes status via CLI.
+The system tracks session state (working, suspended, waiting, done) with atomic JSON persistence and exposes status via CLI. Auth failures are detected and set a distinct `suspended:auth-failure` status instead of burning through resume attempts.
 
-- **Tests:** test_marker_reliability.py, test_cli_commands.py, test_session_runner.py, test_session_utils_host.py, watcher/test_graceful_shutdown.py, watcher/test_lifecycle_comments.py
+- **Tests:** test_marker_reliability.py, test_cli_commands.py, test_session_runner.py (TestAuthFailure), test_session_utils_host.py, watcher/test_graceful_shutdown.py, watcher/test_lifecycle_comments.py, watcher/test_session_monitor.py (TestCheckAuthFailures)
 - **Status:** covered
 
 ### REQ-003: Human Q&A
@@ -23,9 +23,9 @@ The agent can ask blocking questions to a human. The system pauses the container
 - **Status:** covered
 
 ### REQ-004: Checkpoint and resume on context limits
-When the agent hits context limits, max turns, or stalls, the system saves progress, builds a resume prompt with checkpoint history, and auto-restarts the agent.
+When the agent hits context limits, max turns, or stalls, the system saves progress, builds a resume prompt with checkpoint history, and auto-restarts the agent. Auth failures are excluded from auto-resume to avoid burning through MAX_RESUMES with a bad token; the watcher retries on a slow interval instead.
 
-- **Tests:** test_marker_reliability.py, test_prompts.py, test_session_runner.py
+- **Tests:** test_marker_reliability.py, test_prompts.py, test_session_runner.py (TestAuthFailure), test_post_run.py (test_auth_failure_returns_none), test_stream_parser.py (TestAuthFailureDetection)
 - **Status:** covered
 
 ### REQ-005: Review gate before merge
@@ -158,7 +158,7 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | test_notification_level.py | REQ-010 |
 | test_notifier_prefix.py | REQ-010 |
 | test_post_container.py | REQ-005, REQ-018 |
-| test_post_run.py | REQ-005, REQ-006 |
+| test_post_run.py | REQ-004, REQ-005, REQ-006 |
 | test_prompts.py | REQ-004, REQ-011 |
 | test_rebase.py | REQ-006 |
 | test_review.py | REQ-005, REQ-008 |

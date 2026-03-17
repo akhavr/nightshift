@@ -129,6 +129,7 @@ class HostWatcher:
             self.reviews.check_for_auto_review()
             self.reviews.check_reviewer_done()
             self.monitor.check_orphaned_sessions()
+            self.monitor.check_auth_failures()
             self.monitor.check_closed_issues()
             if self.auto_start:
                 self.monitor.check_new_issues()

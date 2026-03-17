@@ -8,7 +8,7 @@ from pathlib import Path
 
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
-    MAX_ORPHAN_RESUMES,
+    MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -50,6 +50,7 @@ class SessionMonitor:
         self._last_orphan_check = 0.0
         self._last_closed_check = 0.0
         self._last_auto_start_poll = 0.0
+        self._last_auth_retry_check = 0.0
         self._known_issue_ids: set[str] = set()
 
     def check_orphaned_sessions(self):
@@ -142,6 +143,58 @@ class SessionMonitor:
             if review_md.exists():
                 cmd += ["--workflow", str(review_md)]
         self._launch_background(cmd, sid)
+
+    def check_auth_failures(self):
+        """Retry sessions suspended due to auth failure on a slow interval."""
+        now = time.time()
+        if now - self._last_auth_retry_check < AUTH_RETRY_INTERVAL_S:
+            return
+        self._last_auth_retry_check = now
+
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not (session_dir / "state.json").exists():
+                continue
+
+            try:
+                state = read_state(session_dir)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"[{sid}] Failed to read state for auth-retry check: {e}")
+                continue
+
+            if state.get("status") != "suspended:auth-failure":
+                continue
+
+            issue_id = state.get("issue_id", "")
+            if not issue_id:
+                continue
+
+            log.info(f"[{sid}] Auth-failure session — retrying (token may have been refreshed)")
+            state["status"] = "working"
+            write_state(session_dir, state)
+            self._recently_launched[sid] = time.time()
+
+            checkpoint_count = read_checkpoint_count(session_dir)
+            post_resume(self._get_tracker, issue_id, sid,
+                        reason="auth-failure retry", checkpoint_count=checkpoint_count)
+
+            is_review = sid.startswith("review-")
+            cmd = [
+                sys.executable,
+                str(_HOST_DIR / "launch.py"),
+                issue_id, "--resume",
+            ]
+            if is_review:
+                review_md = self.repo_dir / "REVIEW.md"
+                cmd += ["--step", "review"]
+                if review_md.exists():
+                    cmd += ["--workflow", str(review_md)]
+            self._launch_background(cmd, sid)
 
     def check_closed_issues(self):
         """Detect sessions whose issues have been closed -- clean up worktree + session."""

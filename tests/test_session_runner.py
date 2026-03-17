@@ -748,6 +748,56 @@ class TestCollectAnswer:
         assert answer == "human says: use postgres"
 
 
+def _auth_failure_event(content: str = "invalid_api_key") -> AgentEvent:
+    return AgentEvent(type=AgentEventType.AUTH_FAILURE, content=content, raw=content)
+
+
+class TestAuthFailure:
+    def test_auth_failure_stops_session(self, tmp_path):
+        """Auth failure should set suspended:auth-failure and NOT auto-resume."""
+        events = [_auth_failure_event()]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.status == "suspended:auth-failure"
+
+    def test_auth_failure_notifies(self, tmp_path):
+        events = [_auth_failure_event("token expired")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        assert any("auth failure" in n for n in notifier.notifications)
+
+    def test_auth_failure_no_auto_resume(self, tmp_path):
+        """Auth failure should NOT trigger auto-resume loop like context-limit does."""
+        agent = ScriptedAgent([
+            [_auth_failure_event()],
+        ])
+        runner, _, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, agent=agent)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.status == "suspended:auth-failure"
+        # Agent should have been started only once (no resume loop)
+        assert agent._cycle == 0
+
+    def test_auth_failure_commits_wip(self, tmp_path):
+        events = [_auth_failure_event()]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        assert any("auth failure" in c for c in ws_mgr.commits)
+
+    def test_auth_failure_notification_includes_title(self, tmp_path):
+        issue = make_test_issue(title="Fix the widget")
+        events = [_auth_failure_event("expired token")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events, issue=issue)
+        runner.run()
+        assert any("Fix the widget" in n for n in notifier.notifications)
+
+
 class TestDispatchEvent:
     def test_dispatch_text_returns_handle_text_result(self, tmp_path):
         runner, *_, state_mgr = _make_runner(tmp_path)
@@ -765,6 +815,12 @@ class TestDispatchEvent:
     def test_dispatch_process_exit_returns_stop(self, tmp_path):
         runner, *_ = _make_runner(tmp_path)
         result = runner._dispatch_event(_exit_event())
+        assert result == "STOP"
+
+    def test_dispatch_auth_failure_returns_stop(self, tmp_path):
+        runner, *_ = _make_runner(tmp_path)
+        runner._workspace = Workspace(path=tmp_path, branch="test")
+        result = runner._dispatch_event(_auth_failure_event())
         assert result == "STOP"
 
     def test_dispatch_context_limit_returns_stop(self, tmp_path):
