@@ -19,7 +19,7 @@ nightshift resume <issue-id>             # resume a suspended session
 nightshift answer <issue-id> "your answer"
 nightshift status                        # show all session statuses
 nightshift logs <issue-id>               # tail raw agent output
-nightshift history <issue-id>            # conversation timeline
+nightshift history <issue-id>            # conversation timeline (-f to follow)
 nightshift accept <issue-id>             # merge agent branch into base, clean up
 nightshift reject <issue-id>             # discard agent work, remove worktree + session
 nightshift cleanup <issue-id>            # remove worktree (optionally keep session)
