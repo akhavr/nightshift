@@ -17,6 +17,8 @@ from host.cli import (
     cmd_init,
     cmd_revise,
     cmd_cleanup,
+    _read_issue_title,
+    _truncate_title,
 )
 
 
@@ -69,7 +71,7 @@ def test_cmd_status_multiple_sessions(tmp_path, capsys):
     repo.mkdir()
     sessions = repo / ".nightshift" / "sessions"
 
-    # Create two session dirs with state files
+    # Create two session dirs with state files and issue data
     for sid, status, step, checkpoints in [
         ("aabbcc112233", "working", 3, ["cp1", "cp2"]),
         ("ddeeff445566", "waiting:review", 7, []),
@@ -80,6 +82,11 @@ def test_cmd_status_multiple_sessions(tmp_path, capsys):
             json.dumps({"status": status, "step": step, "checkpoints": checkpoints})
         )
 
+    # Add issue.json for one session
+    (sessions / "aabbcc112233" / "issue.json").write_text(
+        json.dumps({"title": "Fix login bug", "body": "..."})
+    )
+
     with patch("host.cli.repo_root", return_value=repo):
         cmd_status(_make_args())
 
@@ -88,6 +95,8 @@ def test_cmd_status_multiple_sessions(tmp_path, capsys):
     assert "working" in out
     assert "ddeeff445566" in out
     assert "waiting:review" in out
+    assert "TITLE" in out
+    assert "Fix login bug" in out
 
 
 def test_cmd_status_corrupt_state_json(tmp_path, capsys):
@@ -104,6 +113,125 @@ def test_cmd_status_corrupt_state_json(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "corrupt1234ab" in out
     assert "<error>" in out
+
+
+def test_cmd_status_shows_title_from_state(tmp_path, capsys):
+    """Title is read from state.json issue_title field when available."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "statetitle123"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(json.dumps({
+        "status": "working", "step": 1, "checkpoints": [],
+        "issue_title": "Title from state",
+    }))
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_status(_make_args())
+
+    out = capsys.readouterr().out
+    assert "Title from state" in out
+
+
+def test_cmd_status_title_from_issue_json_fallback(tmp_path, capsys):
+    """Title falls back to issue.json when state.json has no issue_title."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "issuetitle12"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(json.dumps({
+        "status": "working", "step": 1, "checkpoints": [],
+    }))
+    (sd / "issue.json").write_text(json.dumps({
+        "title": "Title from issue.json", "body": "...",
+    }))
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_status(_make_args())
+
+    out = capsys.readouterr().out
+    assert "Title from issue.json" in out
+
+
+def test_cmd_status_long_title_truncated(tmp_path, capsys):
+    """Long titles are truncated with an ellipsis character."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "longtitle123"
+    sd.mkdir(parents=True)
+    long_title = "A" * 60
+    (sd / "state.json").write_text(json.dumps({
+        "status": "working", "step": 1, "checkpoints": [],
+        "issue_title": long_title,
+    }))
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_status(_make_args())
+
+    out = capsys.readouterr().out
+    # Should be truncated to 39 chars + ellipsis
+    assert "\u2026" in out
+    assert long_title not in out
+
+
+# ── _read_issue_title ─────────────────────────────────────────────────────────
+
+
+def test_read_issue_title_from_state(tmp_path):
+    """_read_issue_title returns title from state.json when present."""
+    sd = tmp_path / "session"
+    sd.mkdir()
+    (sd / "state.json").write_text(json.dumps({"issue_title": "Bug fix"}))
+    assert _read_issue_title(sd) == "Bug fix"
+
+
+def test_read_issue_title_fallback_to_issue_json(tmp_path):
+    """_read_issue_title falls back to issue.json when state has no title."""
+    sd = tmp_path / "session"
+    sd.mkdir()
+    (sd / "state.json").write_text(json.dumps({"status": "working"}))
+    (sd / "issue.json").write_text(json.dumps({"title": "From issue"}))
+    assert _read_issue_title(sd) == "From issue"
+
+
+def test_read_issue_title_no_title_anywhere(tmp_path):
+    """_read_issue_title returns empty string when no title is found."""
+    sd = tmp_path / "session"
+    sd.mkdir()
+    (sd / "state.json").write_text(json.dumps({"status": "working"}))
+    assert _read_issue_title(sd) == ""
+
+
+def test_read_issue_title_corrupt_files(tmp_path):
+    """_read_issue_title returns empty string on corrupt JSON files."""
+    sd = tmp_path / "session"
+    sd.mkdir()
+    (sd / "state.json").write_text("not json!!!")
+    (sd / "issue.json").write_text("also not json!!!")
+    assert _read_issue_title(sd) == ""
+
+
+# ── _truncate_title ───────────────────────────────────────────────────────────
+
+
+def test_truncate_title_short():
+    """Short titles are returned unchanged."""
+    assert _truncate_title("Short title") == "Short title"
+
+
+def test_truncate_title_exact_limit():
+    """Titles exactly at the limit are returned unchanged."""
+    title = "A" * 40
+    assert _truncate_title(title) == title
+
+
+def test_truncate_title_over_limit():
+    """Titles over the limit are truncated with ellipsis."""
+    title = "A" * 50
+    result = _truncate_title(title)
+    assert len(result) == 40
+    assert result.endswith("\u2026")
+    assert result == "A" * 39 + "\u2026"
 
 
 # ── cmd_answer ───────────────────────────────────────────────────────────────
