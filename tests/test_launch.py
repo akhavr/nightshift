@@ -14,7 +14,7 @@ from core.config.models import WorkflowConfig, AgentConfig, WorkspaceConfig
 from core.protocols import TrackerIssue
 from host.workspace_setup import create_worktree
 from host.issue_dump import dump_issue_data
-from host.docker_cmd import build_docker_cmd
+from host.docker_cmd import build_docker_cmd, run_container
 from host.launch import _resolve_names
 
 
@@ -432,10 +432,115 @@ class TestBuildDockerCmd:
         assert cmd[-1] == "nightshift:custom"
 
 
+# ── run_container tests ──────────────────────────────────
+
+class TestRunContainerStaleCleanup:
+    """Verify that run_container removes stale containers before docker run."""
+
+    @patch("host.docker_cmd.docker_remove")
+    @patch("host.docker_cmd.subprocess.run")
+    def test_removes_stale_container_before_run(self, mock_run, mock_remove, tmp_path):
+        """docker_remove must be called with the container name before docker run."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".git").write_text("gitdir: /repo-git/worktrees/agent-abc")
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        names = {
+            "container_name": "nightshift-abc123",
+            "worktree_name": "agent-abc123",
+            "short_id": "abc123",
+        }
+
+        with patch("host.docker_cmd.Path.home", return_value=tmp_path):
+            run_container(
+                repo=tmp_path, workspace_mount=str(workspace),
+                session_dir=session_dir, names=names,
+                issue_id="abc123def456", max_turns=30,
+                step="coder", is_resume=False,
+                workflow_path=str(tmp_path / "WORKFLOW.md"),
+                image="nightshift:latest",
+            )
+
+        mock_remove.assert_called_once_with("nightshift-abc123")
+        mock_run.assert_called_once()
+
+    @patch("host.docker_cmd.docker_remove")
+    @patch("host.docker_cmd.subprocess.run")
+    def test_runs_even_if_remove_fails(self, mock_run, mock_remove, tmp_path):
+        """docker run should proceed even if docker_remove returns False."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".git").write_text("gitdir: /repo-git/worktrees/agent-abc")
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        mock_remove.return_value = False
+        mock_run.return_value = MagicMock(returncode=0)
+
+        names = {
+            "container_name": "nightshift-abc123",
+            "worktree_name": "agent-abc123",
+            "short_id": "abc123",
+        }
+
+        with patch("host.docker_cmd.Path.home", return_value=tmp_path):
+            rc = run_container(
+                repo=tmp_path, workspace_mount=str(workspace),
+                session_dir=session_dir, names=names,
+                issue_id="abc123def456", max_turns=30,
+                step="coder", is_resume=False,
+                workflow_path=str(tmp_path / "WORKFLOW.md"),
+                image="nightshift:latest",
+            )
+
+        assert rc == 0
+        mock_remove.assert_called_once()
+        mock_run.assert_called_once()
+
+    @patch("host.docker_cmd.docker_remove")
+    @patch("host.docker_cmd.subprocess.run")
+    def test_remove_called_before_docker_run(self, mock_run, mock_remove, tmp_path):
+        """Verify ordering: docker_remove happens before subprocess.run."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".git").write_text("gitdir: /repo-git/worktrees/agent-abc")
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        call_order = []
+        mock_remove.side_effect = lambda _: call_order.append("remove") or True
+        mock_run.side_effect = lambda *a, **kw: (
+            call_order.append("run") or MagicMock(returncode=0)
+        )
+
+        names = {
+            "container_name": "nightshift-abc123",
+            "worktree_name": "agent-abc123",
+            "short_id": "abc123",
+        }
+
+        with patch("host.docker_cmd.Path.home", return_value=tmp_path):
+            run_container(
+                repo=tmp_path, workspace_mount=str(workspace),
+                session_dir=session_dir, names=names,
+                issue_id="abc123def456", max_turns=30,
+                step="coder", is_resume=False,
+                workflow_path=str(tmp_path / "WORKFLOW.md"),
+                image="nightshift:latest",
+            )
+
+        assert call_order == ["remove", "run"]
+
+
 # ── main() tests ─────────────────────────────────────────
 
 class TestMain:
 
+    @patch("host.docker_cmd.docker_remove")
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
     @patch("host.workspace_setup.create_worktree")
@@ -446,7 +551,8 @@ class TestMain:
     @patch("host.launch._post_container")
     def test_main_start_flow(self, mock_post, mock_repo_root, mock_dotenv,
                              mock_load_wf, mock_build_cmd,
-                             mock_create_wt, mock_dump, mock_run, tmp_path):
+                             mock_create_wt, mock_dump, mock_run,
+                             mock_docker_rm, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / ".git").mkdir()
@@ -470,6 +576,7 @@ class TestMain:
         mock_dump.assert_called_once()
         mock_build_cmd.assert_called_once()
         mock_run.assert_called_once_with(["docker", "run", "test"])
+        mock_docker_rm.assert_called_once()
 
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
