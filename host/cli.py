@@ -8,12 +8,13 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
-from host.constants import SHORT_ID_LEN, LOG_PREVIEW_LEN
+from host.constants import SHORT_ID_LEN, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
 from host.merge import (
@@ -159,19 +160,47 @@ def cmd_logs(a):
     subprocess.run(["tail", "-f", str(log_file)])
 
 
+_HISTORY_ICONS = {
+    "thought": "💭", "checkpoint": "📌", "question": "❓",
+    "human_answer_sent": "👤", "tool_call": "🔧", "tool_result": "📄",
+    "system": "⚙️", "user": "📝",
+}
+
+
+def _format_history_line(line):
+    """Parse a single JSONL line and return a formatted string, or None on error."""
+    try:
+        e = json.loads(line)
+        return (f"  {e['timestamp'][:19]}  {_HISTORY_ICONS.get(e['role'], '•')} "
+                f"[{e['role']}] {e['content'][:LOG_PREVIEW_LEN * 2]}")
+    except Exception as exc:
+        logging.debug("Skipping malformed history line: %s", exc)
+        return None
+
+
 def cmd_history(a):
     cf = sessions_dir() / resolve_session(a.issue_id) / "conversation.jsonl"
     if not cf.exists():
         print("No history.", file=sys.stderr); return
-    icons = {"thought":"💭","checkpoint":"📌","question":"❓","human_answer_sent":"👤",
-             "tool_call":"🔧","tool_result":"📄","system":"⚙️","user":"📝"}
     for line in cf.read_text().strip().splitlines():
-        try:
-            e = json.loads(line)
-            print(f"  {e['timestamp'][:19]}  {icons.get(e['role'],'•')} "
-                  f"[{e['role']}] {e['content'][:LOG_PREVIEW_LEN * 2]}")
-        except Exception:
-            continue
+        formatted = _format_history_line(line)
+        if formatted:
+            print(formatted)
+    if not getattr(a, "follow", False):
+        return
+    try:
+        with open(cf, "r") as fh:
+            fh.seek(0, 2)  # seek to end
+            while True:
+                new_line = fh.readline()
+                if new_line:
+                    formatted = _format_history_line(new_line.strip())
+                    if formatted:
+                        print(formatted, flush=True)
+                else:
+                    time.sleep(HISTORY_FOLLOW_POLL_S)
+    except KeyboardInterrupt:
+        pass
 
 
 DEFAULT_WORKFLOW_MD = """\
@@ -598,6 +627,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sp = s.add_parser("history")
     sp.add_argument("issue_id")
+    sp.add_argument("-f", "--follow", action="store_true",
+                    help="Keep watching for new entries (like tail -f)")
     sp.set_defaults(func=cmd_history)
 
     sp = s.add_parser("init", help="Scaffold WORKFLOW.md and .env.example")
