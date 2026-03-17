@@ -554,7 +554,14 @@ def cmd_revise(a):
             print("A message is required when revising a working session.",
                   file=sys.stderr)
             sys.exit(1)
+    elif status not in REVIEW_STATUSES:
+        print(f"Session {sid} is not revisable "
+              f"(status: {status})", file=sys.stderr)
+        sys.exit(1)
 
+    wf = _resolve_workflow(a)
+
+    if status in WORKING_STATUSES:
         container = f"nightshift-{sid}"
         print(f"Stopping container {container}...")
         if not docker_stop(container):
@@ -567,8 +574,7 @@ def cmd_revise(a):
 
         print(f"Revising working session {sid} with inline feedback")
 
-    elif status in REVIEW_STATUSES:
-        wf = _resolve_workflow(a)
+    else:  # REVIEW_STATUSES
         config = load_workflow(wf)
         tracker = create_tracker(config, repo_dir=str(r))
         review_comments = collect_review_feedback(tracker, a.issue_id)
@@ -585,12 +591,7 @@ def cmd_revise(a):
 
         print(f"Revising {sid} with {len(review_comments)} comment(s)" +
               (f" + inline feedback" if inline else ""))
-    else:
-        print(f"Session {sid} is not revisable "
-              f"(status: {status})", file=sys.stderr)
-        sys.exit(1)
 
-    wf = _resolve_workflow(a)
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
            a.issue_id, "--resume"]
     cmd += ["--workflow", str(wf)]
