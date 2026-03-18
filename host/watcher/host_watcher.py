@@ -9,7 +9,6 @@ from pathlib import Path
 
 from host.constants import REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S
 from core.config import load_workflow, create_tracker, WorkflowConfig
-from core.protocols import NotificationLevel
 from host.watcher.telegram_relay import TelegramRelay
 from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
@@ -82,13 +81,21 @@ class HostWatcher:
             workflow_path=self.workflow_path,
         )
 
+    @staticmethod
+    def _telegram_level(config: WorkflowConfig | None) -> str:
+        """Extract telegram notification level from a WorkflowConfig, defaulting to 'all'."""
+        if config is None:
+            return "all"
+        for nc in config.notifications:
+            if nc.kind == "telegram":
+                return nc.level
+        return "all"
+
     def _telegram_level_from_config(self) -> str:
         """Read notification level for the telegram notifier from workflow config."""
         try:
             self._config = load_workflow(self.workflow_path)
-            for nc in self._config.notifications:
-                if nc.kind == "telegram":
-                    return nc.level
+            return self._telegram_level(self._config)
         except Exception as e:
             log.debug(f"Could not read notification level from WORKFLOW.md: {e}")
         return "all"
@@ -126,12 +133,7 @@ class HostWatcher:
         self._config = new_config
 
         # Update notification level on TelegramRelay
-        new_tg_level = "all"
-        for nc in new_config.notifications:
-            if nc.kind == "telegram":
-                new_tg_level = nc.level
-                break
-        self.telegram._level = NotificationLevel[new_tg_level.upper()]
+        self.telegram.set_level(self._telegram_level(new_config))
 
         # Update auto_start config
         self._auto_start_config = new_config.auto_start
