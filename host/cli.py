@@ -38,20 +38,29 @@ def sessions_dir() -> Path:
     return repo_root() / ".nightshift" / "sessions"
 
 
+REVIEW_SESSION_PREFIX = "review-"
+
+
 def resolve_session(issue_id: str) -> str:
     """Resolve a prefix to the full session ID. Exits on ambiguity or no match."""
     sd = sessions_dir()
     if not sd.exists():
         print("No sessions directory found", file=sys.stderr)
         sys.exit(1)
-    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:SHORT_ID_LEN])]
+    # Strip known prefix before truncating so the actual ID gets full SHORT_ID_LEN chars
+    if issue_id.startswith(REVIEW_SESSION_PREFIX):
+        bare_id = issue_id[len(REVIEW_SESSION_PREFIX):]
+        match_prefix = REVIEW_SESSION_PREFIX + bare_id[:SHORT_ID_LEN]
+    else:
+        match_prefix = issue_id[:SHORT_ID_LEN]
+    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(match_prefix)]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         print(f"Ambiguous ID '{issue_id}' matches: {', '.join(matches)}", file=sys.stderr)
         sys.exit(1)
     # No match by session dir — return truncated (for start/new sessions)
-    return issue_id[:SHORT_ID_LEN]
+    return match_prefix
 
 
 def _resolve_workflow(a) -> Path:
