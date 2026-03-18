@@ -19,7 +19,7 @@ from host.config_discovery import discover_workflow as _discover_workflow, write
 from host.env import load_all_dotenv
 from host.docker_utils import docker_stop
 from host.merge import (
-    resolve_merge_ref, check_working_tree_clean,
+    resolve_merge_ref,
     merge_with_rebase_fallback, verify_no_conflict_markers,
     check_branch_not_behind_base,
 )
@@ -449,7 +449,6 @@ def cmd_accept(a):
     wt = r / config.workspace.root / f"agent-{sid}"
 
     merge_ref = resolve_merge_ref(r, branch, wt)
-    check_working_tree_clean(r, base, config, a.issue_id, _report_accept_failure)
 
     # Verify agent branch is not behind base
     behind_msg = check_branch_not_behind_base(r, branch, base)

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from host.constants import (
-    SHORT_ID_LEN, FILE_LIST_PREVIEW_LEN, CONFLICT_FILE_PREVIEW_LEN,
+    SHORT_ID_LEN, CONFLICT_FILE_PREVIEW_LEN,
 )
 from host.git_utils import fetch_and_resolve_ref
 from host.session_utils import update_status
@@ -71,25 +71,6 @@ def resolve_merge_ref(repo: Path, branch: str, worktree: Path) -> str:
         return ref
     print(f"Branch {branch} not found and no worktree at {worktree}.", file=sys.stderr)
     sys.exit(1)
-
-
-def check_working_tree_clean(repo: Path, base: str, config,
-                             issue_id: str, report_failure):
-    """Exit if repo has uncommitted changes."""
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        capture_output=True, text=True, cwd=str(repo),
-    )
-    dirty_files = [line for line in status.stdout.strip().splitlines()
-                   if line and not line.startswith("??")]
-    if dirty_files:
-        file_list = "\n".join(dirty_files[:FILE_LIST_PREVIEW_LEN])
-        msg = (f"Cannot merge: working tree on `{base}` is not clean.\n"
-               f"```\n{file_list}\n```\n"
-               f"Commit or stash changes first.")
-        print(f"Working tree not clean:\n{file_list}", file=sys.stderr)
-        report_failure(config, repo, issue_id, msg)
-        sys.exit(1)
 
 
 def merge_with_rebase_fallback(repo: Path, merge_ref: str, branch: str,

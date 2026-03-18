@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.merge import (
     resolve_merge_ref,
-    check_working_tree_clean,
     merge_with_rebase_fallback,
     verify_no_conflict_markers,
 )
@@ -135,39 +134,6 @@ class TestResolveMergeRef:
         assert exc_info.value.code == 1
 
 
-# ── check_working_tree_clean ─────────────────────────────────────────────────
-
-
-class TestCheckWorkingTreeClean:
-    def test_clean_tree_passes(self, tmp_path):
-        """No error when working tree is clean."""
-        repo, run = _init_repo(tmp_path)
-        config = _make_config()
-        check_working_tree_clean(repo, "main", config, "issue-1", _noop_report)
-
-    def test_dirty_tree_exits(self, tmp_path, capsys):
-        """Exits with code 1 when there are modified tracked files."""
-        repo, run = _init_repo(tmp_path)
-        (repo / "file.txt").write_text("modified\n")
-        config = _make_config()
-
-        mock_report = MagicMock()
-        with pytest.raises(SystemExit) as exc_info:
-            check_working_tree_clean(repo, "main", config, "issue-1", mock_report)
-
-        assert exc_info.value.code == 1
-        err = capsys.readouterr().err
-        assert "not clean" in err
-        mock_report.assert_called_once()
-
-    def test_untracked_files_ignored(self, tmp_path):
-        """Untracked files (prefixed with ??) should not trigger dirty check."""
-        repo, run = _init_repo(tmp_path)
-        (repo / "untracked.txt").write_text("untracked\n")
-        config = _make_config()
-        check_working_tree_clean(repo, "main", config, "issue-1", _noop_report)
-
-
 # ── merge_with_rebase_fallback ───────────────────────────────────────────────
 
 
@@ -189,6 +155,35 @@ class TestMergeWithRebaseFallback:
 
         log = run("git", "log", "--oneline").stdout
         assert "agent commit" in log
+
+    def test_merge_succeeds_with_unrelated_dirty_files(self, tmp_path):
+        """Merge succeeds even when unrelated tracked files are modified."""
+        repo, run = _init_repo(tmp_path)
+        # Create and commit an unrelated file on main
+        (repo / "docs.md").write_text("original\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "add docs")
+
+        # Create agent branch with changes to a different file
+        run("git", "checkout", "-b", "agent/test-dirty")
+        (repo / "new.txt").write_text("agent work\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "agent commit")
+        run("git", "checkout", "main")
+
+        # Dirty an unrelated file (not touched by the agent branch)
+        (repo / "docs.md").write_text("modified locally\n")
+
+        config = _make_config()
+        merge_with_rebase_fallback(
+            repo, "agent/test-dirty", "agent/test-dirty", "main", "issue-1",
+            config, _noop_report,
+        )
+
+        log = run("git", "log", "--oneline").stdout
+        assert "agent commit" in log
+        # Unrelated dirty file should still be modified (not clobbered)
+        assert (repo / "docs.md").read_text() == "modified locally\n"
 
     def test_uncommitted_changes_error_exits(self, tmp_path, capsys):
         """When merge fails due to local changes, exits immediately."""
