@@ -136,6 +136,12 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 - **Tests:** test_config_factories.py
 - **Status:** covered
 
+### REQ-023: Hot-reload config on SIGHUP
+On receiving SIGHUP, the host watcher re-reads and re-parses the workflow file, updates in-memory config (notification levels, auto_start, merge policy, review config), recreates adapters that depend on config (tracker, notifiers), and logs what changed. A parse error keeps the previous config intact.
+
+- **Tests:** watcher/test_config_reload.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -173,6 +179,7 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | oq1_stdin_test.py | REQ-003 |
 | watcher/test_graceful_shutdown.py | REQ-002 |
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
+| watcher/test_config_reload.py | REQ-023 |
 | watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-011, REQ-017 |
 
 ---
