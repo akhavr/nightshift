@@ -173,7 +173,7 @@ The system supports swappable adapters for agents, trackers, workspaces, and not
 | oq1_stdin_test.py | REQ-003 |
 | watcher/test_graceful_shutdown.py | REQ-002 |
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
-| watcher/test_session_monitor.py | REQ-002, REQ-004 |
+| watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-011, REQ-017 |
 
 ---
 

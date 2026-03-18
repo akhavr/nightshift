@@ -147,6 +147,10 @@ class SessionMonitor:
             cmd += ["--step", "review"]
             if review_md.exists():
                 cmd += ["--workflow", str(review_md)]
+            else:
+                cmd += ["--workflow", str(self.workflow_path)]
+        else:
+            cmd += ["--workflow", str(self.workflow_path)]
         self._launch_background(cmd, sid)
 
     def check_auth_failures(self):
@@ -345,5 +349,6 @@ class SessionMonitor:
                 sys.executable,
                 str(_HOST_DIR / "launch.py"),
                 issue.id,
+                "--workflow", str(self.workflow_path),
             ]
             self._launch_background(cmd, sid)
