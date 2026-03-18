@@ -17,6 +17,7 @@ notifications:
   - kind: telegram
     token: $TELEGRAM_BOT_TOKEN
     chat_id: $TELEGRAM_CHAT_ID
+    level: questions
 
 merge:
   require_review: true
