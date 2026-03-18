@@ -35,6 +35,10 @@ class TelegramRelay:
         self._offset = 0
         self._level = NotificationLevel[level.upper()]
 
+    def set_level(self, level: str):
+        """Update the notification level (e.g. after config reload)."""
+        self._level = NotificationLevel[level.upper()]
+
     def poll_all(self, paused: dict) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
         """Single Telegram poll -- routes messages to Q&A answers or review commands."""
         qa: dict[str, str] = {}
