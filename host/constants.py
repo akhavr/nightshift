@@ -35,5 +35,4 @@ HTTP_REQUEST_TIMEOUT_S = 10       # Default timeout for outgoing HTTP calls
 PROCESS_TERMINATE_TIMEOUT_S = 10  # Timeout for process termination before kill
 LOG_PREVIEW_LEN = 60             # Truncation length for log message previews
 HISTORY_FOLLOW_POLL_S = 0.5      # Poll interval for `history --follow` mode
-FILE_LIST_PREVIEW_LEN = 10       # Max files to show in error file lists
 CONFLICT_FILE_PREVIEW_LEN = 20   # Max conflict files to show
