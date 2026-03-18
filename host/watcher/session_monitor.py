@@ -142,11 +142,13 @@ class SessionMonitor:
             str(_HOST_DIR / "launch.py"),
             issue_id, "--resume",
         ]
+        workflow = self.workflow_path
         if is_review:
             review_md = self.repo_dir / "REVIEW.md"
             cmd += ["--step", "review"]
             if review_md.exists():
-                cmd += ["--workflow", str(review_md)]
+                workflow = review_md
+        cmd += ["--workflow", str(workflow)]
         self._launch_background(cmd, sid)
 
     def check_auth_failures(self):
@@ -345,5 +347,6 @@ class SessionMonitor:
                 sys.executable,
                 str(_HOST_DIR / "launch.py"),
                 issue.id,
+                "--workflow", str(self.workflow_path),
             ]
             self._launch_background(cmd, sid)

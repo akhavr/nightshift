@@ -478,3 +478,152 @@ class TestCleanupSession:
         with patch("core.config.load_workflow", side_effect=RuntimeError("boom")):
             # should not raise
             w.monitor.cleanup_session("abc", "issue-abc", sd)
+
+
+# ---------------------------------------------------------------------------
+# --workflow passthrough tests
+# ---------------------------------------------------------------------------
+
+class TestWorkflowPassthrough:
+    """Ensure --workflow is passed to launch.py in all code paths."""
+
+    def test_orphan_resume_passes_workflow(self, tmp_path):
+        """Orphan resume for a coder session should include --workflow."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        wf_idx = cmd.index("--workflow")
+        assert cmd[wf_idx + 1] == str(w.monitor.workflow_path)
+
+    def test_orphan_resume_passes_custom_workflow(self, tmp_path):
+        """Orphan resume uses the custom workflow_path, not default."""
+        from host.watcher import HostWatcher
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        custom_wf = tmp_path / "custom" / "MY_WORKFLOW.md"
+        custom_wf.parent.mkdir()
+        custom_wf.write_text("---\nagent:\n  kind: claude-code\n---\nPrompt")
+        w = HostWatcher(sessions, repo, auto_start=False, workflow_path=custom_wf)
+        w.telegram.enabled = False
+        w.monitor._last_orphan_check = 0.0
+        _make_session(sessions, "abc", status="working", issue_id="issue-abc")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        wf_idx = cmd.index("--workflow")
+        assert cmd[wf_idx + 1] == str(custom_wf)
+
+    def test_auto_start_passes_workflow(self, tmp_path):
+        """Auto-start should include --workflow in the launched command."""
+        from host.watcher import HostWatcher
+        from core.config import AutoStartConfig
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        w = HostWatcher(sessions, repo, auto_start=True)
+        w.telegram.enabled = False
+        asc = AutoStartConfig(enabled=True, label="nightshift",
+                              poll_interval_s=0, max_concurrent=4)
+        w._auto_start_config = asc
+
+        tracker = MagicMock()
+        tracker.list_issues.return_value = [
+            _make_issue("id-1", labels=["nightshift"]),
+        ]
+        w._tracker = tracker
+
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        w.monitor.check_new_issues()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        wf_idx = cmd.index("--workflow")
+        assert cmd[wf_idx + 1] == str(w.monitor.workflow_path)
+
+    def test_auto_start_passes_custom_workflow(self, tmp_path):
+        """Auto-start uses the custom workflow_path when configured."""
+        from host.watcher import HostWatcher
+        from core.config import AutoStartConfig
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        custom_wf = tmp_path / "custom" / "MY_WORKFLOW.md"
+        custom_wf.parent.mkdir()
+        custom_wf.write_text("---\nagent:\n  kind: claude-code\n---\nPrompt")
+        w = HostWatcher(sessions, repo, auto_start=True, workflow_path=custom_wf)
+        w.telegram.enabled = False
+        asc = AutoStartConfig(enabled=True, label="nightshift",
+                              poll_interval_s=0, max_concurrent=4)
+        w._auto_start_config = asc
+
+        tracker = MagicMock()
+        tracker.list_issues.return_value = [
+            _make_issue("id-1", labels=["nightshift"]),
+        ]
+        w._tracker = tracker
+
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        w.monitor.check_new_issues()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        wf_idx = cmd.index("--workflow")
+        assert cmd[wf_idx + 1] == str(custom_wf)
+
+    def test_review_session_gets_review_md_override(self, tmp_path):
+        """Review sessions should get REVIEW.md, not the workflow_path."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "review-abc", status="working", issue_id="issue-abc")
+        review_md = w.monitor.repo_dir / "REVIEW.md"
+        review_md.write_text("---\nagent:\n  kind: claude-code\n---\n")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        wf_idx = cmd.index("--workflow")
+        assert cmd[wf_idx + 1] == str(review_md)
+
+    def test_review_session_falls_back_to_workflow_path_without_review_md(self, tmp_path):
+        """Review sessions without REVIEW.md should fall back to workflow_path."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "review-abc", status="working", issue_id="issue-abc")
+        # No REVIEW.md created
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        wf_idx = cmd.index("--workflow")
+        assert cmd[wf_idx + 1] == str(w.monitor.workflow_path)
