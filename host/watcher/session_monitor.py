@@ -79,7 +79,16 @@ class SessionMonitor:
             log.warning(f"[{sid}] Failed to read state for orphan check: {e}")
             return
 
-        if state.get("status") not in ("working", "starting"):
+        status = state.get("status")
+        is_review_session = sid.startswith("review-")
+
+        # Review sessions in waiting:review with no container are orphaned
+        # (the review container crashed). Coder sessions in waiting:review
+        # are expected to have no container — the coder is paused while
+        # the review handles them.
+        if status == "waiting:review" and is_review_session:
+            pass  # fall through to container check
+        elif status not in ("working", "starting"):
             return
 
         # Skip if recently launched (give it time to start)
