@@ -185,7 +185,7 @@ class ClaudeCodeAgent:
             if self._is_auth_failure(result_text):
                 return AgentEvent(type=AgentEventType.AUTH_FAILURE,
                                   content=result_text, raw=raw)
-            if ev.get("subtype") == "success":
+            if ev.get("subtype") == "success" and not ev.get("is_error"):
                 self._extra_events.append(AgentEvent(
                     type=AgentEventType.TEXT, content="@@DONE@@", raw=raw))
             return AgentEvent(type=AgentEventType.SYSTEM,

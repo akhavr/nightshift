@@ -153,6 +153,27 @@ def test_parse_result_success():
     assert ev is not None
     assert ev.type == AgentEventType.SYSTEM
     assert "Task completed" in ev.content
+    # Should inject @@DONE@@ into extra events
+    assert len(agent._extra_events) == 1
+    assert agent._extra_events[0].content == "@@DONE@@"
+
+
+def test_parse_result_success_with_is_error_no_done():
+    """result with subtype=success but is_error=True should NOT inject @@DONE@@."""
+    agent = make_agent()
+    line = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "result": "API Error: 500 Internal server error",
+        "session_id": "abc-123",
+    })
+    ev = agent._parse(line)
+    assert ev is not None
+    assert ev.type == AgentEventType.SYSTEM
+    assert "API Error" in ev.content
+    # Should NOT inject @@DONE@@ when is_error is True
+    assert len(agent._extra_events) == 0
 
 
 def test_parse_rate_limit_ignored():

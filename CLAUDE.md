@@ -26,6 +26,10 @@ nightshift reject <issue-id>             # discard agent work, remove worktree +
 nightshift cleanup <issue-id>            # remove worktree (optionally keep session)
 nightshift watcher                       # start host watcher (pause/unpause, Telegram)
 
+# Monitor sessions (Claude Code skill)
+# Use /nightshift-watch to poll status, review diffs, and accept/reject/revise.
+# See ~/.claude/skills/nightshift-watch/SKILL.md for full protocol.
+
 # Direct launch (cli.py start wraps this)
 python host/launch.py <issue-id>
 python host/launch.py <issue-id> --resume
