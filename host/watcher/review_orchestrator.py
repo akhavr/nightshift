@@ -11,6 +11,7 @@ from pathlib import Path
 
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, SHORT_ID_LEN, DEFAULT_MAX_REVIEW_ROUNDS,
+    REVIEW_SESSION_PREFIX,
 )
 from core.protocols import NotificationLevel
 from host.session_utils import read_state, update_status as _update_status
@@ -113,7 +114,7 @@ class ReviewOrchestrator:
         waiting_sessions = []
 
         for session_dir in self.sessions_dir.iterdir():
-            if not session_dir.is_dir() or session_dir.name.startswith("review-"):
+            if not session_dir.is_dir() or session_dir.name.startswith(REVIEW_SESSION_PREFIX):
                 continue
             sid = session_dir.name
             if not (session_dir / "state.json").exists():
@@ -159,7 +160,7 @@ class ReviewOrchestrator:
             return
 
         _update_status(session_dir, "reviewing")
-        review_sid = f"review-{sid}"
+        review_sid = f"{REVIEW_SESSION_PREFIX}{sid}"
         self._recently_launched[review_sid] = time.time()
         self._rounds[sid] = rounds + 1
 
@@ -194,7 +195,7 @@ class ReviewOrchestrator:
             if not session_dir.is_dir():
                 continue
             sid = session_dir.name
-            if not sid.startswith("review-"):
+            if not sid.startswith(REVIEW_SESSION_PREFIX):
                 continue
             if not (session_dir / "state.json").exists():
                 continue
@@ -211,7 +212,7 @@ class ReviewOrchestrator:
             return
 
         issue_id = state.get("issue_id", "")
-        coder_sid = sid[len("review-"):]
+        coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
         coder_dir = self.sessions_dir / coder_sid
         if not coder_dir.exists():
             return
@@ -233,12 +234,12 @@ class ReviewOrchestrator:
     def cleanup_review_session(self, review_sid: str, review_dir: Path):
         """Clean up a reviewer session (worktree, branch, session dir)."""
         try:
-            coder_sid = review_sid[len("review-"):]
+            coder_sid = review_sid[len(REVIEW_SESSION_PREFIX):]
 
             review_md = self.repo_dir / "REVIEW.md"
             config = load_workflow(review_md) if review_md.exists() else load_workflow(self.workflow_path)
 
-            wt = self.repo_dir / config.workspace.root / f"review-{coder_sid}"
+            wt = self.repo_dir / config.workspace.root / f"{REVIEW_SESSION_PREFIX}{coder_sid}"
             branch = f"review/{coder_sid}"
 
             _pkg().remove_worktree(self.repo_dir, wt, branch)

@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from host.config_discovery import discover_workflow
-from host.constants import SHORT_ID_LEN
+from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
@@ -31,7 +31,7 @@ def _resolve_names(issue_id: str, step: str, config):
     return {
         "short_id": short_id,
         "is_review": is_review,
-        "session_name": f"review-{short_id}" if is_review else short_id,
+        "session_name": f"{REVIEW_SESSION_PREFIX}{short_id}" if is_review else short_id,
         "branch": f"{prefix}/{short_id}",
         "container_name": f"nightshift-{prefix}-{short_id}" if is_review else f"nightshift-{short_id}",
         "worktree_name": f"{prefix}-{short_id}",

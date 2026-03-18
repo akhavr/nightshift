@@ -9,6 +9,7 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
     MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
+    REVIEW_SESSION_PREFIX,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -145,7 +146,7 @@ class SessionMonitor:
         post_resume(self._get_tracker, issue_id, sid,
                     reason=reason, checkpoint_count=checkpoint_count)
 
-        is_review = sid.startswith("review-")
+        is_review = sid.startswith(REVIEW_SESSION_PREFIX)
         cmd = [
             sys.executable,
             str(_HOST_DIR / "launch.py"),
