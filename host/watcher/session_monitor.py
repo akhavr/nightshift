@@ -81,7 +81,7 @@ class SessionMonitor:
             return
 
         status = state.get("status")
-        is_review_session = sid.startswith("review-")
+        is_review_session = sid.startswith(REVIEW_SESSION_PREFIX)
 
         # Review sessions in waiting:review with no container are orphaned
         # (the review container crashed). Coder sessions in waiting:review
