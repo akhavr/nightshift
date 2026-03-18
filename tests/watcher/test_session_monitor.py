@@ -91,6 +91,47 @@ class TestCheckOrphanedSessions:
 
         assert launched == []
 
+    def test_coder_waiting_review_not_treated_as_orphan(self, tmp_path):
+        """Coder session in waiting:review is expected — NOT an orphan."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+
+    def test_review_session_waiting_review_no_container_is_orphan(self, tmp_path):
+        """Review session with waiting:review and no container -> orphaned, resumed."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert "review-abc" in launched
+        state = json.loads((sd / "state.json").read_text())
+        assert state["orphan_resumes"] == 1
+
+    def test_review_session_waiting_review_running_container_not_orphan(self, tmp_path):
+        """Review session with waiting:review and running container -> NOT orphaned."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+
     def test_grace_period_expired_triggers_resume(self, tmp_path):
         w = _make_watcher(tmp_path)
         w.monitor._last_orphan_check = 0.0
