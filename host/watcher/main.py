@@ -13,8 +13,9 @@ from host.watcher.host_watcher import HostWatcher
 
 log = logging.getLogger("watcher")
 
-# Module-level shutdown event so signal handlers can set it
+# Module-level events so signal handlers can set them
 shutdown_event = threading.Event()
+reload_event = threading.Event()
 
 
 def _handle_shutdown(signum, frame):
@@ -22,6 +23,12 @@ def _handle_shutdown(signum, frame):
     sig_name = signal.Signals(signum).name
     log.info(f"Received {sig_name}, shutting down...")
     shutdown_event.set()
+
+
+def _handle_reload(signum, frame):
+    """Signal handler for SIGHUP — sets the reload event to trigger config reload."""
+    log.info("Received SIGHUP, scheduling config reload...")
+    reload_event.set()
 
 
 def main():
@@ -48,6 +55,7 @@ def main():
     # Install signal handlers before starting the main loop
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGHUP, _handle_reload)
 
     # Load .env from repo root (does not override existing env vars)
     try:
@@ -59,4 +67,4 @@ def main():
     workflow_path = Path(a.workflow) if a.workflow else None
     watcher = HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start,
                           workflow_path=workflow_path)
-    watcher.run(shutdown_event=shutdown_event)
+    watcher.run(shutdown_event=shutdown_event, reload_event=reload_event)

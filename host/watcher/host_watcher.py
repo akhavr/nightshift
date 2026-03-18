@@ -8,13 +8,36 @@ import time
 from pathlib import Path
 
 from host.constants import REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S
-from core.config import load_workflow, create_tracker
+from core.config import load_workflow, create_tracker, WorkflowConfig
+from core.protocols import NotificationLevel
 from host.watcher.telegram_relay import TelegramRelay
 from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
 from host.watcher.session_monitor import SessionMonitor
 
 log = logging.getLogger("watcher")
+
+
+def _diff_config(old: WorkflowConfig, new: WorkflowConfig) -> list[str]:
+    """Compare two WorkflowConfigs and return a list of human-readable changes."""
+    changes: list[str] = []
+    if old.notifications != new.notifications:
+        changes.append("notifications")
+    if old.auto_start != new.auto_start:
+        changes.append("auto_start")
+    if old.merge != new.merge:
+        changes.append("merge")
+    if old.review != new.review:
+        changes.append("review")
+    if old.tracker != new.tracker:
+        changes.append("tracker")
+    if old.hooks != new.hooks:
+        changes.append("hooks")
+    if old.workspace != new.workspace:
+        changes.append("workspace")
+    if old.agent != new.agent:
+        changes.append("agent")
+    return changes
 
 
 class HostWatcher:
@@ -86,14 +109,67 @@ class HostWatcher:
             self._auto_start_config = self._config.auto_start
         return self._auto_start_config
 
-    def run(self, shutdown_event: threading.Event | None = None):
+    def reload_config(self):
+        """Re-read workflow file and update in-memory config and adapters.
+
+        Called when SIGHUP is received. Logs what changed.
+        """
+        log.info(f"Reloading config from {self.workflow_path}")
+        old_config = self._config
+        try:
+            new_config = load_workflow(self.workflow_path)
+        except Exception as e:
+            log.error(f"Config reload failed, keeping current config: {e}")
+            return
+
+        changes = _diff_config(old_config, new_config) if old_config else ["initial load"]
+        self._config = new_config
+
+        # Update notification level on TelegramRelay
+        new_tg_level = "all"
+        for nc in new_config.notifications:
+            if nc.kind == "telegram":
+                new_tg_level = nc.level
+                break
+        self.telegram._level = NotificationLevel[new_tg_level.upper()]
+
+        # Update auto_start config
+        self._auto_start_config = new_config.auto_start
+        if self.auto_start and not new_config.auto_start.enabled:
+            self.auto_start = False
+            log.info("Auto-start disabled by config reload")
+        elif not self.auto_start and new_config.auto_start.enabled:
+            self.auto_start = True
+            log.info("Auto-start enabled by config reload")
+
+        # Recreate tracker (kind or extra settings may have changed)
+        old_tracker = self._tracker
+        self._tracker = None  # force re-creation on next _get_tracker()
+        new_tracker = self._get_tracker()
+        # Propagate shutdown event to new tracker
+        if hasattr(new_tracker, '_shutdown') and hasattr(self, '_shutdown'):
+            new_tracker._shutdown = self._shutdown
+        # Terminate old tracker's in-flight subprocess if present
+        if old_tracker and hasattr(old_tracker, 'terminate_current'):
+            old_tracker.terminate_current()
+
+        if changes:
+            log.info(f"Reloaded config -- changes: {', '.join(changes)}")
+        else:
+            log.info("Reloaded config -- no changes detected")
+
+    def run(self, shutdown_event: threading.Event | None = None,
+            reload_event: threading.Event | None = None):
         """Main watcher loop -- delegates to helper classes.
 
         Args:
             shutdown_event: Optional event that, when set, causes the loop
                 to exit cleanly. Used by signal handlers for graceful shutdown.
+            reload_event: Optional event that, when set, triggers a config
+                reload from the workflow file. Used by SIGHUP handler.
         """
         self._shutdown = shutdown_event or threading.Event()
+        self._reload = reload_event or threading.Event()
 
         # Propagate shutdown event to tracker so interruptible subprocess
         # polls can be interrupted when stuck in git-bug calls
@@ -119,6 +195,9 @@ class HostWatcher:
             log.info("Auto-start disabled")
 
         while not self._shutdown.is_set():
+            if self._reload.is_set():
+                self._reload.clear()
+                self.reload_config()
             tg_answers, tg_reviews = (
                 self.telegram.poll_all(self.qa._paused) if self.telegram.enabled else ({}, {})
             )
