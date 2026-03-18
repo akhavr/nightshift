@@ -403,6 +403,48 @@ class TestResolveSession:
             result = resolve_session("abcdef1234567890")
         assert result == "abcdef123456"
 
+    def test_review_prefix_exact_match(self, tmp_path):
+        """review- prefixed session ID resolves correctly."""
+        repo = tmp_path / "repo"
+        sd = repo / ".nightshift" / "sessions" / "review-719fda086c94"
+        sd.mkdir(parents=True)
+
+        with patch("host.cli.sessions_dir", return_value=repo / ".nightshift" / "sessions"):
+            result = resolve_session("review-719fda086c94")
+        assert result == "review-719fda086c94"
+
+    def test_review_prefix_long_id_resolves(self, tmp_path):
+        """review- prefix with full issue ID resolves to session dir."""
+        repo = tmp_path / "repo"
+        sd = repo / ".nightshift" / "sessions" / "review-719fda086c94"
+        sd.mkdir(parents=True)
+
+        with patch("host.cli.sessions_dir", return_value=repo / ".nightshift" / "sessions"):
+            result = resolve_session("review-719fda086c94abcdef1234567890")
+        assert result == "review-719fda086c94"
+
+    def test_review_prefix_no_match_returns_truncated(self, tmp_path):
+        """review- prefix with no match returns review- + truncated ID."""
+        repo = tmp_path / "repo"
+        sessions = repo / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+
+        with patch("host.cli.sessions_dir", return_value=sessions):
+            result = resolve_session("review-abcdef1234567890")
+        assert result == "review-abcdef123456"
+
+    def test_review_prefix_ambiguous_exits(self, tmp_path):
+        """review- prefix with ambiguous match causes sys.exit(1)."""
+        repo = tmp_path / "repo"
+        sessions = repo / ".nightshift" / "sessions"
+        (sessions / "review-aabbccddee11_first").mkdir(parents=True)
+        (sessions / "review-aabbccddee11_second").mkdir(parents=True)
+
+        with patch("host.cli.sessions_dir", return_value=sessions), \
+             pytest.raises(SystemExit) as exc_info:
+            resolve_session("review-aabbccddee11anything")
+        assert exc_info.value.code == 1
+
 
 # ── _detect_default_branch ───────────────────────────────────────────────────
 

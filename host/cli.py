@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
-from host.constants import SHORT_ID_LEN, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
+from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
 from host.docker_utils import docker_stop
@@ -44,14 +44,20 @@ def resolve_session(issue_id: str) -> str:
     if not sd.exists():
         print("No sessions directory found", file=sys.stderr)
         sys.exit(1)
-    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(issue_id[:SHORT_ID_LEN])]
+    # Strip known prefix before truncating so the actual ID gets full SHORT_ID_LEN chars
+    if issue_id.startswith(REVIEW_SESSION_PREFIX):
+        bare_id = issue_id[len(REVIEW_SESSION_PREFIX):]
+        match_prefix = REVIEW_SESSION_PREFIX + bare_id[:SHORT_ID_LEN]
+    else:
+        match_prefix = issue_id[:SHORT_ID_LEN]
+    matches = [d.name for d in sd.iterdir() if d.is_dir() and d.name.startswith(match_prefix)]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
         print(f"Ambiguous ID '{issue_id}' matches: {', '.join(matches)}", file=sys.stderr)
         sys.exit(1)
     # No match by session dir — return truncated (for start/new sessions)
-    return issue_id[:SHORT_ID_LEN]
+    return match_prefix
 
 
 def _resolve_workflow(a) -> Path:
@@ -424,9 +430,9 @@ def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
 
 def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
     """Clean up reviewer worktree, branch, and session if they exist."""
-    review_wt = repo / config.workspace.root / f"review-{coder_sid}"
+    review_wt = repo / config.workspace.root / f"{REVIEW_SESSION_PREFIX}{coder_sid}"
     review_branch = f"review/{coder_sid}"
-    review_session = repo / ".nightshift" / "sessions" / f"review-{coder_sid}"
+    review_session = repo / ".nightshift" / "sessions" / f"{REVIEW_SESSION_PREFIX}{coder_sid}"
 
     if review_wt.exists():
         remove_worktree(repo, review_wt, review_branch)
