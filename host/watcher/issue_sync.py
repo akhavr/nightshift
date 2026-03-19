@@ -11,7 +11,7 @@ import json
 import logging
 from pathlib import Path
 
-from core.constants import TRACKER_OUTBOX_FILENAME
+from core.constants import TRACKER_OUTBOX_FILENAME, TRACKER_OUTBOX_PROCESSING
 from host.session_utils import read_state
 from host.issue_dump import redump_issue
 
@@ -23,19 +23,46 @@ _WORKING_STATUSES = ("working", "starting", "waiting:answer")
 def process_outbox(session_dir: Path, tracker) -> int:
     """Read and apply outbox entries from a single session dir.
 
+    Uses atomic rename to avoid losing entries the container appends
+    concurrently: rename outbox -> .processing, process, then delete.
+    If a .processing file already exists (crash recovery), process it first.
+
     Returns the number of operations processed.
     """
+    processing_path = session_dir / TRACKER_OUTBOX_PROCESSING
     outbox_path = session_dir / TRACKER_OUTBOX_FILENAME
-    if not outbox_path.exists():
+
+    # Crash recovery: process leftover .processing file from a previous cycle
+    total = _process_file(session_dir, processing_path, tracker)
+
+    # Atomically claim the outbox by renaming it
+    if outbox_path.exists():
+        try:
+            outbox_path.rename(processing_path)
+        except OSError as e:
+            log.warning(f"[{session_dir.name}] Failed to rename outbox for processing: {e}")
+            return total
+        total += _process_file(session_dir, processing_path, tracker)
+
+    return total
+
+
+def _process_file(session_dir: Path, path: Path, tracker) -> int:
+    """Process all entries in a single outbox file, then delete it."""
+    if not path.exists():
         return 0
 
     try:
-        raw = outbox_path.read_text()
+        raw = path.read_text()
     except OSError as e:
-        log.warning(f"[{session_dir.name}] Failed to read outbox: {e}")
+        log.warning(f"[{session_dir.name}] Failed to read {path.name}: {e}")
         return 0
 
     if not raw.strip():
+        try:
+            path.unlink()
+        except OSError as e:
+            log.warning(f"[{session_dir.name}] Failed to delete empty {path.name}: {e}")
         return 0
 
     processed = 0
@@ -51,11 +78,11 @@ def process_outbox(session_dir: Path, tracker) -> int:
         if _apply_outbox_entry(session_dir.name, tracker, entry):
             processed += 1
 
-    # Truncate the outbox after processing
+    # Delete the processed file
     try:
-        outbox_path.write_text("")
+        path.unlink()
     except OSError as e:
-        log.warning(f"[{session_dir.name}] Failed to truncate outbox: {e}")
+        log.warning(f"[{session_dir.name}] Failed to delete {path.name}: {e}")
 
     if processed:
         log.info(f"[{session_dir.name}] Processed {processed} outbox entries")

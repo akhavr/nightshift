@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from dataclasses import asdict
 
-from core.constants import TRACKER_OUTBOX_FILENAME
+from core.constants import TRACKER_OUTBOX_FILENAME, TRACKER_OUTBOX_PROCESSING
 from core.protocols import TrackerIssue, TrackerComment
 from host.watcher.issue_sync import process_outbox, sync_sessions, _apply_outbox_entry
 
@@ -52,8 +52,9 @@ class TestProcessOutbox:
         )
         assert process_outbox(sd, mock_tracker) == 1
         mock_tracker.add_comment.assert_called_once_with("i1", "hello")
-        # Outbox should be truncated after processing
-        assert (sd / TRACKER_OUTBOX_FILENAME).read_text() == ""
+        # Outbox and processing file should be cleaned up after processing
+        assert not (sd / TRACKER_OUTBOX_FILENAME).exists()
+        assert not (sd / TRACKER_OUTBOX_PROCESSING).exists()
 
     def test_processes_multiple_ops(self, tmp_path, mock_tracker):
         sd = _make_session(tmp_path, "abc")
@@ -91,6 +92,33 @@ class TestProcessOutbox:
             json.dumps({"op": "comment", "issue_id": "i1", "text": "hello"}) + "\n"
         )
         assert process_outbox(sd, mock_tracker) == 0
+
+    def test_crash_recovery_processes_leftover(self, tmp_path, mock_tracker):
+        """A .processing file left from a previous crash is processed first."""
+        sd = _make_session(tmp_path, "abc")
+        # Simulate a leftover .processing file from a previous crash
+        (sd / TRACKER_OUTBOX_PROCESSING).write_text(
+            json.dumps({"op": "comment", "issue_id": "i1", "text": "old"}) + "\n"
+        )
+        # Plus a new outbox entry
+        (sd / TRACKER_OUTBOX_FILENAME).write_text(
+            json.dumps({"op": "label_add", "issue_id": "i1", "label": "wip"}) + "\n"
+        )
+        assert process_outbox(sd, mock_tracker) == 2
+        mock_tracker.add_comment.assert_called_once_with("i1", "old")
+        mock_tracker.add_label.assert_called_once_with("i1", "wip")
+        assert not (sd / TRACKER_OUTBOX_PROCESSING).exists()
+        assert not (sd / TRACKER_OUTBOX_FILENAME).exists()
+
+    def test_atomic_rename_no_data_loss(self, tmp_path, mock_tracker):
+        """After rename, new container writes go to a fresh outbox file."""
+        sd = _make_session(tmp_path, "abc")
+        (sd / TRACKER_OUTBOX_FILENAME).write_text(
+            json.dumps({"op": "comment", "issue_id": "i1", "text": "batch1"}) + "\n"
+        )
+        assert process_outbox(sd, mock_tracker) == 1
+        # Outbox file was renamed and deleted; container can safely create a new one
+        assert not (sd / TRACKER_OUTBOX_FILENAME).exists()
 
 
 # ── sync_sessions tests ─────────────────────────────────────

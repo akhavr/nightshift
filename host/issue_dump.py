@@ -14,7 +14,6 @@ from dataclasses import asdict
 from pathlib import Path
 
 from core.config import create_tracker
-from core.protocols import TrackerComment
 
 log = logging.getLogger(__name__)
 
