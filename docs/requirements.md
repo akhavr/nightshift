@@ -95,9 +95,15 @@ The agent communicates progress via text markers (@@LOG@@, @@CHECKPOINT@@, @@QUE
 - **Status:** covered
 
 ### REQ-016: Static issue data inside containers
-Inside the container, issue data is read from pre-dumped JSON files (no network access to the tracker). Write operations are logged but no-op.
+Inside the container, issue data is read from pre-dumped JSON files (no network access to the tracker). Write operations are appended to an outbox file for host processing.
 
 - **Tests:** test_static_tracker.py
+- **Status:** covered
+
+### REQ-016b: Live issue sync between host and container
+The host watcher re-dumps issue.json (including comments) to session dirs for active sessions each loop iteration. The container's StaticTracker detects mtime changes via reload() and returns new comments. The SessionRunner injects new comments into resume prompts. Container write operations (comments, labels, status changes) are appended to tracker-outbox.jsonl, which the host watcher processes via the real tracker. The sync is file-based with polling (~30s acceptable delay), preserving container sandboxing.
+
+- **Tests:** test_static_tracker.py (reload, outbox), test_issue_redump.py, watcher/test_issue_sync.py, test_session_runner.py (TestTrackerReload)
 - **Status:** covered
 
 ### REQ-017: Auto-start new issues
@@ -170,9 +176,11 @@ On receiving SIGHUP, the host watcher re-reads and re-parses the workflow file, 
 | test_review.py | REQ-005, REQ-008 |
 | test_review_step.py | REQ-005, REQ-008, REQ-009, REQ-011 |
 | test_search.py | REQ-011 |
-| test_session_runner.py | REQ-002, REQ-003, REQ-004, REQ-015, REQ-021 |
+| test_session_runner.py | REQ-002, REQ-003, REQ-004, REQ-015, REQ-016b, REQ-021 |
 | test_session_utils_host.py | REQ-001, REQ-002, REQ-007, REQ-012 |
-| test_static_tracker.py | REQ-016 |
+| test_static_tracker.py | REQ-016, REQ-016b |
+| test_issue_redump.py | REQ-016b |
+| watcher/test_issue_sync.py | REQ-016b |
 | test_stream_parser.py | REQ-004, REQ-014 |
 | test_watcher.py | REQ-017, REQ-019, REQ-020 |
 | test_worktree_git_fix.py | REQ-001 |
