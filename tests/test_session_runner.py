@@ -843,3 +843,51 @@ class TestDispatchEvent:
         runner, *_ = _make_runner(tmp_path)
         result = runner._dispatch_event(_tool_result_event())
         assert result is None
+
+
+# ── Tracker reload / new comment injection ────────────────────
+
+class TestTrackerReload:
+    """Tests for _try_reload_tracker and _inject_new_comments."""
+
+    def test_try_reload_accumulates_comments(self, tmp_path):
+        from core.protocols import TrackerComment
+        runner, _, tracker, *_ = _make_runner(tmp_path)
+        # Add a reload method to the mock tracker
+        tracker.reload = lambda: [TrackerComment(author="human", body="fix this too")]
+        runner._try_reload_tracker()
+        assert len(runner._new_comments) == 1
+        assert runner._new_comments[0].body == "fix this too"
+
+    def test_try_reload_no_method(self, tmp_path):
+        runner, *_ = _make_runner(tmp_path)
+        # MockTracker has no reload(), should be a no-op
+        runner._try_reload_tracker()
+        assert len(runner._new_comments) == 0
+
+    def test_try_reload_handles_exception(self, tmp_path):
+        runner, _, tracker, *_ = _make_runner(tmp_path)
+        tracker.reload = lambda: (_ for _ in ()).throw(RuntimeError("fail"))
+        runner._try_reload_tracker()
+        assert len(runner._new_comments) == 0
+
+    def test_inject_new_comments_empty(self, tmp_path):
+        runner, *_ = _make_runner(tmp_path)
+        prompt = "Continue working."
+        assert runner._inject_new_comments(prompt) == prompt
+
+    def test_inject_new_comments_prepends(self, tmp_path):
+        from core.protocols import TrackerComment
+        runner, *_ = _make_runner(tmp_path)
+        runner._new_comments = [
+            TrackerComment(author="alice", body="please also fix Y"),
+            TrackerComment(author="bob", body="agreed"),
+        ]
+        prompt = "Continue working."
+        result = runner._inject_new_comments(prompt)
+        assert "New comments on this issue" in result
+        assert "**alice**: please also fix Y" in result
+        assert "**bob**: agreed" in result
+        assert result.endswith(prompt)
+        # Comments should be cleared after injection
+        assert len(runner._new_comments) == 0
