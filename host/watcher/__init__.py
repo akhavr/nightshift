@@ -45,6 +45,7 @@ from host.watcher.review_orchestrator import ReviewOrchestrator  # noqa: E402
 from host.watcher.session_monitor import SessionMonitor  # noqa: E402
 from host.watcher.host_watcher import HostWatcher  # noqa: E402
 from host.watcher import lifecycle_comments  # noqa: E402
+from host.watcher import issue_sync  # noqa: E402
 from host.watcher.main import main  # noqa: E402
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "SessionMonitor",
     "HostWatcher",
     "lifecycle_comments",
+    "issue_sync",
     "main",
     "HAS_REQUESTS",
     "_ACTIVE_STATUSES",

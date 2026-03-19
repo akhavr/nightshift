@@ -13,7 +13,7 @@ from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
 from core.protocols import (
     CodingAgent, IssueTracker, Notifier, NotificationLevel, WorkspaceManager,
-    AgentEventType, MarkerType, parse_marker, TrackerIssue, Workspace,
+    AgentEventType, MarkerType, parse_marker, TrackerIssue, TrackerComment, Workspace,
 )
 from core.qa_flow import handle_question, handle_waiting
 from core.state import StateManager
@@ -49,6 +49,7 @@ class SessionRunner:
         self.terminal_statuses = terminal_statuses
         self._workspace: Workspace | None = None
         self._pending_questions: list[str] = []  # OQ-7: queue, not overwrite
+        self._new_comments: list[TrackerComment] = []  # accumulated from tracker reload
 
         if merge_config is None:
             merge_config = MergeConfig()
@@ -118,7 +119,7 @@ class SessionRunner:
             if resume_prompt is None:
                 break
             resume_count += 1
-            prompt = resume_prompt
+            prompt = self._inject_new_comments(resume_prompt)
 
     # ── Event loop ────────────────────────────────────────────
 
@@ -192,12 +193,25 @@ class SessionRunner:
                 and time.monotonic() - question_time > QUESTION_WAIT_TIMEOUT_S)
 
     def _maybe_reconcile(self, last_reconcile: float) -> float:
-        """Check if issue was closed externally. Returns updated timestamp."""
+        """Check if issue was closed externally and reload tracker. Returns updated timestamp."""
         if time.monotonic() - last_reconcile > RECONCILE_S:
+            self._try_reload_tracker()
             if self._issue_is_terminal():
                 self.state_mgr.update_status("cancelled:external")
             return time.monotonic()
         return last_reconcile
+
+    def _try_reload_tracker(self):
+        """Reload tracker data if supported, accumulating new comments."""
+        if not hasattr(self.tracker, "reload"):
+            return
+        try:
+            new_comments = self.tracker.reload()
+            if new_comments:
+                self._new_comments.extend(new_comments)
+                log.info(f"Accumulated {len(new_comments)} new comment(s) from tracker reload")
+        except Exception as e:
+            log.warning(f"Tracker reload failed: {e}")
 
     # ── Text / marker handling ────────────────────────────────
 
@@ -301,6 +315,19 @@ class SessionRunner:
                 f"checkpoint({step}): {desc[:COMMIT_DESC_MAX_LEN]} [{self.issue.identifier}]")
             return self.workspace_mgr.get_current_commit(self._workspace.path)
         return "none"
+
+    def _inject_new_comments(self, prompt: str) -> str:
+        """Prepend accumulated new comments to a resume prompt, then clear."""
+        if not self._new_comments:
+            return prompt
+        header = "## New comments on this issue (added since your last run)\n"
+        lines = []
+        for c in self._new_comments:
+            author = c.author or "unknown"
+            lines.append(f"- **{author}**: {c.body}")
+        comment_block = header + "\n".join(lines) + "\n\n"
+        self._new_comments.clear()
+        return comment_block + prompt
 
     def _build_resume(self, checkpoint_summary: str | None = None):
         build_resume_prompt(

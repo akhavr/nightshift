@@ -13,6 +13,7 @@ from host.watcher.telegram_relay import TelegramRelay
 from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
 from host.watcher.session_monitor import SessionMonitor
+from host.watcher.issue_sync import sync_sessions
 
 log = logging.getLogger("watcher")
 
@@ -209,6 +210,7 @@ class HostWatcher:
             self.reviews.check_reviews(tg_reviews)
             self.reviews.check_for_auto_review()
             self.reviews.check_reviewer_done()
+            self._sync_issue_data()
             self.monitor.check_orphaned_sessions()
             self.monitor.check_auth_failures()
             self.monitor.check_closed_issues()
@@ -224,6 +226,14 @@ class HostWatcher:
             tracker.terminate_current()
 
         log.info("Watcher shutdown complete")
+
+    def _sync_issue_data(self):
+        """Process outbox writes and re-dump issue.json for active sessions."""
+        try:
+            tracker = self._get_tracker()
+            sync_sessions(self.sessions_dir, tracker)
+        except Exception as e:
+            log.warning(f"Issue sync failed: {e}")
 
     def _maybe_sync_tracker(self):
         """Sync tracker at most once per review poll interval."""
