@@ -110,6 +110,19 @@ def _set_version_in_yaml(yaml_text: str, version: int) -> str:
     return "".join(lines)
 
 
+def load_canonical_template(base_branch: str = "main") -> str:
+    """Load the canonical template with base_branch substituted.
+
+    Used by ``cmd_init`` so there is a single source of truth for the
+    default WORKFLOW.md content.
+    """
+    if not CANONICAL_TEMPLATE.exists():
+        log.warning("Canonical template not found at %s", CANONICAL_TEMPLATE)
+        return ""
+    text = CANONICAL_TEMPLATE.read_text()
+    return text.replace("base_branch: main", f"base_branch: {base_branch}")
+
+
 def apply_upgrade(project_text: str, canonical_text: str) -> str:
     """Apply the canonical prompt section to the project WORKFLOW.md.
 

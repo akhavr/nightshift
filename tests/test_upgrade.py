@@ -15,6 +15,7 @@ from core.upgrade import (
     get_yaml_section,
     diff_prompt_sections,
     apply_upgrade,
+    load_canonical_template,
     _set_version_in_yaml,
     CANONICAL_TEMPLATE,
     DEFAULT_VERSION,
@@ -80,6 +81,25 @@ class TestSections:
         text = "just a prompt"
         assert get_prompt_section(text) == "just a prompt"
         assert get_yaml_section(text) == ""
+
+
+# ── load_canonical_template ───────────────────────────────────────────────────
+
+
+class TestLoadCanonicalTemplate:
+    def test_returns_canonical_content(self):
+        result = load_canonical_template()
+        assert "template_version:" in result
+        assert "base_branch: main" in result
+
+    def test_substitutes_base_branch(self):
+        result = load_canonical_template("develop")
+        assert "base_branch: develop" in result
+        assert "base_branch: main" not in result
+
+    def test_missing_template_returns_empty(self):
+        with patch("core.upgrade.CANONICAL_TEMPLATE", Path("/nonexistent/WORKFLOW.md")):
+            assert load_canonical_template() == ""
 
 
 # ── diff_prompt_sections ─────────────────────────────────────────────────────
