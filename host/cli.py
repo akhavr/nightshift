@@ -15,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
+from core.upgrade import (
+    read_template_version, get_canonical_version,
+    diff_prompt_sections, apply_upgrade, CANONICAL_TEMPLATE,
+)
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
 from host.docker_utils import docker_stop
@@ -212,6 +216,7 @@ def cmd_history(a):
 
 DEFAULT_WORKFLOW_MD = """\
 ---
+template_version: 1
 agent:
   kind: claude-code
   max_turns: 50
@@ -396,6 +401,16 @@ def cmd_init(a):
 
     workflow_path = Path(a.workflow_path).expanduser().resolve() if a.workflow_path else root / "WORKFLOW.md"
     workflow_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # If WORKFLOW.md already exists and is behind, hint about upgrade
+    if workflow_path.exists() and not a.force:
+        existing_version = read_template_version(workflow_path.read_text())
+        canonical_version = get_canonical_version()
+        if existing_version < canonical_version:
+            print(f"Hint: {workflow_path.name} template is behind "
+                  f"(v{existing_version} < v{canonical_version}). "
+                  f"Run `nightshift upgrade` to see prompt updates.")
+
     _scaffold_file(workflow_path, workflow_content, a.force, f"base_branch: {default_branch}")
 
     # If custom workflow path was specified, write .nightshift.yaml pointer
@@ -416,6 +431,53 @@ def cmd_init(a):
     print(f"  1. Review and customize {workflow_path.name} (notifications, auto_start, base_branch)")
     print("  2. Optionally: cp .env.example .env && edit (not needed if vars are already exported)")
     print("  3. Run: nightshift start <issue-id>")
+
+
+def cmd_upgrade(a):
+    """Show or apply prompt section updates from the canonical template."""
+    try:
+        root = repo_root()
+    except subprocess.CalledProcessError:
+        print("Not inside a git repository.", file=sys.stderr)
+        sys.exit(1)
+
+    workflow_path = _resolve_workflow(a)
+    if not workflow_path.exists():
+        print(f"{workflow_path} not found. Run `nightshift init` first.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    if not CANONICAL_TEMPLATE.exists():
+        print("Canonical template not found. Reinstall nightshift.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    project_text = workflow_path.read_text()
+    canonical_text = CANONICAL_TEMPLATE.read_text()
+
+    project_version = read_template_version(project_text)
+    canonical_version = get_canonical_version()
+
+    if project_version >= canonical_version:
+        print(f"WORKFLOW.md is up to date (template_version: {project_version}).")
+        return
+
+    print(f"WORKFLOW.md template_version: {project_version} -> {canonical_version}")
+
+    diff = diff_prompt_sections(project_text, canonical_text)
+    if diff:
+        print("\nPrompt section changes:\n")
+        print(diff)
+    else:
+        print("\nPrompt sections are identical (only version bump needed).")
+
+    if a.apply:
+        updated = apply_upgrade(project_text, canonical_text)
+        workflow_path.write_text(updated)
+        print(f"\nApplied upgrade to {workflow_path} "
+              f"(template_version: {canonical_version}).")
+    else:
+        print("\nRun `nightshift upgrade --apply` to apply these changes.")
 
 
 def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
@@ -686,6 +748,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--workflow-path", default=None,
                     help="Custom location for workflow file (writes .nightshift.yaml pointer)")
     sp.set_defaults(func=cmd_init)
+
+    sp = s.add_parser("upgrade", help="Upgrade WORKFLOW.md prompt to latest template")
+    sp.add_argument("--apply", action="store_true",
+                    help="Apply the upgrade (default: dry-run showing diff)")
+    sp.set_defaults(func=cmd_upgrade)
 
     return p
 
