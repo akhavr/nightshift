@@ -142,7 +142,7 @@ def _parse_auto_start(raw: dict, config: WorkflowConfig):
         enabled=bool(asc.get("enabled", False)),
         label=str(asc.get("label", "nightshift")),
         poll_interval_s=int(asc.get("poll_interval_s", 30)),
-        max_concurrent=int(asc.get("max_concurrent", 4)),
+        max_concurrent=int(asc.get("max_concurrent", 1)),
     )
 
 

@@ -19,7 +19,7 @@ def test_auto_start_config_defaults():
     assert cfg.enabled is False
     assert cfg.label == "nightshift"
     assert cfg.poll_interval_s == 30
-    assert cfg.max_concurrent == 4
+    assert cfg.max_concurrent == 1
 
 
 def test_load_workflow_auto_start_section(tmp_path):
@@ -71,7 +71,7 @@ def test_load_workflow_auto_start_partial(tmp_path):
     assert config.auto_start.enabled is True
     assert config.auto_start.label == "nightshift"
     assert config.auto_start.poll_interval_s == 30
-    assert config.auto_start.max_concurrent == 4
+    assert config.auto_start.max_concurrent == 1
 
 
 # --- Watcher auto-start logic ---

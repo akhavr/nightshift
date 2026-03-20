@@ -28,7 +28,7 @@ auto_start:
   enabled: false
   label: nightshift
   poll_interval_s: 30
-  max_concurrent: 4
+  max_concurrent: 1
 
 hooks:
   after_create: |

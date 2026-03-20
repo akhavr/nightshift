@@ -59,7 +59,7 @@ class AutoStartConfig:
     enabled: bool = False
     label: str = "nightshift"
     poll_interval_s: int = 30
-    max_concurrent: int = 4
+    max_concurrent: int = 1
 
 
 @dataclass
