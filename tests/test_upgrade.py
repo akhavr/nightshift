@@ -1,5 +1,6 @@
 """Tests for template versioning and upgrade logic (REQ-024)."""
 
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -240,6 +241,59 @@ class TestCmdUpgrade:
         assert "new prompt" in updated
         assert "max_turns" not in updated  # canonical's yaml not used
         assert "kind: claude-code" in updated  # project's yaml preserved
+
+    def test_not_in_git_repo(self, tmp_path, capsys):
+        from host.cli import cmd_upgrade
+
+        args = MagicMock()
+        args.apply = False
+        args.workflow = str(tmp_path / "WORKFLOW.md")
+
+        with patch("host.cli.repo_root", side_effect=subprocess.CalledProcessError(1, "git")):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_upgrade(args)
+            assert exc_info.value.code == 1
+
+        err = capsys.readouterr().err
+        assert "Not inside a git repository" in err
+
+    def test_workflow_not_found(self, tmp_path, capsys):
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"  # does not exist
+
+        args = MagicMock()
+        args.apply = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_upgrade(args)
+            assert exc_info.value.code == 1
+
+        err = capsys.readouterr().err
+        assert "not found" in err
+
+    def test_canonical_template_not_found(self, tmp_path, capsys):
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\nagent:\n  kind: claude-code\n---\nprompt")
+
+        args = MagicMock()
+        args.apply = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", Path("/nonexistent/WORKFLOW.md")):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_upgrade(args)
+            assert exc_info.value.code == 1
+
+        err = capsys.readouterr().err
+        assert "Canonical template not found" in err
 
     def test_up_to_date(self, tmp_path, capsys):
         from host.cli import cmd_upgrade

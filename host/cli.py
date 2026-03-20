@@ -381,7 +381,7 @@ def cmd_upgrade(a):
     canonical_text = CANONICAL_TEMPLATE.read_text()
 
     project_version = read_template_version(project_text)
-    canonical_version = get_canonical_version()
+    canonical_version = read_template_version(canonical_text)
 
     if project_version >= canonical_version:
         print(f"WORKFLOW.md is up to date (template_version: {project_version}).")

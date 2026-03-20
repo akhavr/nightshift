@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from core.config.loader import split_front_matter
+
 log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -18,24 +20,9 @@ VERSION_KEY = "template_version"
 DEFAULT_VERSION = 0
 
 
-def _split_front_matter(text: str) -> tuple[str, str]:
-    """Split YAML front matter from markdown body.
-
-    Returns (yaml_text, prompt_body). The prompt_body includes the leading
-    newline after the closing ``---`` fence so round-tripping preserves
-    whitespace.
-    """
-    if not text.startswith("---"):
-        return "", text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return "", text
-    return parts[1], parts[2]
-
-
 def read_template_version(text: str) -> int:
     """Extract template_version from WORKFLOW.md text. Returns 0 if missing."""
-    fm, _ = _split_front_matter(text)
+    fm, _ = split_front_matter(text)
     if not fm:
         return DEFAULT_VERSION
     try:
@@ -58,13 +45,13 @@ def get_canonical_version() -> int:
 
 def get_prompt_section(text: str) -> str:
     """Extract the prompt section (everything after the closing --- fence)."""
-    _, prompt = _split_front_matter(text)
+    _, prompt = split_front_matter(text)
     return prompt
 
 
 def get_yaml_section(text: str) -> str:
     """Extract the raw YAML front matter string (without --- fences)."""
-    fm, _ = _split_front_matter(text)
+    fm, _ = split_front_matter(text)
     return fm
 
 

@@ -11,7 +11,7 @@ from core.config.models import (
     WorkflowConfig,
     WorkspaceConfig,
 )
-from core.config.loader import load_workflow
+from core.config.loader import load_workflow, split_front_matter
 from core.config.factories import (
     AGENT_REGISTRY,
     NOTIFIER_REGISTRY,
@@ -34,6 +34,7 @@ __all__ = [
     "WorkflowConfig",
     "WorkspaceConfig",
     "load_workflow",
+    "split_front_matter",
     "AGENT_REGISTRY",
     "NOTIFIER_REGISTRY",
     "TRACKER_REGISTRY",
