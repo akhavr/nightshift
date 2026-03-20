@@ -24,7 +24,7 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
         return WorkflowConfig()
 
     text = path.read_text()
-    front_matter, prompt_body = _split_front_matter(text)
+    front_matter, prompt_body = split_front_matter(text)
 
     if front_matter:
         try:
@@ -146,7 +146,7 @@ def _parse_auto_start(raw: dict, config: WorkflowConfig):
     )
 
 
-def _split_front_matter(text: str) -> tuple[str, str]:
+def split_front_matter(text: str) -> tuple[str, str]:
     """Split YAML front matter from markdown body."""
     if not text.startswith("---"):
         return "", text

@@ -148,6 +148,12 @@ On receiving SIGHUP, the host watcher re-reads and re-parses the workflow file, 
 - **Tests:** watcher/test_config_reload.py
 - **Status:** covered
 
+### REQ-024: Template versioning and upgrade
+WORKFLOW.md includes a `template_version` field in its YAML front matter. A canonical template ships in `templates/WORKFLOW.md`. `nightshift upgrade` compares versions, shows a diff of the prompt section, and with `--apply` patches the prompt while preserving the user's YAML config. `nightshift init` warns when an existing WORKFLOW.md is behind.
+
+- **Tests:** test_upgrade.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -182,6 +188,7 @@ On receiving SIGHUP, the host watcher re-reads and re-parses the workflow file, 
 | test_issue_redump.py | REQ-016b |
 | watcher/test_issue_sync.py | REQ-016b |
 | test_stream_parser.py | REQ-004, REQ-014 |
+| test_upgrade.py | REQ-024 |
 | test_watcher.py | REQ-017, REQ-019, REQ-020 |
 | test_worktree_git_fix.py | REQ-001 |
 | oq1_stdin_test.py | REQ-003 |
