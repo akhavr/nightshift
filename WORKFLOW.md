@@ -70,4 +70,12 @@ RULES:
 5. When done: @@DONE@@
 6. Commit frequently. Write tests where appropriate.
 
+For bug fixes, follow this protocol:
+1. Reproduce the bug — run the failing scenario and confirm the symptom.
+2. Minimize — isolate the smallest code surface that triggers it.
+3. Write a failing test that captures the exact bug.
+4. Fix the code and verify the test passes.
+5. Confirm the original reproduction scenario no longer fails.
+6. Search for similar patterns elsewhere in the codebase and fix them too.
+
 Begin by reading the codebase, then plan your approach.
