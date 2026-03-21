@@ -11,11 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 from core.protocols import IssueTracker, TrackerIssue, TrackerComment, SHORT_ID_LEN
+from core.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY_S
 
 log = logging.getLogger(__name__)
 
-_LOCK_RETRIES = 3
-_LOCK_RETRY_DELAY_S = 5
 _CMD_TIMEOUT_S = 30
 _POLL_INTERVAL_S = 0.1
 _GRACEFUL_KILL_TIMEOUT_S = 5
@@ -46,7 +45,14 @@ class GitBugTracker:
         return issue_id[:SHORT_ID_LEN]
 
     def _run(self, *args: str, timeout: int = _CMD_TIMEOUT_S, ignore_rc: set[int] | None = None) -> str:
-        for attempt in range(_LOCK_RETRIES):
+        """Run a git-bug command with lock retry.
+
+        All git-bug operations — including those from cli.py (accept, reject,
+        start, etc.) — route through this method via GitBugTracker's public API,
+        so lock retry is applied uniformly.  There are no direct git-bug
+        subprocess calls outside this adapter.
+        """
+        for attempt in range(LOCK_RETRY_ATTEMPTS):
             if self._shutdown.is_set():
                 return ""
             try:
@@ -65,9 +71,9 @@ class GitBugTracker:
                         log.warning(f"git-bug locked by dead process {pid} — clearing lock")
                         self._clear_stale_lock()
                         continue  # retry immediately after clearing
-                    if attempt < _LOCK_RETRIES - 1:
-                        log.info(f"git-bug locked (pid {pid}), retrying in {_LOCK_RETRY_DELAY_S}s...")
-                        if self._shutdown.wait(timeout=_LOCK_RETRY_DELAY_S):
+                    if attempt < LOCK_RETRY_ATTEMPTS - 1:
+                        log.info(f"git-bug locked (pid {pid}), retrying in {LOCK_RETRY_DELAY_S}s...")
+                        if self._shutdown.wait(timeout=LOCK_RETRY_DELAY_S):
                             return ""  # shutdown during retry sleep
                         continue
                 log.warning(f"git-bug {' '.join(args)} failed (rc={returncode}): {stderr.strip()}")
@@ -145,12 +151,14 @@ class GitBugTracker:
     def _clear_stale_lock(self):
         """Remove stale git-bug lock files."""
         repo_git = Path(self.cwd) / ".git"
-        # git-bug uses Go's lockfile package — look for lock files
-        for pattern in ["git-bug-cache.lock", "*.lock"]:
-            for lock in repo_git.glob(f"**/{pattern}"):
-                if "git-bug" in str(lock) or "bug" in str(lock):
-                    log.info(f"Removing stale lock: {lock}")
-                    lock.unlink(missing_ok=True)
+        # git-bug uses Go's lockfile package — look for lock files under git-bug dirs
+        for lock in repo_git.glob("**/git-bug*/**/*.lock"):
+            log.info(f"Removing stale lock: {lock}")
+            lock.unlink(missing_ok=True)
+        # Also check for lock files directly named git-bug-*.lock
+        for lock in repo_git.glob("**/git-bug*.lock"):
+            log.info(f"Removing stale lock: {lock}")
+            lock.unlink(missing_ok=True)
 
     def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
         raw = self._run("bug", "show", self._short(issue_id), "-f", "json")
