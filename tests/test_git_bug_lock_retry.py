@@ -16,11 +16,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from adapters.trackers.git_bug import GitBugTracker
-from host.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY_S
+from core.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY_S
 
 
 LOCK_ERROR_PID_42 = "Error: the repository you want to access is already locked by the process pid 42"
 LOCK_ERROR_PID_999 = "Error: the repository you want to access is already locked by the process pid 999"
+
+
+@pytest.fixture
+def tracker():
+    """Create a GitBugTracker with a fake repo dir for testing."""
+    return GitBugTracker(repo_dir="/tmp/fake")
 
 
 class TestExtractLockPid:
@@ -63,12 +69,9 @@ class TestPidAlive:
 class TestLockRetry:
     """_run() retries on lock errors with backoff."""
 
-    def _make_tracker(self):
-        return GitBugTracker(repo_dir="/tmp/fake")
-
-    def test_retries_on_lock_then_succeeds(self):
+    def test_retries_on_lock_then_succeeds(self, tracker):
         """Lock on first attempt, success on second."""
-        t = self._make_tracker()
+        t = tracker
         call_count = 0
 
         def fake_run_interruptible(cmd, timeout):
@@ -86,9 +89,9 @@ class TestLockRetry:
         assert result == "output"
         assert call_count == 2
 
-    def test_retries_up_to_max_attempts(self):
+    def test_retries_up_to_max_attempts(self, tracker):
         """All attempts hit lock error with live PID — returns empty."""
-        t = self._make_tracker()
+        t = tracker
 
         with patch.object(t, "_run_interruptible",
                           return_value=("", LOCK_ERROR_PID_42, 1)), \
@@ -98,9 +101,9 @@ class TestLockRetry:
 
         assert result == ""
 
-    def test_retry_uses_shutdown_wait_for_delay(self):
+    def test_retry_uses_shutdown_wait_for_delay(self, tracker):
         """Retry delay uses shutdown_event.wait so shutdown can interrupt."""
-        t = self._make_tracker()
+        t = tracker
         call_count = 0
 
         def fake_run_interruptible(cmd, timeout):
@@ -118,9 +121,9 @@ class TestLockRetry:
         # Should have called wait with the delay for each retry
         mock_wait.assert_called_with(timeout=LOCK_RETRY_DELAY_S)
 
-    def test_shutdown_during_retry_returns_empty(self):
+    def test_shutdown_during_retry_returns_empty(self, tracker):
         """If shutdown fires during retry sleep, return immediately."""
-        t = self._make_tracker()
+        t = tracker
 
         with patch.object(t, "_run_interruptible",
                           return_value=("", LOCK_ERROR_PID_42, 1)), \
@@ -134,12 +137,9 @@ class TestLockRetry:
 class TestStaleLockDetection:
     """After detecting a dead PID, stale locks are cleared and command retried."""
 
-    def _make_tracker(self):
-        return GitBugTracker(repo_dir="/tmp/fake")
-
-    def test_dead_pid_clears_lock_and_retries(self):
+    def test_dead_pid_clears_lock_and_retries(self, tracker):
         """Dead PID triggers lock cleanup, then retries immediately."""
-        t = self._make_tracker()
+        t = tracker
         call_count = 0
 
         def fake_run_interruptible(cmd, timeout):
@@ -159,9 +159,9 @@ class TestStaleLockDetection:
         mock_clear.assert_called_once()
         assert call_count == 2
 
-    def test_dead_pid_no_backoff_delay(self):
+    def test_dead_pid_no_backoff_delay(self, tracker):
         """Stale lock retry is immediate — no wait() call."""
-        t = self._make_tracker()
+        t = tracker
         call_count = 0
 
         def fake_run_interruptible(cmd, timeout):
@@ -180,9 +180,9 @@ class TestStaleLockDetection:
         # wait should NOT be called — stale lock retry is immediate
         mock_wait.assert_not_called()
 
-    def test_live_pid_lock_not_cleared(self):
+    def test_live_pid_lock_not_cleared(self, tracker):
         """When the locking process is alive, do NOT clear the lock."""
-        t = self._make_tracker()
+        t = tracker
 
         with patch.object(t, "_run_interruptible",
                           return_value=("", LOCK_ERROR_PID_42, 1)), \
@@ -233,9 +233,9 @@ class TestConstants:
     def test_lock_retry_delay_value(self):
         assert LOCK_RETRY_DELAY_S == 5
 
-    def test_constants_used_in_run_loop(self):
+    def test_constants_used_in_run_loop(self, tracker):
         """_run iterates exactly LOCK_RETRY_ATTEMPTS times on persistent lock."""
-        t = GitBugTracker(repo_dir="/tmp/fake")
+        t = tracker
         calls = []
 
         def fake_run_interruptible(cmd, timeout):

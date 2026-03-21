@@ -32,10 +32,6 @@ TG_MESSAGE_HARD_LIMIT = 4096
 TG_MESSAGE_SOFT_LIMIT = 4000
 TG_TRUNCATION_POINT = 3950
 
-# ── git-bug lock retry ────────────────────────────────
-LOCK_RETRY_ATTEMPTS = 3           # Max retries when git-bug repo is locked
-LOCK_RETRY_DELAY_S = 5            # Seconds between lock retries
-
 # ── Adapters ───────────────────────────────────────────
 HTTP_REQUEST_TIMEOUT_S = 10       # Default timeout for outgoing HTTP calls
 PROCESS_TERMINATE_TIMEOUT_S = 10  # Timeout for process termination before kill
