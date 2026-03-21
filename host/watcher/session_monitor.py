@@ -9,7 +9,7 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
     MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
-    REVIEW_SESSION_PREFIX,
+    REVIEW_SESSION_PREFIX, LAUNCH_GRACE_PERIOD_S,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -299,13 +299,27 @@ class SessionMonitor:
         return results
 
     def count_active_sessions(self, states=None) -> int:
-        """Count sessions that are currently working or starting."""
+        """Count sessions that are currently working or starting.
+
+        Also counts recently launched sessions (within LAUNCH_GRACE_PERIOD_S)
+        that don't yet have a state.json, closing the TOCTOU race between
+        subprocess spawn and state file creation.
+        """
         if states is None:
             states = self.iter_session_states()
-        return sum(
+        count = sum(
             1 for _, state in states
             if state.get("status") in _ACTIVE_STATUSES
         )
+        # Add recently launched sessions that have no state.json yet
+        now = time.time()
+        known_sids = {sd.name for sd, _ in states}
+        for sid, launch_time in self._recently_launched.items():
+            if sid in known_sids:
+                continue
+            if now - launch_time < LAUNCH_GRACE_PERIOD_S:
+                count += 1
+        return count
 
     def check_new_issues(self):
         """Poll tracker for open issues matching the auto-start label and start sessions."""
