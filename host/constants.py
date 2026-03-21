@@ -15,6 +15,7 @@ PRE_PAUSE_DELAY_S = 1
 # ── Timeouts and thresholds ──────────────────────────────
 STILL_WAITING_LOG_INTERVAL_S = 300    # Log "still waiting" every 5 min
 ORPHAN_GRACE_PERIOD_S = 120           # Grace period before treating as orphaned
+LAUNCH_GRACE_PERIOD_S = 60            # Grace period for recently launched sessions without state.json
 MAX_ORPHAN_RESUMES = 3                # Stop auto-resuming after this many orphan cycles
 AUTH_RETRY_INTERVAL_S = 300           # Slow retry interval for auth failures (5 min)
 MAX_AUTH_RETRIES = 6                  # Stop retrying auth failures after this many attempts (~30 min)

@@ -291,3 +291,103 @@ class TestWatcherCountActiveSessions:
             (sd / "state.json").write_text(json.dumps({"status": status}))
 
         assert watcher.monitor.count_active_sessions() == 2
+
+    def test_counts_recently_launched_without_state_json(self, tmp_path):
+        """Recently launched sessions without state.json are counted as active."""
+        import time
+        from host.watcher import HostWatcher
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        watcher = HostWatcher(sessions_dir, tmp_path)
+
+        # One working session with state.json
+        sd = sessions_dir / "s1"
+        sd.mkdir()
+        (sd / "state.json").write_text(json.dumps({"status": "working"}))
+
+        # One recently launched session without state.json
+        watcher._recently_launched["s2"] = time.time()
+
+        assert watcher.monitor.count_active_sessions() == 2
+
+    def test_expired_recently_launched_not_counted(self, tmp_path):
+        """Recently launched sessions past the grace period are not counted."""
+        import time
+        from host.watcher import HostWatcher
+        from host.constants import LAUNCH_GRACE_PERIOD_S
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        watcher = HostWatcher(sessions_dir, tmp_path)
+
+        # Launched long ago, no state.json
+        watcher._recently_launched["s1"] = time.time() - LAUNCH_GRACE_PERIOD_S - 10
+
+        assert watcher.monitor.count_active_sessions() == 0
+
+    def test_recently_launched_with_state_json_not_double_counted(self, tmp_path):
+        """Sessions in _recently_launched that also have state.json are not double-counted."""
+        import time
+        from host.watcher import HostWatcher
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        sd = sessions_dir / "s1"
+        sd.mkdir()
+        (sd / "state.json").write_text(json.dumps({"status": "working"}))
+
+        watcher = HostWatcher(sessions_dir, tmp_path)
+        watcher._recently_launched["s1"] = time.time()
+
+        assert watcher.monitor.count_active_sessions() == 1
+
+
+class TestMaxConcurrentRace:
+    """Test that max_concurrent is respected even when state.json is delayed."""
+
+    def _make_watcher(self, tmp_path, max_concurrent=1):
+        from host.watcher import HostWatcher
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        watcher = HostWatcher(sessions_dir, tmp_path, auto_start=True)
+        asc = AutoStartConfig(
+            enabled=True, label="nightshift",
+            poll_interval_s=0, max_concurrent=max_concurrent,
+        )
+        watcher._auto_start_config = asc
+        watcher.telegram.enabled = False
+        return watcher
+
+    def test_two_issues_max_one_only_one_launches_across_iterations(self, tmp_path):
+        """Two labeled issues, max_concurrent=1: only one launches even if
+        state.json is delayed (second iteration sees recently_launched)."""
+        watcher = self._make_watcher(tmp_path, max_concurrent=1)
+        tracker = MagicMock()
+        tracker.list_issues.return_value = [
+            _make_issue("id-1", labels=["nightshift"]),
+            _make_issue("id-2", labels=["nightshift"]),
+        ]
+        watcher._tracker = tracker
+        watcher._config = MagicMock()
+
+        launched = []
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        # First iteration: launches id-1, skips id-2 (active_count incremented in-loop)
+        watcher.monitor.check_new_issues()
+        assert launched == ["id-1"]
+
+        # Simulate: state.json NOT written yet (no session dir for id-1)
+        # Second iteration: should still see id-1 as active via _recently_launched
+        launched.clear()
+        watcher.monitor._last_auto_start_poll = 0  # reset poll timer
+        watcher.monitor.check_new_issues()
+
+        # id-2 should NOT have been launched because id-1 is still counted
+        assert "id-2" not in launched
