@@ -11,11 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 from core.protocols import IssueTracker, TrackerIssue, TrackerComment, SHORT_ID_LEN
+from host.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY_S
 
 log = logging.getLogger(__name__)
 
-_LOCK_RETRIES = 3
-_LOCK_RETRY_DELAY_S = 5
 _CMD_TIMEOUT_S = 30
 _POLL_INTERVAL_S = 0.1
 _GRACEFUL_KILL_TIMEOUT_S = 5
@@ -46,7 +45,7 @@ class GitBugTracker:
         return issue_id[:SHORT_ID_LEN]
 
     def _run(self, *args: str, timeout: int = _CMD_TIMEOUT_S, ignore_rc: set[int] | None = None) -> str:
-        for attempt in range(_LOCK_RETRIES):
+        for attempt in range(LOCK_RETRY_ATTEMPTS):
             if self._shutdown.is_set():
                 return ""
             try:
@@ -65,9 +64,9 @@ class GitBugTracker:
                         log.warning(f"git-bug locked by dead process {pid} — clearing lock")
                         self._clear_stale_lock()
                         continue  # retry immediately after clearing
-                    if attempt < _LOCK_RETRIES - 1:
-                        log.info(f"git-bug locked (pid {pid}), retrying in {_LOCK_RETRY_DELAY_S}s...")
-                        if self._shutdown.wait(timeout=_LOCK_RETRY_DELAY_S):
+                    if attempt < LOCK_RETRY_ATTEMPTS - 1:
+                        log.info(f"git-bug locked (pid {pid}), retrying in {LOCK_RETRY_DELAY_S}s...")
+                        if self._shutdown.wait(timeout=LOCK_RETRY_DELAY_S):
                             return ""  # shutdown during retry sleep
                         continue
                 log.warning(f"git-bug {' '.join(args)} failed (rc={returncode}): {stderr.strip()}")
