@@ -1,0 +1,16 @@
+[project]
+name = "nightshift"
+version = "0.1.0"
+description = "Autonomous coding agent runner"
+requires-python = ">=3.12"
+dependencies = ["requests", "pyyaml", "jinja2"]
+
+[project.scripts]
+nightshift = "host.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "adapters*", "host*"]
