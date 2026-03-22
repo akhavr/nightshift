@@ -49,6 +49,13 @@ class IssueTracker(Protocol):
         """Bidirectional sync — pull remote state AND push local changes."""
         ...
 
+    def run_raw(self, *args: str) -> str:
+        """Pass arguments directly to the underlying tracker CLI.
+
+        Used by `nightshift issue` to provide lock-safe CLI passthrough.
+        """
+        ...
+
 
 # ── Coding Agent ──────────────────────────────────────────
 

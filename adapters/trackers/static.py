@@ -148,6 +148,9 @@ class StaticTracker:
         log.info(f"[static] Label -{label} on {issue_id[:SHORT_ID_LEN]}")
         self._append_outbox({"op": "label_rm", "issue_id": issue_id, "label": label})
 
+    def run_raw(self, *args: str) -> str:
+        raise NotImplementedError("StaticTracker does not support raw CLI passthrough")
+
     def sync(self) -> None:
         pass  # Nothing to sync
 

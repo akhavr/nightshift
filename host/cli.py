@@ -593,6 +593,22 @@ def cmd_revise(a):
     subprocess.run(cmd)
 
 
+def cmd_issue(a):
+    """Pass arguments directly to the tracker CLI with lock retry."""
+    r = repo_root()
+    wf = _resolve_workflow(a)
+    config = load_workflow(wf)
+    tracker = create_tracker(config, repo_dir=str(r))
+    try:
+        output = tracker.run_raw(*a.tracker_args)
+    except NotImplementedError as e:
+        print(f"Tracker '{config.tracker.kind}' does not support raw CLI passthrough: {e}",
+              file=sys.stderr)
+        sys.exit(1)
+    if output:
+        print(output)
+
+
 def cmd_cleanup(a):
     r = repo_root()
     sid = resolve_session(a.issue_id)
@@ -667,6 +683,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-f", "--follow", action="store_true",
                     help="Keep watching for new entries (like tail -f)")
     sp.set_defaults(func=cmd_history)
+
+    sp = s.add_parser("issue", help="Pass commands to the tracker CLI with lock retry")
+    sp.add_argument("tracker_args", nargs=argparse.REMAINDER,
+                    help="Arguments passed directly to the tracker CLI")
+    sp.set_defaults(func=cmd_issue)
 
     sp = s.add_parser("init", help="Scaffold WORKFLOW.md and .env.example")
     sp.add_argument("--force", action="store_true", help="Overwrite existing files")
