@@ -216,6 +216,10 @@ class GitBugTracker:
     def remove_label(self, issue_id: str, label: str) -> None:
         self._run("bug", "label", "rm", self._short(issue_id), label, ignore_rc={1})
 
+    def run_raw(self, *args: str) -> str:
+        """Pass arguments directly to git-bug CLI with lock retry."""
+        return self._run(*args)
+
     _NO_REMOTE_MARKERS = ("remote not found", "unable to resolve URL for remote")
 
     def sync(self) -> None:

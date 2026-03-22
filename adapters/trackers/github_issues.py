@@ -18,4 +18,7 @@ class GitHubIssuesTracker:
         # POST /repos/{owner}/{repo}/issues/{number}/comments
         raise NotImplementedError
 
+    def run_raw(self, *args: str) -> str:
+        raise NotImplementedError("GitHubIssuesTracker does not support raw CLI passthrough")
+
     # etc.

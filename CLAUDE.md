@@ -25,6 +25,7 @@ nightshift revise <issue-id> "msg"       # request revisions (review or mid-flig
 nightshift reject <issue-id>             # discard agent work, remove worktree + session
 nightshift cleanup <issue-id>            # remove worktree (optionally keep session)
 nightshift upgrade                       # show prompt updates from canonical template (--apply to patch)
+nightshift issue <args...>               # pass args to tracker CLI with lock retry
 nightshift watcher                       # start host watcher (pause/unpause, Telegram)
 
 # Monitor sessions (Claude Code skill)
@@ -73,7 +74,7 @@ Key core modules:
 - `workspaces/` — `GitWorktreeManager` (creates git worktrees per issue, host-side)
 
 **`host/`** — Host-side scripts (run outside Docker):
-- `cli.py` — User-facing CLI: init, start, resume, answer, status, logs, history, accept, reject, cleanup, upgrade, watcher.
+- `cli.py` — User-facing CLI: init, start, resume, answer, status, logs, history, accept, reject, cleanup, upgrade, watcher, issue.
 - `launch.py` — Orchestrates workspace setup, issue data dumping, and container launch. Delegates to `workspace_setup.py`, `issue_dump.py`, and `docker_cmd.py`.
 - `workspace_setup.py` — Worktree creation, branch management, review session preparation.
 - `issue_dump.py` — Dumps `issue.json` and `issues.json` to the session dir for the container's `StaticTracker`. Also provides `redump_issue()` for live sync (watcher re-dumps periodically so the container sees new comments).
@@ -104,6 +105,7 @@ Key core modules:
 ## Key Design Patterns
 
 - **Adapter registration**: `core/config/factories.py` has `AGENT_REGISTRY`, `TRACKER_REGISTRY`, etc. mapping `kind` strings to `(module_path, class_name)` tuples. New adapters: add entry to registry + implement the Protocol.
+- **Tracker CLI passthrough**: `nightshift issue <args...>` passes all arguments directly to the tracker's `run_raw(*args)` method. For git-bug, this routes through `_run()` to get lock retry for free. Trackers without a CLI (StaticTracker, GitHubIssuesTracker) raise `NotImplementedError`.
 - **WORKFLOW.md**: YAML front matter configures adapters, merge policy, hooks. The markdown body after `---` is the Jinja2 prompt template. `$VAR` references in YAML are resolved from environment variables. `.env` is loaded BEFORE WORKFLOW.md parsing.
 - **StaticTracker pattern**: Host dumps issue data to `issue.json` and `issues.json` in the session dir. Container reads them via `StaticTracker`. Write operations (comments, labels, status) are appended to `tracker-outbox.jsonl` for host processing. `StaticTracker.reload()` re-reads `issue.json` when mtime changes, returning new comments for injection into the agent's next prompt.
 - **Container-host communication**: Exclusively via shared files in the session directory (`/session/` inside container, `.nightshift/sessions/<id>/` on host). No network calls between container and host.
@@ -127,7 +129,7 @@ Key core modules:
 
 Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). 675 tests across `tests/` and `tests/watcher/`.
 
-Key test files: `test_upgrade.py`, `test_stream_parser.py`, `test_marker_reliability.py`, `oq1_stdin_test.py`, `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_cli_commands.py`, `test_cli_helpers.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py`, `test_review.py`, `test_auto_start.py`, `test_session_runner.py`, `test_hooks.py`, `test_post_run.py`, `test_qa_flow.py`, `test_prompts.py`, `test_config_factories.py`, `test_config_discovery.py`, `test_docker_utils.py`, `test_git_utils.py`, `test_composite_notifier.py`, `test_notifier_prefix.py`, `test_notification_level.py`, `test_rebase.py`, `test_search.py`, `test_session_utils_host.py`, `test_launch.py`, `test_post_container.py`, `test_assistant_text_logging.py`, `test_workspace_setup.py`, `test_entrypoint_merge.py`, `test_issue_redump.py`, `watcher/test_qa_handler.py`, `watcher/test_host_watcher.py`, `watcher/test_review_orchestrator.py`, `watcher/test_telegram_relay.py`, `watcher/test_session_monitor.py`, `watcher/test_graceful_shutdown.py`, `watcher/test_lifecycle_comments.py`, `watcher/test_issue_sync.py`.
+Key test files: `test_upgrade.py`, `test_stream_parser.py`, `test_marker_reliability.py`, `oq1_stdin_test.py`, `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_cli_commands.py`, `test_cli_helpers.py`, `test_cli_issue.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py`, `test_review.py`, `test_auto_start.py`, `test_session_runner.py`, `test_hooks.py`, `test_post_run.py`, `test_qa_flow.py`, `test_prompts.py`, `test_config_factories.py`, `test_config_discovery.py`, `test_docker_utils.py`, `test_git_utils.py`, `test_composite_notifier.py`, `test_notifier_prefix.py`, `test_notification_level.py`, `test_rebase.py`, `test_search.py`, `test_session_utils_host.py`, `test_launch.py`, `test_post_container.py`, `test_assistant_text_logging.py`, `test_workspace_setup.py`, `test_entrypoint_merge.py`, `test_issue_redump.py`, `watcher/test_qa_handler.py`, `watcher/test_host_watcher.py`, `watcher/test_review_orchestrator.py`, `watcher/test_telegram_relay.py`, `watcher/test_session_monitor.py`, `watcher/test_graceful_shutdown.py`, `watcher/test_lifecycle_comments.py`, `watcher/test_issue_sync.py`.
 
 Remaining coverage gaps:
 - `adapters/trackers/git_bug.py` — git-bug CLI interaction (hard to test without git-bug binary)
