@@ -240,6 +240,92 @@ class TestCheckOrphanedSessions:
         assert launched == []
         assert any("too complex" in n.lower() for n in notified)
 
+    def test_review_session_orphan_limit_sets_review_failed(self, tmp_path):
+        """Review session hitting orphan limit should be suspended:review-failed, not too-complex."""
+        from host.constants import MAX_ORPHAN_RESUMES, REVIEW_SESSION_PREFIX
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        coder_sid = "abc"
+        review_sid = f"{REVIEW_SESSION_PREFIX}{coder_sid}"
+        # Create coder session in 'reviewing' status
+        coder_sd = _make_session(w.sessions_dir, coder_sid, status="reviewing", issue_id="issue-abc")
+        # Create review session at the orphan limit
+        review_sd = _make_session(w.sessions_dir, review_sid, status="working", issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["orphan_resumes"] = MAX_ORPHAN_RESUMES
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+        # Review session should be suspended:review-failed
+        review_state = json.loads((review_sd / "state.json").read_text())
+        assert review_state["status"] == "suspended:review-failed"
+        # Coder session should transition to waiting:human-review
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "waiting:human-review"
+
+    def test_review_session_orphan_limit_posts_fallback_message(self, tmp_path):
+        """Review session orphan limit should post human-review fallback, not too-complex."""
+        from host.constants import MAX_ORPHAN_RESUMES, REVIEW_SESSION_PREFIX
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        w.monitor._last_orphan_check = 0.0
+        coder_sid = "abc"
+        review_sid = f"{REVIEW_SESSION_PREFIX}{coder_sid}"
+        _make_session(w.sessions_dir, coder_sid, status="reviewing", issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, review_sid, status="working", issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["orphan_resumes"] = MAX_ORPHAN_RESUMES
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        tracker = MagicMock()
+        w._tracker = tracker
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+        # Telegram message should mention human review, not too-complex
+        assert any("human review" in n.lower() for n in notified)
+        assert not any("too complex" in n.lower() for n in notified)
+        # Tracker comment should mention auto-review failed
+        tracker.add_comment.assert_called_once()
+        comment_text = tracker.add_comment.call_args[0][1]
+        assert "auto-review failed" in comment_text.lower() or "review failed" in comment_text.lower()
+        assert "sub-tasks" not in comment_text.lower()
+
+    def test_coder_session_orphan_limit_still_too_complex(self, tmp_path):
+        """Coder (non-review) session orphan limit should still be suspended:too-complex."""
+        from host.constants import MAX_ORPHAN_RESUMES
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["orphan_resumes"] = MAX_ORPHAN_RESUMES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "suspended:too-complex"
+
     def test_orphaned_review_session_with_review_md(self, tmp_path):
         """Review session resume should pass --workflow REVIEW.md when it exists."""
         w = _make_watcher(tmp_path)

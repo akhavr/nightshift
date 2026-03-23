@@ -13,7 +13,7 @@ from host.constants import (
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
-from host.session_utils import read_state, write_state
+from host.session_utils import read_state, write_state, update_status
 from core.config import load_workflow
 from host.watcher.lifecycle_comments import post_start, post_resume, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
@@ -109,24 +109,10 @@ class SessionMonitor:
 
         orphan_resumes = state.get("orphan_resumes", 0)
         if orphan_resumes >= MAX_ORPHAN_RESUMES:
-            title = state.get("title", issue_id[:SHORT_ID_LEN])
-            log.error(f"[{sid}] Hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
-                      f"Task may be too complex — stopping.")
-            state["status"] = "suspended:too-complex"
-            write_state(session_dir, state)
-            try:
-                tracker = self._get_tracker()
-                tracker.add_comment(issue_id,
-                    f"🛑 Auto-resume limit reached ({MAX_ORPHAN_RESUMES} orphan restarts). "
-                    f"The agent keeps crashing at the same point — the task is likely "
-                    f"too complex for a single issue. Please split it into smaller sub-tasks "
-                    f"and re-file.")
-            except Exception as e:
-                log.warning(f"[{sid}] Failed to post too-complex comment: {e}")
-            self.telegram.notify(
-                f"🛑 `{sid}` hit {MAX_ORPHAN_RESUMES} orphan restarts. "
-                f"Task too complex — needs splitting. Session suspended.",
-                level=NotificationLevel.ACTIONS)
+            if is_review_session:
+                self._handle_review_orphan_limit(sid, session_dir, state, issue_id)
+            else:
+                self._handle_coder_orphan_limit(sid, session_dir, state, issue_id)
             return
 
         state["orphan_resumes"] = orphan_resumes + 1
@@ -138,6 +124,57 @@ class SessionMonitor:
 
         session_dir = self.sessions_dir / sid
         self._resume_session(sid, issue_id, reason="orphaned (container gone)")
+
+    def _handle_coder_orphan_limit(self, sid: str, session_dir: Path,
+                                    state: dict, issue_id: str):
+        """Suspend a coder session as too-complex after hitting the orphan limit."""
+        log.error(f"[{sid}] Hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
+                  f"Task may be too complex — stopping.")
+        state["status"] = "suspended:too-complex"
+        write_state(session_dir, state)
+        try:
+            tracker = self._get_tracker()
+            tracker.add_comment(issue_id,
+                f"🛑 Auto-resume limit reached ({MAX_ORPHAN_RESUMES} orphan restarts). "
+                f"The agent keeps crashing at the same point — the task is likely "
+                f"too complex for a single issue. Please split it into smaller sub-tasks "
+                f"and re-file.")
+        except Exception as e:
+            log.warning(f"[{sid}] Failed to post too-complex comment: {e}")
+        self.telegram.notify(
+            f"🛑 `{sid}` hit {MAX_ORPHAN_RESUMES} orphan restarts. "
+            f"Task too complex — needs splitting. Session suspended.",
+            level=NotificationLevel.ACTIONS)
+
+    def _handle_review_orphan_limit(self, sid: str, session_dir: Path,
+                                     state: dict, issue_id: str):
+        """Handle a review session that hit the orphan limit: fail and fall back to human review."""
+        coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
+        log.error(f"[{sid}] Review session hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
+                  f"Falling back to human review for coder session {coder_sid}.")
+        state["status"] = "suspended:review-failed"
+        write_state(session_dir, state)
+
+        # Transition coder session to waiting:human-review
+        coder_dir = self.sessions_dir / coder_sid
+        if coder_dir.exists() and (coder_dir / "state.json").exists():
+            try:
+                update_status(coder_dir, "waiting:human-review")
+            except Exception as e:
+                log.warning(f"[{coder_sid}] Failed to transition coder to human-review: {e}")
+
+        try:
+            tracker = self._get_tracker()
+            tracker.add_comment(issue_id,
+                f"⚠️ Auto-review failed after {MAX_ORPHAN_RESUMES} attempts — "
+                f"falling back to human review.")
+        except Exception as e:
+            log.warning(f"[{sid}] Failed to post review-failed comment: {e}")
+        self.telegram.notify(
+            f"⚠️ `{sid}` auto-review failed after {MAX_ORPHAN_RESUMES} attempts — "
+            f"falling back to human review.\n"
+            f"`nightshift accept/reject/revise {issue_id}`",
+            level=NotificationLevel.ACTIONS)
 
     def _resume_session(self, sid: str, issue_id: str, reason: str):
         """Post lifecycle comment and launch a resume for the given session."""
