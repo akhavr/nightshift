@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from adapters.trackers.git_bug import GitBugTracker
-from core.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY_S
+from core.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_BASE_DELAY_S
 
 
 LOCK_ERROR_PID_42 = "Error: the repository you want to access is already locked by the process pid 42"
@@ -101,15 +101,15 @@ class TestLockRetry:
 
         assert result == ""
 
-    def test_retry_uses_shutdown_wait_for_delay(self, tracker):
-        """Retry delay uses shutdown_event.wait so shutdown can interrupt."""
+    def test_retry_uses_exponential_backoff(self, tracker):
+        """Retry delay doubles each attempt (exponential backoff)."""
         t = tracker
         call_count = 0
 
         def fake_run_interruptible(cmd, timeout):
             nonlocal call_count
             call_count += 1
-            if call_count <= 2:
+            if call_count <= 3:
                 return ("", LOCK_ERROR_PID_42, 1)
             return ("ok", "", 0)
 
@@ -118,8 +118,13 @@ class TestLockRetry:
              patch.object(t._shutdown, "wait", return_value=False) as mock_wait:
             t._run("bug", "show", "abc")
 
-        # Should have called wait with the delay for each retry
-        mock_wait.assert_called_with(timeout=LOCK_RETRY_DELAY_S)
+        # Should have called wait with exponential delays: 1, 2, 4
+        delays = [call.kwargs["timeout"] for call in mock_wait.call_args_list]
+        assert delays == [
+            LOCK_RETRY_BASE_DELAY_S * (2 ** 0),  # 1s
+            LOCK_RETRY_BASE_DELAY_S * (2 ** 1),  # 2s
+            LOCK_RETRY_BASE_DELAY_S * (2 ** 2),  # 4s
+        ]
 
     def test_shutdown_during_retry_returns_empty(self, tracker):
         """If shutdown fires during retry sleep, return immediately."""
@@ -228,10 +233,10 @@ class TestConstants:
     """Verify constants are importable and have expected values."""
 
     def test_lock_retry_attempts_value(self):
-        assert LOCK_RETRY_ATTEMPTS == 3
+        assert LOCK_RETRY_ATTEMPTS == 6
 
-    def test_lock_retry_delay_value(self):
-        assert LOCK_RETRY_DELAY_S == 5
+    def test_lock_retry_base_delay_value(self):
+        assert LOCK_RETRY_BASE_DELAY_S == 1
 
     def test_constants_used_in_run_loop(self, tracker):
         """_run iterates exactly LOCK_RETRY_ATTEMPTS times on persistent lock."""
