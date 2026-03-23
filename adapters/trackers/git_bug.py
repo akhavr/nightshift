@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.protocols import IssueTracker, TrackerIssue, TrackerComment, SHORT_ID_LEN
-from core.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY_S
+from core.constants import LOCK_RETRY_ATTEMPTS, LOCK_RETRY_BASE_DELAY_S
 
 log = logging.getLogger(__name__)
 
@@ -72,8 +72,9 @@ class GitBugTracker:
                         self._clear_stale_lock()
                         continue  # retry immediately after clearing
                     if attempt < LOCK_RETRY_ATTEMPTS - 1:
-                        log.info(f"git-bug locked (pid {pid}), retrying in {LOCK_RETRY_DELAY_S}s...")
-                        if self._shutdown.wait(timeout=LOCK_RETRY_DELAY_S):
+                        delay = LOCK_RETRY_BASE_DELAY_S * (2 ** attempt)
+                        log.info(f"git-bug locked (pid {pid}), retrying in {delay}s...")
+                        if self._shutdown.wait(timeout=delay):
                             return ""  # shutdown during retry sleep
                         continue
                 log.warning(f"git-bug {' '.join(args)} failed (rc={returncode}): {stderr.strip()}")
