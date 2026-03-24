@@ -1,4 +1,4 @@
-"""Template versioning and upgrade logic for WORKFLOW.md prompt sections."""
+"""Template versioning and upgrade logic for WORKFLOW.md and REVIEW.md prompt sections."""
 
 import difflib
 import logging
@@ -22,7 +22,7 @@ DEFAULT_VERSION = 0
 
 
 def read_template_version(text: str) -> int:
-    """Extract template_version from WORKFLOW.md text. Returns 0 if missing."""
+    """Extract template_version from a template file's text. Returns 0 if missing."""
     fm, _ = split_front_matter(text)
     if not fm:
         return DEFAULT_VERSION
