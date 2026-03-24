@@ -149,7 +149,7 @@ On receiving SIGHUP, the host watcher re-reads and re-parses the workflow file, 
 - **Status:** covered
 
 ### REQ-024: Template versioning and upgrade
-WORKFLOW.md includes a `template_version` field in its YAML front matter. A canonical template ships in `templates/WORKFLOW.md`. `nightshift upgrade` compares versions, shows a diff of the prompt section, and with `--apply` patches the prompt while preserving the user's YAML config. `nightshift init` warns when an existing WORKFLOW.md is behind.
+Both WORKFLOW.md and REVIEW.md include a `template_version` field in their YAML front matter. Canonical templates ship in `templates/WORKFLOW.md` and `templates/REVIEW.md`. `nightshift upgrade` compares versions for both files, shows a diff of the prompt section, and with `--apply` patches the prompt while preserving the user's YAML config. REVIEW.md is upgraded alongside WORKFLOW.md if it exists; if absent, it is silently skipped. `nightshift init` scaffolds both from canonical templates and warns when existing files are behind.
 
 - **Tests:** test_upgrade.py
 - **Status:** covered
