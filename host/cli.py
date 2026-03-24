@@ -397,7 +397,7 @@ def _upgrade_template(project_path: Path, canonical_path: Path,
 
     print(f"{label} template_version: {project_version} -> {canonical_version}")
 
-    diff = diff_prompt_sections(project_text, canonical_text)
+    diff = diff_prompt_sections(project_text, canonical_text, label=label)
     if diff:
         print(f"\n{label} prompt section changes:\n")
         print(diff)
@@ -415,7 +415,7 @@ def _upgrade_template(project_path: Path, canonical_path: Path,
 def cmd_upgrade(a):
     """Show or apply prompt section updates from the canonical templates."""
     try:
-        root = repo_root()
+        repo_root()  # validate we're in a git repo
     except subprocess.CalledProcessError:
         print("Not inside a git repository.", file=sys.stderr)
         sys.exit(1)

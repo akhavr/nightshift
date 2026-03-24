@@ -56,7 +56,8 @@ def get_yaml_section(text: str) -> str:
     return fm
 
 
-def diff_prompt_sections(project_text: str, canonical_text: str) -> str:
+def diff_prompt_sections(project_text: str, canonical_text: str,
+                         label: str = "WORKFLOW.md") -> str:
     """Generate a unified diff of the prompt section only.
 
     Returns an empty string if the prompt sections are identical.
@@ -67,7 +68,7 @@ def diff_prompt_sections(project_text: str, canonical_text: str) -> str:
     diff_lines = list(difflib.unified_diff(
         project_prompt,
         canonical_prompt,
-        fromfile="current WORKFLOW.md (prompt section)",
+        fromfile=f"current {label} (prompt section)",
         tofile="canonical template (prompt section)",
     ))
 
@@ -132,7 +133,7 @@ def load_canonical_review_template() -> str:
 
 
 def apply_upgrade(project_text: str, canonical_text: str) -> str:
-    """Apply the canonical prompt section to the project WORKFLOW.md.
+    """Apply the canonical prompt section to a project template file.
 
     Preserves the project's YAML config (except bumps template_version).
     Returns the full updated file content.

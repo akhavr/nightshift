@@ -127,6 +127,13 @@ class TestDiffPromptSections:
         canonical = "---\nagent: bar\n---\nsame prompt"
         assert diff_prompt_sections(project, canonical) == ""
 
+    def test_label_appears_in_diff_header(self):
+        project = "---\nkey: val\n---\nold prompt"
+        canonical = "---\nkey: val\n---\nnew prompt"
+        diff = diff_prompt_sections(project, canonical, label="REVIEW.md")
+        assert "current REVIEW.md (prompt section)" in diff
+        assert "WORKFLOW.md" not in diff
+
 
 # ── _set_version_in_yaml ─────────────────────────────────────────────────────
 
