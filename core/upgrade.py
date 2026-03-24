@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 CANONICAL_TEMPLATE = TEMPLATES_DIR / "WORKFLOW.md"
+CANONICAL_REVIEW_TEMPLATE = TEMPLATES_DIR / "REVIEW.md"
 
 # Field name in YAML front matter
 VERSION_KEY = "template_version"
@@ -108,6 +109,26 @@ def load_canonical_template(base_branch: str = "main") -> str:
         return ""
     text = CANONICAL_TEMPLATE.read_text()
     return text.replace("base_branch: main", f"base_branch: {base_branch}")
+
+
+def get_canonical_review_version() -> int:
+    """Read the template_version from the shipped canonical review template."""
+    if not CANONICAL_REVIEW_TEMPLATE.exists():
+        log.warning("Canonical review template not found at %s", CANONICAL_REVIEW_TEMPLATE)
+        return DEFAULT_VERSION
+    return read_template_version(CANONICAL_REVIEW_TEMPLATE.read_text())
+
+
+def load_canonical_review_template() -> str:
+    """Load the canonical review template.
+
+    Used by ``cmd_init`` so there is a single source of truth for the
+    default REVIEW.md content.
+    """
+    if not CANONICAL_REVIEW_TEMPLATE.exists():
+        log.warning("Canonical review template not found at %s", CANONICAL_REVIEW_TEMPLATE)
+        return ""
+    return CANONICAL_REVIEW_TEMPLATE.read_text()
 
 
 def apply_upgrade(project_text: str, canonical_text: str) -> str:

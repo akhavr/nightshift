@@ -12,13 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.upgrade import (
     read_template_version,
     get_canonical_version,
+    get_canonical_review_version,
     get_prompt_section,
     get_yaml_section,
     diff_prompt_sections,
     apply_upgrade,
     load_canonical_template,
+    load_canonical_review_template,
     _set_version_in_yaml,
     CANONICAL_TEMPLATE,
+    CANONICAL_REVIEW_TEMPLATE,
     DEFAULT_VERSION,
     VERSION_KEY,
 )
@@ -377,3 +380,241 @@ class TestInitVersionHint:
 
         out = capsys.readouterr().out
         assert "nightshift upgrade" not in out
+
+
+# ── get_canonical_review_version ──────────────────────────────────────────
+
+
+class TestGetCanonicalReviewVersion:
+    def test_reads_from_shipped_template(self):
+        version = get_canonical_review_version()
+        assert version >= 1
+
+    def test_missing_template_returns_zero(self):
+        with patch("core.upgrade.CANONICAL_REVIEW_TEMPLATE", Path("/nonexistent/REVIEW.md")):
+            assert get_canonical_review_version() == DEFAULT_VERSION
+
+
+# ── load_canonical_review_template ────────────────────────────────────────
+
+
+class TestLoadCanonicalReviewTemplate:
+    def test_returns_canonical_content(self):
+        result = load_canonical_review_template()
+        assert "template_version:" in result
+        assert "code reviewer" in result.lower()
+
+    def test_missing_template_returns_empty(self):
+        with patch("core.upgrade.CANONICAL_REVIEW_TEMPLATE", Path("/nonexistent/REVIEW.md")):
+            assert load_canonical_review_template() == ""
+
+
+# ── cmd_upgrade with REVIEW.md ────────────────────────────────────────────
+
+
+class TestCmdUpgradeReview:
+    def test_upgrades_review_md_alongside_workflow(self, tmp_path, capsys):
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        review = tmp_path / "REVIEW.md"
+        review.write_text("---\nagent:\n  kind: claude-code\n---\nold review prompt")
+
+        canonical_wf = tmp_path / "canonical_wf.md"
+        canonical_wf.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        canonical_rv = tmp_path / "canonical_rv.md"
+        canonical_rv.write_text("---\ntemplate_version: 1\n---\nnew review prompt")
+
+        args = MagicMock()
+        args.apply = True
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical_wf), \
+             patch("host.cli.CANONICAL_REVIEW_TEMPLATE", canonical_rv):
+            cmd_upgrade(args)
+
+        updated = review.read_text()
+        assert "template_version: 1" in updated
+        assert "new review prompt" in updated
+        assert "old review prompt" not in updated
+
+    def test_review_dry_run_shows_diff(self, tmp_path, capsys):
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        review = tmp_path / "REVIEW.md"
+        review.write_text("---\nagent:\n  kind: claude-code\n---\nold review")
+
+        canonical_wf = tmp_path / "canonical_wf.md"
+        canonical_wf.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        canonical_rv = tmp_path / "canonical_rv.md"
+        canonical_rv.write_text("---\ntemplate_version: 1\n---\nnew review")
+
+        args = MagicMock()
+        args.apply = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical_wf), \
+             patch("host.cli.CANONICAL_REVIEW_TEMPLATE", canonical_rv):
+            cmd_upgrade(args)
+
+        out = capsys.readouterr().out
+        assert "REVIEW.md" in out
+        assert "0 -> 1" in out
+        assert "nightshift upgrade --apply" in out
+
+    def test_review_skipped_when_no_review_file(self, tmp_path, capsys):
+        """When REVIEW.md does not exist, upgrade skips it silently."""
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        canonical_wf = tmp_path / "canonical_wf.md"
+        canonical_wf.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        canonical_rv = tmp_path / "canonical_rv.md"
+        canonical_rv.write_text("---\ntemplate_version: 1\n---\nnew review")
+
+        args = MagicMock()
+        args.apply = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical_wf), \
+             patch("host.cli.CANONICAL_REVIEW_TEMPLATE", canonical_rv):
+            cmd_upgrade(args)
+
+        out = capsys.readouterr().out
+        # REVIEW.md should not appear in output since the file doesn't exist
+        assert "REVIEW.md" not in out
+
+    def test_review_preserves_yaml_config(self, tmp_path, capsys):
+        """Upgrade preserves project-specific YAML in REVIEW.md."""
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        review = tmp_path / "REVIEW.md"
+        review.write_text("---\nagent:\n  max_turns: 99\nreview:\n  max_rounds: 10\n---\nold")
+
+        canonical_wf = tmp_path / "canonical_wf.md"
+        canonical_wf.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        canonical_rv = tmp_path / "canonical_rv.md"
+        canonical_rv.write_text("---\ntemplate_version: 1\n---\nnew")
+
+        args = MagicMock()
+        args.apply = True
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical_wf), \
+             patch("host.cli.CANONICAL_REVIEW_TEMPLATE", canonical_rv):
+            cmd_upgrade(args)
+
+        updated = review.read_text()
+        assert "max_turns: 99" in updated
+        assert "max_rounds: 10" in updated
+        assert "new" in updated
+        assert "old" not in updated
+
+    def test_both_up_to_date(self, tmp_path, capsys):
+        """When both files are up to date, no --apply hint is shown."""
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        review = tmp_path / "REVIEW.md"
+        review.write_text("---\ntemplate_version: 1\n---\nreview prompt")
+
+        canonical_wf = tmp_path / "canonical_wf.md"
+        canonical_wf.write_text("---\ntemplate_version: 1\n---\nprompt")
+
+        canonical_rv = tmp_path / "canonical_rv.md"
+        canonical_rv.write_text("---\ntemplate_version: 1\n---\nreview prompt")
+
+        args = MagicMock()
+        args.apply = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical_wf), \
+             patch("host.cli.CANONICAL_REVIEW_TEMPLATE", canonical_rv):
+            cmd_upgrade(args)
+
+        out = capsys.readouterr().out
+        assert "up to date" in out
+        assert "--apply" not in out
+
+
+# ── cmd_init with canonical review template ───────────────────────────────
+
+
+class TestInitReviewTemplate:
+    def test_init_uses_canonical_review_template(self, tmp_path, capsys):
+        from host.cli import cmd_init
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        import subprocess
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), capture_output=True)
+        (repo / "f.txt").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True)
+
+        args = MagicMock()
+        args.force = False
+        args.workflow_path = None
+        args.workflow = None
+
+        with patch("host.cli.repo_root", return_value=repo):
+            cmd_init(args)
+
+        review_content = (repo / "REVIEW.md").read_text()
+        assert "template_version:" in review_content
+
+    def test_init_warns_review_behind(self, tmp_path, capsys):
+        from host.cli import cmd_init
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        import subprocess
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), capture_output=True)
+        (repo / "f.txt").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True)
+
+        # Create existing REVIEW.md with no version
+        (repo / "REVIEW.md").write_text("---\nagent:\n  kind: claude-code\n---\nold review")
+
+        args = MagicMock()
+        args.force = False
+        args.workflow_path = None
+        args.workflow = None
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.get_canonical_review_version", return_value=1):
+            cmd_init(args)
+
+        out = capsys.readouterr().out
+        assert "REVIEW.md template is behind" in out
