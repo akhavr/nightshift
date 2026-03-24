@@ -733,3 +733,95 @@ class TestHandleReviewCommandBackoff:
         w.reviews.handle_review_command("abc", "issue-abc", "accept", sd)
 
         assert "accept" in actions
+
+
+# ---------------------------------------------------------------------------
+# Review no-verdict fallback tests
+# ---------------------------------------------------------------------------
+
+class TestReviewNoVerdict:
+    """Review sessions that hit max-turns without a verdict fall back to human review."""
+
+    def test_no_verdict_transitions_coder_to_human_review(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(
+            w.sessions_dir, "review-abc",
+            status="suspended:review-no-verdict", issue_id="issue-abc")
+        w.telegram.notify = MagicMock()
+        tracker = MagicMock()
+        w._tracker = tracker
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
+        w.reviews.cleanup_review_session.assert_called_once()
+
+    def test_no_verdict_posts_tracker_comment(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        _make_session(
+            w.sessions_dir, "review-abc",
+            status="suspended:review-no-verdict", issue_id="issue-abc")
+        w.telegram.notify = MagicMock()
+        tracker = MagicMock()
+        w._tracker = tracker
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        tracker.add_comment.assert_called_once()
+        comment_body = tracker.add_comment.call_args[0][1]
+        assert "human review" in comment_body.lower()
+
+    def test_no_verdict_sends_notification(self, tmp_path):
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        _make_session(
+            w.sessions_dir, "review-abc",
+            status="suspended:review-no-verdict", issue_id="issue-abc")
+        tg_calls = []
+        w.telegram.notify = lambda msg, **kw: tg_calls.append(msg)
+        w._tracker = MagicMock()
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        assert len(tg_calls) == 1
+        assert "human review" in tg_calls[0].lower()
+
+    def test_no_verdict_missing_coder_dir_no_crash(self, tmp_path):
+        """If coder session dir is missing, no crash but no status update."""
+        w = _make_watcher(tmp_path)
+        # No coder session created
+        _make_session(
+            w.sessions_dir, "review-abc",
+            status="suspended:review-no-verdict", issue_id="issue-abc")
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()  # should not raise
+
+        w.reviews.cleanup_review_session.assert_called_once()
+
+    def test_no_verdict_tracker_failure_no_crash(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        _make_session(
+            w.sessions_dir, "review-abc",
+            status="suspended:review-no-verdict", issue_id="issue-abc")
+        w.telegram.notify = MagicMock()
+        tracker = MagicMock()
+        tracker.add_comment.side_effect = RuntimeError("tracker down")
+        w._tracker = tracker
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()  # should not raise
+
+        # Coder should still be transitioned despite tracker failure
+        coder_state = json.loads(
+            (w.sessions_dir / "abc" / "state.json").read_text())
+        assert coder_state["status"] == "waiting:human-review"

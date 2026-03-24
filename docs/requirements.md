@@ -53,9 +53,9 @@ A human (or automated reviewer) can request revisions. For sessions in review (`
 - **Status:** covered
 
 ### REQ-009: Automated code review
-When a REVIEW.md template exists, the system automatically launches a reviewer agent against completed work. The reviewer can approve or request revisions, with configurable max review rounds.
+When a REVIEW.md template exists, the system automatically launches a reviewer agent against completed work. The reviewer can approve or request revisions, with configurable max review rounds. When a review session hits max-turns, the system checks if a verdict was already emitted: if yes, it treats the review as successfully completed; if no, it falls back to human review on the coder session.
 
-- **Tests:** test_review_step.py, test_assistant_text_logging.py
+- **Tests:** test_review_step.py, test_assistant_text_logging.py, test_post_run.py (TestReviewMaxTurns, TestScanConversationForVerdict), watcher/test_review_orchestrator.py (TestReviewNoVerdict)
 - **Status:** covered
 
 ### REQ-010: Notifications via pluggable channels

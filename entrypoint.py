@@ -177,6 +177,7 @@ def main():
         merge_config=config.merge,
         hooks_config=config.hooks,
         workspace_config=config.workspace,
+        is_review=(step == "review"),
     )
 
     try:

@@ -37,6 +37,7 @@ class SessionRunner:
         merge_config: "MergeConfig | None" = None,
         hooks_config: "HooksConfig | None" = None,
         workspace_config: "WorkspaceConfig | None" = None,
+        is_review: bool = False,
     ):
         self.agent = agent
         self.tracker = tracker
@@ -47,6 +48,7 @@ class SessionRunner:
         self.prompt = prompt
         self.max_turns = max_turns
         self.terminal_statuses = terminal_statuses
+        self.is_review = is_review
         self._workspace: Workspace | None = None
         self._pending_questions: list[str] = []  # OQ-7: queue, not overwrite
         self._new_comments: list[TrackerComment] = []  # accumulated from tracker reload
@@ -292,7 +294,8 @@ class SessionRunner:
             self.tracker, self.notifier, self.issue, self.agent,
             self._build_resume, self._commit_wip,
             base_branch=self.workspace_config.base_branch,
-            test_command=self.workspace_config.test_command)
+            test_command=self.workspace_config.test_command,
+            is_review=self.is_review)
 
     # ── Workspace helpers ─────────────────────────────────────
 

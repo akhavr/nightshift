@@ -202,13 +202,21 @@ class ReviewOrchestrator:
             self._process_reviewer_session(sid, session_dir)
 
     def _process_reviewer_session(self, sid: str, session_dir: Path):
-        """Check a single reviewer session for verdict."""
+        """Check a single reviewer session for verdict or no-verdict fallback."""
         try:
             state = read_state(session_dir)
         except (json.JSONDecodeError, OSError) as e:
             log.warning(f"[{sid}] Failed to read reviewer state: {e}")
             return
-        if state.get("status") != "waiting:review":
+
+        status = state.get("status", "")
+
+        # Review hit max-turns without emitting a verdict — fall back to human
+        if status == "suspended:review-no-verdict":
+            self._handle_review_no_verdict(sid, session_dir, state)
+            return
+
+        if status != "waiting:review":
             return
 
         issue_id = state.get("issue_id", "")
@@ -228,6 +236,37 @@ class ReviewOrchestrator:
         elif verdict == "revise":
             self._posted_done.discard(coder_sid)
             self.verdicts.handle_reviewer_revise(coder_sid, coder_dir, issue_id, session_dir)
+
+        self.cleanup_review_session(sid, session_dir)
+
+    def _handle_review_no_verdict(self, sid: str, session_dir: Path, state: dict):
+        """Review session hit max-turns without a verdict — escalate to human review."""
+        issue_id = state.get("issue_id", "")
+        coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
+        coder_dir = self.sessions_dir / coder_sid
+
+        log.warning(f"[{sid}] Review hit max-turns with no verdict — "
+                    f"falling back to human review for {coder_sid}")
+
+        if coder_dir.exists() and (coder_dir / "state.json").exists():
+            try:
+                _update_status(coder_dir, "waiting:human-review")
+            except Exception as e:
+                log.warning(f"[{coder_sid}] Failed to transition coder to human-review: {e}")
+
+        try:
+            tracker = self._get_tracker()
+            tracker.add_comment(issue_id,
+                "⚠️ Auto-review hit max-turns without a verdict — "
+                "falling back to human review.")
+        except Exception as e:
+            log.warning(f"[{sid}] Failed to post review-no-verdict comment: {e}")
+
+        self.telegram.notify(
+            f"⚠️ `{sid}` review hit max-turns without verdict — "
+            f"falling back to human review.\n"
+            f"`nightshift accept/reject/revise {issue_id}`",
+            level=NotificationLevel.ACTIONS)
 
         self.cleanup_review_session(sid, session_dir)
 

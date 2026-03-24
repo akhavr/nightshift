@@ -1,5 +1,6 @@
 """Tests for core/post_run.py — post-run lifecycle functions."""
 
+import json
 from pathlib import Path
 
 from core.protocols import (
@@ -10,6 +11,7 @@ from core.constants import TITLE_TRUNCATE_LEN
 from core.post_run import (
     post_run_action, notify_done, resume_with_answer,
     prepare_resume, maybe_summarize_checkpoints,
+    scan_conversation_for_verdict,
 )
 
 from tests.conftest import (
@@ -278,3 +280,91 @@ class TestPostRunRebase:
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
             lambda **kw: None, lambda r: None)
         assert len(ws_mgr.rebase_calls) == 0
+
+
+class TestScanConversationForVerdict:
+    def test_finds_approve(self, tmp_path):
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "All tests pass. @nightshift approve")
+        assert scan_conversation_for_verdict(sm) == "approve"
+
+    def test_finds_revise(self, tmp_path):
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "Fix error handling. @nightshift revise")
+        assert scan_conversation_for_verdict(sm) == "revise"
+
+    def test_returns_none_without_verdict(self, tmp_path):
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "Running tests...")
+        assert scan_conversation_for_verdict(sm) is None
+
+    def test_returns_none_no_log(self, tmp_path):
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        assert scan_conversation_for_verdict(sm) is None
+
+    def test_ignores_code_blocks(self, tmp_path):
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "```\n@nightshift approve\n```")
+        assert scan_conversation_for_verdict(sm) is None
+
+    def test_finds_latest_verdict(self, tmp_path):
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "@nightshift revise")
+        sm.append_conversation("assistant", "Fixed. @nightshift approve")
+        assert scan_conversation_for_verdict(sm) == "approve"
+
+
+class TestReviewMaxTurns:
+    """Review sessions should not auto-resume on max-turns."""
+
+    def test_review_max_turns_with_verdict_treats_as_done(self, tmp_path):
+        """When review hits max-turns but a verdict was emitted, treat as done."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("working")
+        sm.append_conversation("assistant", "All tests pass. @nightshift approve")
+        commits = []
+        result = post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: commits.append(r),
+            is_review=True)
+        assert result is None
+        assert sm.load_state().status == "waiting:review"
+        assert "max-turns" in commits
+
+    def test_review_max_turns_without_verdict_falls_back(self, tmp_path):
+        """When review hits max-turns with no verdict, set suspended:review-no-verdict."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("working")
+        sm.append_conversation("assistant", "Running tests...")
+        commits = []
+        result = post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: commits.append(r),
+            is_review=True)
+        assert result is None
+        assert sm.load_state().status == "suspended:review-no-verdict"
+        assert "max-turns" in commits
+        assert any("human review" in n for n in notifier.notifications)
+
+    def test_coder_max_turns_still_auto_resumes(self, tmp_path):
+        """Non-review sessions should still auto-resume on max-turns."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("working")
+        sm.write_resume_prompt("resume")
+        result = post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None,
+            is_review=False)
+        assert result == "resume"
+
+    def test_review_max_turns_with_revise_verdict(self, tmp_path):
+        """Review max-turns with revise verdict should also treat as done."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("working")
+        sm.append_conversation("assistant", "Tests fail. @nightshift revise")
+        result = post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None,
+            is_review=True)
+        assert result is None
+        assert sm.load_state().status == "waiting:review"
