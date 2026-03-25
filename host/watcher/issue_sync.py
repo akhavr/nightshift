@@ -2,6 +2,8 @@
 
 Reads (host -> container):
   Re-dumps issue.json to session dirs so the container sees new comments.
+  Throttled to ISSUE_REDUMP_INTERVAL_S per session to reduce git-bug lock
+  contention (each redump acquires the lock twice: get_issue + get_comments).
 
 Writes (container -> host):
   Processes tracker-outbox.jsonl entries, applying them via the real tracker.
@@ -9,13 +11,18 @@ Writes (container -> host):
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from core.constants import TRACKER_OUTBOX_FILENAME, TRACKER_OUTBOX_PROCESSING
+from host.constants import ISSUE_REDUMP_INTERVAL_S
 from host.session_utils import read_state
 from host.issue_dump import redump_issue
 
 log = logging.getLogger("watcher")
+
+# Tracks last redump time per session ID to enforce the throttle.
+_last_redump: dict[str, float] = {}
 
 _WORKING_STATUSES = ("working", "starting", "waiting:answer")
 
@@ -140,9 +147,14 @@ def sync_sessions(sessions_dir: Path, tracker) -> None:
         # Process outbox for any session that has one (even non-working)
         process_outbox(session_dir, tracker)
 
-        # Re-dump issue.json only for active sessions
+        # Re-dump issue.json only for active sessions, throttled
         if status in _WORKING_STATUSES:
+            sid = session_dir.name
+            now = time.time()
+            if now - _last_redump.get(sid, 0) < ISSUE_REDUMP_INTERVAL_S:
+                continue
             try:
                 redump_issue(tracker, issue_id, session_dir)
+                _last_redump[sid] = now
             except Exception as e:
                 log.warning(f"[{session_dir.name}] Re-dump failed: {e}")

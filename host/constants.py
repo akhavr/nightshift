@@ -11,6 +11,7 @@ REVIEW_SESSION_PREFIX = "review-"  # prefix for review session IDs
 REVIEW_POLL_INTERVAL_S = 30
 MAIN_LOOP_SLEEP_S = 2
 PRE_PAUSE_DELAY_S = 1
+ISSUE_REDUMP_INTERVAL_S = 30  # Min interval between issue.json re-dumps per session
 
 # ── Timeouts and thresholds ──────────────────────────────
 STILL_WAITING_LOG_INTERVAL_S = 300    # Log "still waiting" every 5 min

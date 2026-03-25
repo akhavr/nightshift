@@ -29,11 +29,15 @@ def _truncate(text: str, max_len: int = _PREVIEW_LEN) -> str:
 
 
 def _safe_post(get_tracker: Callable, issue_id: str, body: str, event: str, sid: str) -> None:
-    """Post a comment and sync, logging failures without raising."""
+    """Post a comment, logging failures without raising.
+
+    Does NOT call tracker.sync() — the watcher's main loop syncs
+    periodically via _maybe_sync_tracker(), avoiding extra lock
+    acquisitions on every lifecycle comment.
+    """
     try:
         tracker = get_tracker()
         tracker.add_comment(issue_id, body)
-        tracker.sync()
     except Exception as e:
         log.warning(f"[{sid}] Failed to post lifecycle comment ({event}): {e}")
 

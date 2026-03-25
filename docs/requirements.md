@@ -101,9 +101,9 @@ Inside the container, issue data is read from pre-dumped JSON files (no network 
 - **Status:** covered
 
 ### REQ-016b: Live issue sync between host and container
-The host watcher re-dumps issue.json (including comments) to session dirs for active sessions each loop iteration. The container's StaticTracker detects mtime changes via reload() and returns new comments. The SessionRunner injects new comments into resume prompts. Container write operations (comments, labels, status changes) are appended to tracker-outbox.jsonl, which the host watcher processes via the real tracker. The sync is file-based with polling (~30s acceptable delay), preserving container sandboxing.
+The host watcher re-dumps issue.json (including comments) to session dirs for active sessions. Re-dumps are throttled to once per `ISSUE_REDUMP_INTERVAL_S` (30s) per session to reduce git-bug lock contention (each redump acquires the lock twice: get_issue + get_comments). The container's StaticTracker detects mtime changes via reload() and returns new comments. The SessionRunner injects new comments into resume prompts. Container write operations (comments, labels, status changes) are appended to tracker-outbox.jsonl, which the host watcher processes via the real tracker. Lifecycle comments do not trigger immediate tracker sync — the watcher syncs periodically. The sync is file-based with polling (~30s acceptable delay), preserving container sandboxing.
 
-- **Tests:** test_static_tracker.py (reload, outbox), test_issue_redump.py, watcher/test_issue_sync.py, test_session_runner.py (TestTrackerReload)
+- **Tests:** test_static_tracker.py (reload, outbox), test_issue_redump.py, watcher/test_issue_sync.py (including throttle tests), test_session_runner.py (TestTrackerReload)
 - **Status:** covered
 
 ### REQ-017: Auto-start new issues
@@ -154,6 +154,12 @@ WORKFLOW.md includes a `template_version` field in its YAML front matter. A cano
 - **Tests:** test_upgrade.py
 - **Status:** covered
 
+### REQ-025: git-bug lock retry and stale lock detection
+All git-bug CLI operations route through `GitBugTracker._run()` which retries on lock errors with exponential backoff (`LOCK_RETRY_ATTEMPTS` attempts, base delay `LOCK_RETRY_BASE_DELAY_S` doubling each retry). If the locking PID is dead (stale lock), the lock files are cleared and the command retries immediately without backoff. Live PID locks are never forcibly removed. Shutdown events interrupt retry waits.
+
+- **Tests:** test_git_bug_lock_retry.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -170,6 +176,7 @@ WORKFLOW.md includes a `template_version` field in its YAML front matter. A cano
 | test_config_factories.py | REQ-011, REQ-022 |
 | test_docker_utils.py | REQ-019 |
 | test_dotenv.py | REQ-013 |
+| test_git_bug_lock_retry.py | REQ-025 |
 | test_git_utils.py | REQ-001, REQ-006 |
 | test_launch.py | REQ-001, REQ-018 |
 | test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015 |

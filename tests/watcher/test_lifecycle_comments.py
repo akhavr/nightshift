@@ -22,14 +22,15 @@ from tests.watcher.conftest import _make_watcher, _make_session
 # ---------------------------------------------------------------------------
 
 class TestSafePost:
-    def test_posts_comment_and_syncs(self):
+    def test_posts_comment_without_sync(self):
         tracker = MagicMock()
         get_tracker = MagicMock(return_value=tracker)
 
         _safe_post(get_tracker, "issue-1", "hello", "test", "sid-1")
 
         tracker.add_comment.assert_called_once_with("issue-1", "hello")
-        tracker.sync.assert_called_once()
+        # sync() is NOT called — the watcher syncs periodically via _maybe_sync_tracker()
+        tracker.sync.assert_not_called()
 
     def test_logs_on_tracker_failure(self):
         get_tracker = MagicMock(side_effect=RuntimeError("tracker down"))
@@ -44,15 +45,6 @@ class TestSafePost:
 
         # Should not raise
         _safe_post(get_tracker, "issue-1", "hello", "test", "sid-1")
-
-    def test_logs_on_sync_failure(self):
-        tracker = MagicMock()
-        tracker.sync.side_effect = RuntimeError("sync failed")
-        get_tracker = MagicMock(return_value=tracker)
-
-        # Should not raise -- comment was posted even if sync fails
-        _safe_post(get_tracker, "issue-1", "hello", "test", "sid-1")
-        tracker.add_comment.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

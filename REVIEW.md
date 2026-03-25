@@ -92,3 +92,7 @@ Be strict. Do not accept "good enough" or "can be cleaned up later".
 Every merge goes to master and stays. Flag and reject: duplicated logic,
 missing features from the issue spec, untested code paths, CLAUDE.md drift,
 silent exception swallowing.
+
+## Boundaries
+
+Your only actions are reviewing code and outputting a verdict (`@nightshift approve` or `@nightshift revise`). Do NOT close issues, change labels, push code, manage git-bug state, or perform any tracker operations. The host handles all lifecycle management after your verdict.

@@ -8,9 +8,18 @@ from dataclasses import asdict
 
 from core.constants import TRACKER_OUTBOX_FILENAME, TRACKER_OUTBOX_PROCESSING
 from core.protocols import TrackerIssue, TrackerComment
+import host.watcher.issue_sync as issue_sync_mod
 from host.watcher.issue_sync import process_outbox, sync_sessions, _apply_outbox_entry
 
 from tests.watcher.conftest import _make_session
+
+
+@pytest.fixture(autouse=True)
+def reset_redump_throttle():
+    """Clear the per-session redump throttle between tests."""
+    issue_sync_mod._last_redump.clear()
+    yield
+    issue_sync_mod._last_redump.clear()
 
 
 @pytest.fixture
@@ -171,3 +180,28 @@ class TestSyncSessions:
         with patch("host.watcher.issue_sync.redump_issue", return_value=True) as mock_redump:
             sync_sessions(sessions_dir, mock_tracker)
             assert mock_redump.call_count == 3
+
+    def test_redump_throttled_within_interval(self, sessions_dir, mock_tracker):
+        """Second sync_sessions call within ISSUE_REDUMP_INTERVAL_S skips redump."""
+        _make_session(sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        with patch("host.watcher.issue_sync.redump_issue", return_value=True) as mock_redump:
+            sync_sessions(sessions_dir, mock_tracker)
+            assert mock_redump.call_count == 1
+
+            # Second call immediately — should be throttled
+            sync_sessions(sessions_dir, mock_tracker)
+            assert mock_redump.call_count == 1
+
+    def test_redump_fires_after_interval_expires(self, sessions_dir, mock_tracker):
+        """After ISSUE_REDUMP_INTERVAL_S passes, redump fires again."""
+        _make_session(sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        with patch("host.watcher.issue_sync.redump_issue", return_value=True) as mock_redump:
+            sync_sessions(sessions_dir, mock_tracker)
+            assert mock_redump.call_count == 1
+
+            # Expire the throttle by backdating _last_redump
+            issue_sync_mod._last_redump["abc"] = 0.0
+            sync_sessions(sessions_dir, mock_tracker)
+            assert mock_redump.call_count == 2
