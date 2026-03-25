@@ -142,6 +142,7 @@ def notify_done(
 ):
     """Post proof-of-work summary and notify."""
     state_mgr.update_status("waiting:review")
+    state_mgr.mark_completed()
     diff = workspace_mgr.diff_stat(workspace.path) if workspace else "N/A"
     ticks = "```"
 

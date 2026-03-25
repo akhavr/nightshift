@@ -11,9 +11,9 @@ The system creates a git worktree per issue and runs the coding agent inside a D
 - **Status:** covered
 
 ### REQ-002: Session lifecycle management
-The system tracks session state (working, suspended, waiting, done) with atomic JSON persistence and exposes status via CLI. Auth failures are detected and set a distinct `suspended:auth-failure` status instead of burning through resume attempts.
+The system tracks session state (working, suspended, waiting, done) with atomic JSON persistence and exposes status via CLI. Auth failures are detected and set a distinct `suspended:auth-failure` status instead of burning through resume attempts. Successfully completed review sessions set a `completed_at` timestamp to prevent misclassification as orphans by the watcher.
 
-- **Tests:** test_marker_reliability.py, test_cli_commands.py, test_session_runner.py (TestAuthFailure), test_session_utils_host.py, watcher/test_graceful_shutdown.py, watcher/test_lifecycle_comments.py, watcher/test_session_monitor.py (TestCheckAuthFailures)
+- **Tests:** test_marker_reliability.py, test_cli_commands.py, test_session_runner.py (TestAuthFailure), test_session_utils_host.py, watcher/test_graceful_shutdown.py, watcher/test_lifecycle_comments.py, watcher/test_session_monitor.py (TestCheckAuthFailures, TestCheckOrphanedSessions: test_review_session_completed_at_not_orphan), test_post_run.py (TestNotifyDone: test_sets_completed_at)
 - **Status:** covered
 
 ### REQ-003: Human Q&A

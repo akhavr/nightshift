@@ -201,6 +201,16 @@ class TestNotifyDone:
         notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
         assert any(issue.title in n for n in notifier.notifications)
 
+    def test_sets_completed_at(self, tmp_path):
+        """notify_done must set completed_at to prevent orphan misclassification."""
+        _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        st = sm.load_state()
+        assert st.completed_at == ""
+        notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
+        st = sm.load_state()
+        assert st.completed_at != ""
+        assert st.status == "waiting:review"
+
 
 class TestMaybeSummarizeCheckpoints:
     def test_skips_short_list(self, tmp_path):
