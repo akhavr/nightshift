@@ -1,4 +1,4 @@
-"""Template versioning and upgrade logic for WORKFLOW.md prompt sections."""
+"""Template versioning and upgrade logic for WORKFLOW.md and REVIEW.md prompt sections."""
 
 import difflib
 import logging
@@ -12,6 +12,7 @@ log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 CANONICAL_TEMPLATE = TEMPLATES_DIR / "WORKFLOW.md"
+CANONICAL_REVIEW_TEMPLATE = TEMPLATES_DIR / "REVIEW.md"
 
 # Field name in YAML front matter
 VERSION_KEY = "template_version"
@@ -21,7 +22,7 @@ DEFAULT_VERSION = 0
 
 
 def read_template_version(text: str) -> int:
-    """Extract template_version from WORKFLOW.md text. Returns 0 if missing."""
+    """Extract template_version from a template file's text. Returns 0 if missing."""
     fm, _ = split_front_matter(text)
     if not fm:
         return DEFAULT_VERSION
@@ -55,7 +56,8 @@ def get_yaml_section(text: str) -> str:
     return fm
 
 
-def diff_prompt_sections(project_text: str, canonical_text: str) -> str:
+def diff_prompt_sections(project_text: str, canonical_text: str,
+                         label: str = "WORKFLOW.md") -> str:
     """Generate a unified diff of the prompt section only.
 
     Returns an empty string if the prompt sections are identical.
@@ -66,7 +68,7 @@ def diff_prompt_sections(project_text: str, canonical_text: str) -> str:
     diff_lines = list(difflib.unified_diff(
         project_prompt,
         canonical_prompt,
-        fromfile="current WORKFLOW.md (prompt section)",
+        fromfile=f"current {label} (prompt section)",
         tofile="canonical template (prompt section)",
     ))
 
@@ -110,8 +112,28 @@ def load_canonical_template(base_branch: str = "main") -> str:
     return text.replace("base_branch: main", f"base_branch: {base_branch}")
 
 
+def get_canonical_review_version() -> int:
+    """Read the template_version from the shipped canonical review template."""
+    if not CANONICAL_REVIEW_TEMPLATE.exists():
+        log.warning("Canonical review template not found at %s", CANONICAL_REVIEW_TEMPLATE)
+        return DEFAULT_VERSION
+    return read_template_version(CANONICAL_REVIEW_TEMPLATE.read_text())
+
+
+def load_canonical_review_template() -> str:
+    """Load the canonical review template.
+
+    Used by ``cmd_init`` so there is a single source of truth for the
+    default REVIEW.md content.
+    """
+    if not CANONICAL_REVIEW_TEMPLATE.exists():
+        log.warning("Canonical review template not found at %s", CANONICAL_REVIEW_TEMPLATE)
+        return ""
+    return CANONICAL_REVIEW_TEMPLATE.read_text()
+
+
 def apply_upgrade(project_text: str, canonical_text: str) -> str:
-    """Apply the canonical prompt section to the project WORKFLOW.md.
+    """Apply the canonical prompt section to a project template file.
 
     Preserves the project's YAML config (except bumps template_version).
     Returns the full updated file content.

@@ -17,8 +17,10 @@ from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
 from core.upgrade import (
     read_template_version, get_canonical_version,
-    diff_prompt_sections, apply_upgrade, CANONICAL_TEMPLATE,
-    load_canonical_template,
+    get_canonical_review_version,
+    diff_prompt_sections, apply_upgrade,
+    CANONICAL_TEMPLATE, CANONICAL_REVIEW_TEMPLATE,
+    load_canonical_template, load_canonical_review_template,
 )
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
@@ -343,7 +345,17 @@ def cmd_init(a):
         config_file = write_local_config(root, str(workflow_path))
         print(f"Created {config_file} (points to {workflow_path})")
 
-    _scaffold_file(root / "REVIEW.md", DEFAULT_REVIEW_MD, a.force)
+    review_path = root / "REVIEW.md"
+    if review_path.exists() and not a.force:
+        existing_rv = read_template_version(review_path.read_text())
+        canonical_rv = get_canonical_review_version()
+        if existing_rv < canonical_rv:
+            print(f"Hint: REVIEW.md template is behind "
+                  f"(v{existing_rv} < v{canonical_rv}). "
+                  f"Run `nightshift upgrade` to see prompt updates.")
+
+    review_content = load_canonical_review_template() or DEFAULT_REVIEW_MD
+    _scaffold_file(review_path, review_content, a.force)
     _scaffold_file(root / ".env.example", DEFAULT_ENV_EXAMPLE, a.force)
 
     aw_dir = root / ".nightshift" / "sessions"
@@ -358,8 +370,50 @@ def cmd_init(a):
     print("  3. Run: nightshift start <issue-id>")
 
 
+def _upgrade_template(project_path: Path, canonical_path: Path,
+                      label: str, apply: bool) -> bool:
+    """Diff and optionally apply a canonical template upgrade to a project file.
+
+    Returns True if the file was behind and needed an upgrade, False if up to date.
+    Skips silently if the project file does not exist.
+    """
+    if not project_path.exists():
+        return False
+
+    if not canonical_path.exists():
+        print(f"Canonical {label} template not found. Reinstall nightshift.",
+              file=sys.stderr)
+        return False
+
+    project_text = project_path.read_text()
+    canonical_text = canonical_path.read_text()
+
+    project_version = read_template_version(project_text)
+    canonical_version = read_template_version(canonical_text)
+
+    if project_version >= canonical_version:
+        print(f"{label} is up to date (template_version: {project_version}).")
+        return False
+
+    print(f"{label} template_version: {project_version} -> {canonical_version}")
+
+    diff = diff_prompt_sections(project_text, canonical_text, label=label)
+    if diff:
+        print(f"\n{label} prompt section changes:\n")
+        print(diff)
+    else:
+        print(f"\n{label} prompt sections are identical (only version bump needed).")
+
+    if apply:
+        updated = apply_upgrade(project_text, canonical_text)
+        project_path.write_text(updated)
+        print(f"\nApplied upgrade to {project_path} "
+              f"(template_version: {canonical_version}).")
+    return True
+
+
 def cmd_upgrade(a):
-    """Show or apply prompt section updates from the canonical template."""
+    """Show or apply prompt section updates from the canonical templates."""
     try:
         repo_root()  # validate we're in a git repo
     except subprocess.CalledProcessError:
@@ -377,31 +431,18 @@ def cmd_upgrade(a):
               file=sys.stderr)
         sys.exit(1)
 
-    project_text = workflow_path.read_text()
-    canonical_text = CANONICAL_TEMPLATE.read_text()
+    workflow_changed = _upgrade_template(
+        workflow_path, CANONICAL_TEMPLATE, "WORKFLOW.md", a.apply)
 
-    project_version = read_template_version(project_text)
-    canonical_version = read_template_version(canonical_text)
+    # Also upgrade REVIEW.md if it exists next to the workflow file
+    review_path = workflow_path.parent / "REVIEW.md"
+    review_changed = _upgrade_template(
+        review_path, CANONICAL_REVIEW_TEMPLATE, "REVIEW.md", a.apply)
 
-    if project_version >= canonical_version:
-        print(f"WORKFLOW.md is up to date (template_version: {project_version}).")
+    if not workflow_changed and not review_changed:
         return
 
-    print(f"WORKFLOW.md template_version: {project_version} -> {canonical_version}")
-
-    diff = diff_prompt_sections(project_text, canonical_text)
-    if diff:
-        print("\nPrompt section changes:\n")
-        print(diff)
-    else:
-        print("\nPrompt sections are identical (only version bump needed).")
-
-    if a.apply:
-        updated = apply_upgrade(project_text, canonical_text)
-        workflow_path.write_text(updated)
-        print(f"\nApplied upgrade to {workflow_path} "
-              f"(template_version: {canonical_version}).")
-    else:
+    if not a.apply:
         print("\nRun `nightshift upgrade --apply` to apply these changes.")
 
 
