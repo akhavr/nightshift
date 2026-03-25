@@ -105,7 +105,7 @@ class TestCheckOrphanedSessions:
         assert launched == []
 
     def test_review_session_waiting_review_no_container_is_orphan(self, tmp_path):
-        """Review session with waiting:review and no container -> orphaned, resumed."""
+        """Review session with waiting:review, no completed_at, and no container -> orphaned."""
         w = _make_watcher(tmp_path)
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
@@ -118,6 +118,42 @@ class TestCheckOrphanedSessions:
         assert "review-abc" in launched
         state = json.loads((sd / "state.json").read_text())
         assert state["orphan_resumes"] == 1
+
+    def test_review_session_completed_at_not_orphan(self, tmp_path):
+        """Review session with waiting:review and completed_at set -> NOT an orphan.
+
+        This is the core fix for the race condition: a review session that
+        completed normally (@@DONE@@ -> notify_done -> completed_at) should
+        not be misclassified as orphaned just because its container exited.
+        """
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        # Simulate notify_done() having set completed_at
+        state = json.loads((sd / "state.json").read_text())
+        state["completed_at"] = "2026-03-25T00:00:00+00:00"
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+
+    def test_review_session_no_completed_at_still_orphan(self, tmp_path):
+        """Review session with waiting:review but no completed_at -> still an orphan (crashed)."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert "review-abc" in launched
 
     def test_review_session_waiting_review_running_container_not_orphan(self, tmp_path):
         """Review session with waiting:review and running container -> NOT orphaned."""

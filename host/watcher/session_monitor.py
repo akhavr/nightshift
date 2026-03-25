@@ -84,11 +84,14 @@ class SessionMonitor:
         is_review_session = sid.startswith(REVIEW_SESSION_PREFIX)
 
         # Review sessions in waiting:review with no container are orphaned
-        # (the review container crashed). Coder sessions in waiting:review
-        # are expected to have no container — the coder is paused while
-        # the review handles them.
+        # (the review container crashed) — UNLESS they completed normally.
+        # A completed_at timestamp means notify_done() ran successfully and
+        # the container exited after @@DONE@@, so it's not an orphan.
+        # Coder sessions in waiting:review are expected to have no
+        # container — the coder is paused while the review handles them.
         if status == "waiting:review" and is_review_session:
-            pass  # fall through to container check
+            if state.get("completed_at"):
+                return  # normal completion, not an orphan
         elif status not in ("working", "starting"):
             return
 

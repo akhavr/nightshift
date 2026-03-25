@@ -32,6 +32,7 @@ class SessionState:
     step: int = 0
     started_at: str = ""
     orphan_resumes: int = 0
+    completed_at: str = ""
     checkpoints: list[Checkpoint] = field(default_factory=list)
     human_answers: list[QAExchange] = field(default_factory=list)
 
@@ -58,6 +59,12 @@ class StateManager:
 
     def update_status(self, s: str):
         st = self.load_state(); st.status = s; self._write(st)
+
+    def mark_completed(self):
+        """Set completed_at timestamp to indicate a normal session completion."""
+        st = self.load_state()
+        st.completed_at = datetime.now(timezone.utc).isoformat()
+        self._write(st)
 
     def increment_step(self) -> int:
         st = self.load_state(); st.step += 1; self._write(st); return st.step
