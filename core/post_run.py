@@ -3,6 +3,7 @@
 Extracted from SessionRunner to keep session.py focused on the event loop.
 """
 
+import json
 import logging
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from core.protocols import (
 )
 from core.constants import TITLE_TRUNCATE_LEN
 from core.rebase import attempt_pre_review_rebase
+from core.review import parse_nightshift_command
 from core.state import StateManager
 
 log = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ def post_run_action(
     commit_wip_fn,
     base_branch: str = "master",
     test_command: str | None = None,
+    is_review: bool = False,
 ) -> str | None:
     """Determine what to do after an agent cycle. Returns resume prompt or None."""
     st = state_mgr.load_state()
@@ -60,6 +63,11 @@ def post_run_action(
         return prepare_resume(
             state_mgr, tracker, notifier, issue, agent, workspace,
             build_resume_fn, reason)
+    if st.status == "working" and is_review:
+        commit_wip_fn("max-turns")
+        return _handle_review_max_turns(
+            state_mgr, workspace_mgr, workspace, tracker, notifier,
+            issue, st, build_resume_fn)
     if st.status == "working":
         commit_wip_fn("max-turns")
         return prepare_resume(
@@ -71,6 +79,55 @@ def post_run_action(
     build_resume_fn()
     notifier.notify(f"⚠️ {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — ended unexpectedly.",
                     level=NotificationLevel.ACTIONS)
+    return None
+
+
+def _handle_review_max_turns(
+    state_mgr: StateManager,
+    workspace_mgr: WorkspaceManager,
+    workspace: Workspace | None,
+    tracker: IssueTracker,
+    notifier: Notifier,
+    issue: TrackerIssue,
+    st,
+    build_resume_fn,
+) -> None:
+    """Handle a review session that hit max-turns without @@DONE@@.
+
+    If a verdict (@nightshift approve/revise) was emitted in the conversation,
+    treat as successful completion (waiting:review). Otherwise, fall back to
+    suspended:review-no-verdict so the watcher escalates to human review.
+    """
+    verdict = scan_conversation_for_verdict(state_mgr)
+    if verdict:
+        log.info(f"Review hit max-turns but verdict '{verdict}' found — treating as done")
+        notify_done(state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st)
+        return None
+    log.warning("Review hit max-turns with no verdict — falling back to human review")
+    state_mgr.update_status("suspended:review-no-verdict")
+    build_resume_fn()
+    notifier.notify(
+        f"⚠️ {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}"
+        f" — review hit max-turns without verdict, needs human review.",
+        level=NotificationLevel.ACTIONS)
+    return None
+
+
+def scan_conversation_for_verdict(state_mgr: StateManager) -> str | None:
+    """Scan conversation.jsonl for a @nightshift approve/revise verdict."""
+    conv_log = state_mgr.conversation_log
+    if not conv_log.exists():
+        return None
+    for line in reversed(conv_log.read_text().strip().splitlines()):
+        try:
+            entry = json.loads(line)
+            text = entry.get("content", "")
+            cmd = parse_nightshift_command(text)
+            if cmd in ("approve", "revise"):
+                return cmd
+        except (json.JSONDecodeError, KeyError) as e:
+            log.debug(f"Failed to parse conversation log line: {e}")
+            continue
     return None
 
 
