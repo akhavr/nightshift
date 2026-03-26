@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow, create_tracker
+from host.tracker_client import get_tracker_with_fallback
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
 from core.upgrade import (
@@ -449,7 +450,7 @@ def cmd_upgrade(a):
 def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
     """Post accept failure to tracker as a comment."""
     try:
-        tracker = create_tracker(config, repo_dir=str(repo))
+        tracker = get_tracker_with_fallback(config, repo)
         tracker.add_comment(issue_id, f"⚠️ Accept failed: {message}")
         tracker.sync()
     except Exception as e:
@@ -506,7 +507,7 @@ def cmd_accept(a):
     _cleanup_review_artifacts(r, sid, config)
 
     try:
-        tracker = create_tracker(config, repo_dir=str(r))
+        tracker = get_tracker_with_fallback(config, r)
         tracker.set_status(a.issue_id, "closed")
         tracker.add_comment(a.issue_id, f"✅ Accepted and merged into `{base}`.")
         tracker.sync()
@@ -539,7 +540,7 @@ def cmd_reject(a):
         shutil.rmtree(ss)
 
     try:
-        tracker = create_tracker(config, repo_dir=str(r))
+        tracker = get_tracker_with_fallback(config, r)
         tracker.set_status(a.issue_id, "closed")
         tracker.add_comment(a.issue_id, "🛑 Rejected — agent work discarded.")
         tracker.sync()
@@ -582,7 +583,7 @@ def _stop_and_build_mid_flight(sid: str, sd, message: str) -> str:
 def _collect_review_feedback(wf, repo, issue_id: str, inline) -> str:
     """Collect tracker comments and return a review revision prompt."""
     config = load_workflow(wf)
-    tracker = create_tracker(config, repo_dir=str(repo))
+    tracker = get_tracker_with_fallback(config, repo)
     review_comments = collect_review_feedback(tracker, issue_id)
     feedback = build_revise_prompt(review_comments, inline)
     if not feedback.strip() or (not review_comments and not inline):
@@ -639,7 +640,7 @@ def cmd_issue(a):
     r = repo_root()
     wf = _resolve_workflow(a)
     config = load_workflow(wf)
-    tracker = create_tracker(config, repo_dir=str(r))
+    tracker = get_tracker_with_fallback(config, r)
     try:
         output = tracker.run_raw(*a.tracker_args)
     except NotImplementedError as e:

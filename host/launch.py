@@ -13,7 +13,8 @@ from pathlib import Path
 
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.config import load_workflow, create_tracker
+from core.config import load_workflow
+from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX
 from host.docker_cmd import run_container
@@ -73,7 +74,7 @@ def _post_container(session_dir, config, repo, issue_id):
     )
 
     try:
-        tracker = create_tracker(config, repo_dir=str(repo))
+        tracker = get_tracker_with_fallback(config, repo)
         tracker.add_comment(issue_id, proof)
         tracker.add_label(issue_id, "needs-review")
         try:

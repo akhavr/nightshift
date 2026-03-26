@@ -13,7 +13,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from core.config import create_tracker
+from host.tracker_client import get_tracker_with_fallback
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def dump_issue_data(config, repo: Path, session_dir: Path,
     if is_review and issue_json.exists():
         return  # Already copied from coder session
 
-    tracker = create_tracker(config, repo_dir=str(repo))
+    tracker = get_tracker_with_fallback(config, repo)
     issue_dict = _issue_dict_with_comments(tracker, issue_id)
 
     if not issue_dict and is_resume and issue_json.exists():
