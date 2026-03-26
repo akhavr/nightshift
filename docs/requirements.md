@@ -160,6 +160,12 @@ All git-bug CLI operations route through `GitBugTracker._run()` which retries on
 - **Tests:** test_git_bug_lock_retry.py
 - **Status:** covered
 
+### REQ-026: Single-writer git-bug access
+All git-bug operations are serialized through a single writer thread in the watcher process, eliminating lock contention. The writer thread processes a queue of tracker operations one at a time. A Unix domain socket server accepts JSON-lines requests from CLI processes and routes them through the same queue. The watcher's own internal tracker calls use a queue proxy (no socket overhead). CLI and launch scripts connect via `get_tracker_with_fallback()`: when the watcher socket is available, a `SocketTrackerClient` is used; when unavailable, falls back to direct `GitBugTracker` with the existing lock retry mechanism (REQ-025).
+
+- **Tests:** test_tracker_ipc.py, test_socket_tracker_client.py, test_tracker_fallback.py, watcher/test_tracker_writer.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -203,6 +209,10 @@ All git-bug CLI operations route through `GitBugTracker._run()` which retries on
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
 | watcher/test_config_reload.py | REQ-023 |
 | watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-011, REQ-017 |
+| test_tracker_ipc.py | REQ-026 |
+| test_socket_tracker_client.py | REQ-026 |
+| test_tracker_fallback.py | REQ-026 |
+| watcher/test_tracker_writer.py | REQ-026 |
 
 ---
 

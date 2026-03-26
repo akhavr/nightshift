@@ -189,7 +189,7 @@ class TestCreateWorktree:
 
 class TestDumpIssueData:
 
-    @patch("host.issue_dump.create_tracker")
+    @patch("host.issue_dump.get_tracker_with_fallback")
     def test_dumps_issue_and_all_issues(self, mock_create_tracker, tmp_path, config, sample_issue):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -213,7 +213,7 @@ class TestDumpIssueData:
         assert len(all_data) == 1
         assert all_data[0]["id"] == "abc123def456"
 
-    @patch("host.issue_dump.create_tracker")
+    @patch("host.issue_dump.get_tracker_with_fallback")
     def test_skips_dump_for_review_with_existing_issue(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -225,7 +225,7 @@ class TestDumpIssueData:
         # Tracker should not even be created
         mock_create_tracker.assert_not_called()
 
-    @patch("host.issue_dump.create_tracker")
+    @patch("host.issue_dump.get_tracker_with_fallback")
     def test_exits_when_issue_not_found_and_no_cache(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -239,7 +239,7 @@ class TestDumpIssueData:
                             is_review=False, is_resume=False)
         assert exc_info.value.code == 1
 
-    @patch("host.issue_dump.create_tracker")
+    @patch("host.issue_dump.get_tracker_with_fallback")
     def test_reuses_cache_on_resume_when_tracker_fails(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -256,7 +256,7 @@ class TestDumpIssueData:
         # issue.json should remain untouched
         assert json.loads((session_dir / "issue.json").read_text())["id"] == "cached"
 
-    @patch("host.issue_dump.create_tracker")
+    @patch("host.issue_dump.get_tracker_with_fallback")
     def test_exits_on_resume_without_cache(self, mock_create_tracker, tmp_path, config):
         session_dir = tmp_path / "session"
         session_dir.mkdir()
@@ -667,7 +667,7 @@ class TestPostContainer:
         # Should return without error (status != waiting:review)
         _post_container(session_dir, config, tmp_path, "issue1")
 
-    @patch("host.launch.create_tracker")
+    @patch("host.launch.get_tracker_with_fallback")
     @patch("host.launch.subprocess.run")
     def test_posts_summary_when_waiting_review(self, mock_run, mock_create_tracker,
                                                 tmp_path, config):
@@ -694,7 +694,7 @@ class TestPostContainer:
         mock_tracker.add_label.assert_called_once_with("issue1", "needs-review")
         mock_tracker.sync.assert_called_once()
 
-    @patch("host.launch.create_tracker")
+    @patch("host.launch.get_tracker_with_fallback")
     @patch("host.launch.subprocess.run")
     def test_handles_tracker_failure_gracefully(self, mock_run, mock_create_tracker,
                                                  tmp_path, config):

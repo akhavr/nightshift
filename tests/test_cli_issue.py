@@ -48,7 +48,7 @@ def test_cmd_issue_passes_args_to_tracker(tmp_path, capsys):
     mock_tracker.run_raw.return_value = "bug abc123 open: Fix login"
 
     with patch("host.cli.repo_root", return_value=repo), \
-         patch("host.cli.create_tracker", return_value=mock_tracker):
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker):
         cmd_issue(_make_args(
             tracker_args=["bug", "show", "abc123"],
             workflow=str(wf),
@@ -69,7 +69,7 @@ def test_cmd_issue_push_args(tmp_path, capsys):
     mock_tracker.run_raw.return_value = ""
 
     with patch("host.cli.repo_root", return_value=repo), \
-         patch("host.cli.create_tracker", return_value=mock_tracker):
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker):
         cmd_issue(_make_args(
             tracker_args=["push"],
             workflow=str(wf),
@@ -88,7 +88,7 @@ def test_cmd_issue_empty_output(tmp_path, capsys):
     mock_tracker.run_raw.return_value = ""
 
     with patch("host.cli.repo_root", return_value=repo), \
-         patch("host.cli.create_tracker", return_value=mock_tracker):
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker):
         cmd_issue(_make_args(
             tracker_args=["bug", "show", "nonexistent"],
             workflow=str(wf),
@@ -108,7 +108,7 @@ def test_cmd_issue_not_implemented_exits(tmp_path, capsys):
     mock_tracker.run_raw.side_effect = NotImplementedError("not supported")
 
     with patch("host.cli.repo_root", return_value=repo), \
-         patch("host.cli.create_tracker", return_value=mock_tracker), \
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker), \
          pytest.raises(SystemExit) as exc_info:
         cmd_issue(_make_args(
             tracker_args=["bug", "show", "abc"],
@@ -130,7 +130,7 @@ def test_cmd_issue_no_args(tmp_path, capsys):
     mock_tracker.run_raw.return_value = "usage: git-bug ..."
 
     with patch("host.cli.repo_root", return_value=repo), \
-         patch("host.cli.create_tracker", return_value=mock_tracker):
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker):
         cmd_issue(_make_args(
             tracker_args=[],
             workflow=str(wf),

@@ -528,7 +528,7 @@ def test_cmd_revise_success(tmp_path, capsys):
 
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="review1234ab"), \
-         patch("host.cli.create_tracker", return_value=mock_tracker), \
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run") as mock_subproc:
         cmd_revise(_make_args(
             issue_id="review1234ab",
@@ -578,7 +578,7 @@ def test_cmd_revise_accepts_waiting_human_review(tmp_path, capsys):
 
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="humrev123456"), \
-         patch("host.cli.create_tracker", return_value=mock_tracker), \
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run"):
         # Should not raise SystemExit
         cmd_revise(_make_args(

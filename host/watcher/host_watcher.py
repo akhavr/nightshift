@@ -7,8 +7,9 @@ import threading
 import time
 from pathlib import Path
 
-from host.constants import REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S
+from host.constants import REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME
 from core.config import load_workflow, create_tracker, WorkflowConfig
+from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
 from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
@@ -60,6 +61,9 @@ class HostWatcher:
         self._tracker = None
         self._config = None
         self._recently_launched: dict[str, float] = {}
+        self._writer: TrackerWriter | None = None
+        self._socket_server: TrackerSocketServer | None = None
+        self._proxy: QueueTrackerProxy | None = None
 
         tg_level = self._telegram_level_from_config()
         self.telegram = TelegramRelay(
@@ -102,7 +106,14 @@ class HostWatcher:
         return "all"
 
     def _get_tracker(self):
-        """Lazy-init tracker from workflow config."""
+        """Return the tracker proxy (if writer is active) or direct tracker.
+
+        When the writer thread is running, all tracker calls are routed
+        through the queue proxy for serialized, contention-free access.
+        Falls back to the direct tracker during init (before writer starts).
+        """
+        if self._proxy is not None:
+            return self._proxy
         if self._tracker is None:
             if self._config is None:
                 self._config = load_workflow(self.workflow_path)
@@ -148,10 +159,17 @@ class HostWatcher:
         # Recreate tracker (kind or extra settings may have changed)
         old_tracker = self._tracker
         self._tracker = None  # force re-creation on next _get_tracker()
+        # Temporarily disable proxy so _get_tracker creates a direct tracker
+        saved_proxy = self._proxy
+        self._proxy = None
         new_tracker = self._get_tracker()
+        self._proxy = saved_proxy
         # Propagate shutdown event to new tracker
         if hasattr(new_tracker, '_shutdown') and hasattr(self, '_shutdown'):
             new_tracker._shutdown = self._shutdown
+        # Swap the writer's underlying tracker instance
+        if self._writer:
+            self._writer.tracker = new_tracker
         # Terminate old tracker's in-flight subprocess if present
         if old_tracker and hasattr(old_tracker, 'terminate_current'):
             old_tracker.terminate_current()
@@ -179,6 +197,16 @@ class HostWatcher:
         tracker = self._get_tracker()
         if hasattr(tracker, '_shutdown'):
             tracker._shutdown = self._shutdown
+
+        # Start the single-writer infrastructure
+        self._writer = TrackerWriter(tracker, self._shutdown)
+        self._writer.start()
+        self._proxy = QueueTrackerProxy(self._writer)
+
+        socket_path = self.sessions_dir.parent / TRACKER_SOCKET_FILENAME
+        self._socket_server = TrackerSocketServer(socket_path, self._writer,
+                                                   self._shutdown)
+        self._socket_server.start()
 
         log.info(f"Watching {self.sessions_dir}")
         if self.telegram.enabled:
@@ -220,10 +248,16 @@ class HostWatcher:
             # can interrupt the sleep immediately
             self._shutdown.wait(timeout=MAIN_LOOP_SLEEP_S)
 
+        # Stop socket server and writer thread (drains pending operations)
+        if self._socket_server:
+            self._socket_server.stop()
+        if self._writer:
+            self._writer.stop()
+        self._proxy = None
+
         # Terminate any in-flight tracker subprocesses (e.g. git-bug sync)
-        tracker = self._get_tracker()
-        if hasattr(tracker, 'terminate_current'):
-            tracker.terminate_current()
+        if self._tracker and hasattr(self._tracker, 'terminate_current'):
+            self._tracker.terminate_current()
 
         log.info("Watcher shutdown complete")
 

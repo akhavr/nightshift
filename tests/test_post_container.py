@@ -48,7 +48,7 @@ def test_posts_comment_on_waiting_review(session_dir, mock_config, tmp_path):
 
     mock_tracker = MagicMock()
 
-    with patch("host.launch.create_tracker", return_value=mock_tracker), \
+    with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run") as mock_run:
         # Mock git diff --stat
         mock_run.return_value = MagicMock(returncode=0, stdout=" file.py | 10 ++++\n 1 file changed")
@@ -72,7 +72,7 @@ def test_skips_when_not_waiting_review(session_dir, mock_config, tmp_path):
     """_post_container should do nothing if status is not waiting:review."""
     write_state(session_dir, status="working")
 
-    with patch("host.launch.create_tracker") as mock_create:
+    with patch("host.launch.get_tracker_with_fallback") as mock_create:
         _post_container(session_dir, mock_config, tmp_path, "test-001")
 
     mock_create.assert_not_called()
@@ -80,7 +80,7 @@ def test_skips_when_not_waiting_review(session_dir, mock_config, tmp_path):
 
 def test_skips_when_no_state_file(session_dir, mock_config, tmp_path):
     """_post_container should do nothing if state.json doesn't exist."""
-    with patch("host.launch.create_tracker") as mock_create:
+    with patch("host.launch.get_tracker_with_fallback") as mock_create:
         _post_container(session_dir, mock_config, tmp_path, "test-001")
 
     mock_create.assert_not_called()
@@ -93,7 +93,7 @@ def test_includes_diff_stat(session_dir, mock_config, tmp_path):
     mock_tracker = MagicMock()
     diff_output = " foo.py | 5 +++++\n bar.py | 3 +++\n 2 files changed, 8 insertions(+)"
 
-    with patch("host.launch.create_tracker", return_value=mock_tracker), \
+    with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=diff_output)
 
@@ -110,7 +110,7 @@ def test_handles_no_checkpoints(session_dir, mock_config, tmp_path):
 
     mock_tracker = MagicMock()
 
-    with patch("host.launch.create_tracker", return_value=mock_tracker), \
+    with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
@@ -124,7 +124,7 @@ def test_handles_tracker_error(session_dir, mock_config, tmp_path, capsys):
     """Should not crash if tracker fails."""
     write_state(session_dir)
 
-    with patch("host.launch.create_tracker", side_effect=Exception("tracker broke")):
+    with patch("host.launch.get_tracker_with_fallback", side_effect=Exception("tracker broke")):
         _post_container(session_dir, mock_config, tmp_path, "test-001")
 
     captured = capsys.readouterr()
