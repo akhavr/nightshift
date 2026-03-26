@@ -171,7 +171,7 @@ def test_accept_aborts_on_conflict_markers(tmp_path):
 
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="test789"), \
-         patch("host.cli.create_tracker") as mock_tracker, \
+         patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
          patch("host.cli._report_accept_failure") as mock_report:
         mock_tracker.return_value = MagicMock()
         args = MagicMock()
@@ -288,7 +288,7 @@ class TestAcceptRejectsBehindBase:
 
         with patch("host.cli.repo_root", return_value=repo), \
              patch("host.cli.resolve_session", return_value="bbb123"), \
-             patch("host.cli.create_tracker") as mock_tracker, \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
              patch("host.cli._report_accept_failure") as mock_report:
             mock_tracker.return_value = MagicMock()
             args = MagicMock()

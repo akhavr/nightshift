@@ -198,11 +198,20 @@ class TrackerSocketServer:
     def _run(self) -> None:
         """Accept loop using selectors for interruptible shutdown."""
         sel = selectors.DefaultSelector()
-        sel.register(self._server_sock, selectors.EVENT_READ)
+        try:
+            sel.register(self._server_sock, selectors.EVENT_READ)
+        except (ValueError, OSError):
+            # Server socket already closed (race with stop())
+            sel.close()
+            return
 
         try:
             while not self._shutdown.is_set():
-                events = sel.select(timeout=1)
+                try:
+                    events = sel.select(timeout=0.2)
+                except (ValueError, OSError):
+                    # Socket closed during select (stop() called)
+                    break
                 for key, _ in events:
                     try:
                         conn, _ = self._server_sock.accept()
