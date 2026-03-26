@@ -42,6 +42,5 @@ CONFLICT_FILE_PREVIEW_LEN = 20   # Max conflict files to show
 
 # ── Tracker IPC (single-writer architecture) ──────────
 TRACKER_SOCKET_FILENAME = "tracker.sock"  # Unix socket in .nightshift/
-TRACKER_IPC_TIMEOUT_S = 60               # Per-request timeout for socket clients
 TRACKER_WRITER_QUEUE_SIZE = 100          # Bounded queue to prevent memory issues
 TRACKER_SOCKET_MAX_WORKERS = 4           # ThreadPool for socket connections

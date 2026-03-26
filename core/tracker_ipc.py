@@ -10,9 +10,10 @@ Connections are per-request (short-lived).
 
 import json
 import logging
+import socket
 import uuid
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, Optional
 
 from core.protocols import TrackerIssue, TrackerComment
 
@@ -75,6 +76,86 @@ def serialize_tracker_comment(comment: TrackerComment) -> dict:
 def deserialize_tracker_comment(data: dict) -> TrackerComment:
     """Deserialize a dict back to a TrackerComment."""
     return TrackerComment(**data)
+
+
+def recv_json_line(sock: socket.socket) -> str:
+    """Read data from a socket until a newline delimiter.
+
+    Used by both the socket client and socket server to receive
+    JSON-lines messages over Unix domain sockets.
+    """
+    buf = b""
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return buf.decode() if buf else ""
+        buf += chunk
+        if b"\n" in buf:
+            return buf.split(b"\n", 1)[0].decode()
+
+
+class TrackerIPCBase:
+    """Shared base for IssueTracker implementations backed by IPC.
+
+    Subclasses must implement ``_call(method, **kwargs) -> TrackerResponse``.
+    All IssueTracker method bodies are defined here once.
+    """
+
+    def _call(self, method: str, **kwargs) -> TrackerResponse:
+        raise NotImplementedError
+
+    def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
+        resp = self._call("get_issue", issue_id=issue_id)
+        if not resp.ok:
+            log.warning("%s.get_issue failed: %s", type(self).__name__, resp.error)
+            return None
+        return deserialize_tracker_issue(resp.result)
+
+    def list_issues(self, status=None) -> list[TrackerIssue]:
+        resp = self._call("list_issues", status=status)
+        if not resp.ok:
+            log.warning("%s.list_issues failed: %s", type(self).__name__, resp.error)
+            return []
+        return [deserialize_tracker_issue(d) for d in (resp.result or [])]
+
+    def get_comments(self, issue_id: str) -> list[TrackerComment]:
+        resp = self._call("get_comments", issue_id=issue_id)
+        if not resp.ok:
+            log.warning("%s.get_comments failed: %s", type(self).__name__, resp.error)
+            return []
+        return [deserialize_tracker_comment(d) for d in (resp.result or [])]
+
+    def add_comment(self, issue_id: str, body: str) -> None:
+        resp = self._call("add_comment", issue_id=issue_id, body=body)
+        if not resp.ok:
+            log.warning("%s.add_comment failed: %s", type(self).__name__, resp.error)
+
+    def set_status(self, issue_id: str, status: str) -> None:
+        resp = self._call("set_status", issue_id=issue_id, status=status)
+        if not resp.ok:
+            log.warning("%s.set_status failed: %s", type(self).__name__, resp.error)
+
+    def add_label(self, issue_id: str, label: str) -> None:
+        resp = self._call("add_label", issue_id=issue_id, label=label)
+        if not resp.ok:
+            log.warning("%s.add_label failed: %s", type(self).__name__, resp.error)
+
+    def remove_label(self, issue_id: str, label: str) -> None:
+        resp = self._call("remove_label", issue_id=issue_id, label=label)
+        if not resp.ok:
+            log.warning("%s.remove_label failed: %s", type(self).__name__, resp.error)
+
+    def sync(self) -> None:
+        resp = self._call("sync")
+        if not resp.ok:
+            log.warning("%s.sync failed: %s", type(self).__name__, resp.error)
+
+    def run_raw(self, *args: str) -> str:
+        resp = self._call("run_raw", raw_args=list(args))
+        if not resp.ok:
+            log.warning("%s.run_raw failed: %s", type(self).__name__, resp.error)
+            return ""
+        return resp.result or ""
 
 
 def execute_tracker_method(tracker: Any, request: TrackerRequest) -> TrackerResponse:

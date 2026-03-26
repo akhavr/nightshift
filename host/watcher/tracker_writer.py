@@ -13,13 +13,12 @@ import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from core.protocols import TrackerIssue, TrackerComment
 from core.tracker_ipc import (
-    TrackerRequest, TrackerResponse,
+    TrackerRequest, TrackerResponse, TrackerIPCBase,
     execute_tracker_method,
-    deserialize_tracker_issue, deserialize_tracker_comment,
+    recv_json_line,
 )
 from host.constants import (
     TRACKER_SOCKET_FILENAME,
@@ -81,10 +80,15 @@ class TrackerWriter:
             self._queue.put_nowait(_STOP)
         except queue.Full:
             log.warning("Writer queue full during stop, forcing stop")
-            # Clear queue and put stop sentinel
+            # Clear queue, resolving pending requests with errors
             while not self._queue.empty():
                 try:
-                    self._queue.get_nowait()
+                    item = self._queue.get_nowait()
+                    if item is not _STOP:
+                        req, pending = item
+                        pending.set(TrackerResponse(
+                            id=req.id, ok=False,
+                            error="Writer shutting down"))
                 except queue.Empty:
                     break
             self._queue.put_nowait(_STOP)
@@ -226,7 +230,7 @@ class TrackerSocketServer:
         """Handle a single client connection: read request, submit, respond."""
         try:
             conn.settimeout(30)
-            data = self._recv_line(conn)
+            data = recv_json_line(conn)
             if not data:
                 return
 
@@ -243,20 +247,8 @@ class TrackerSocketServer:
         finally:
             conn.close()
 
-    @staticmethod
-    def _recv_line(conn: socket.socket) -> str:
-        """Read data from socket until newline."""
-        buf = b""
-        while True:
-            chunk = conn.recv(65536)
-            if not chunk:
-                return buf.decode() if buf else ""
-            buf += chunk
-            if b"\n" in buf:
-                return buf.split(b"\n", 1)[0].decode()
 
-
-class QueueTrackerProxy:
+class QueueTrackerProxy(TrackerIPCBase):
     """IssueTracker implementation that routes all calls through TrackerWriter.
 
     Used by the watcher's internal code so it shares the single writer
@@ -269,56 +261,3 @@ class QueueTrackerProxy:
     def _call(self, method: str, **kwargs) -> TrackerResponse:
         request = TrackerRequest(method=method, args=kwargs)
         return self._writer.submit(request, timeout=60)
-
-    def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
-        resp = self._call("get_issue", issue_id=issue_id)
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.get_issue failed: %s", resp.error)
-            return None
-        return deserialize_tracker_issue(resp.result)
-
-    def list_issues(self, status=None) -> list[TrackerIssue]:
-        resp = self._call("list_issues", status=status)
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.list_issues failed: %s", resp.error)
-            return []
-        return [deserialize_tracker_issue(d) for d in (resp.result or [])]
-
-    def get_comments(self, issue_id: str) -> list[TrackerComment]:
-        resp = self._call("get_comments", issue_id=issue_id)
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.get_comments failed: %s", resp.error)
-            return []
-        return [deserialize_tracker_comment(d) for d in (resp.result or [])]
-
-    def add_comment(self, issue_id: str, body: str) -> None:
-        resp = self._call("add_comment", issue_id=issue_id, body=body)
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.add_comment failed: %s", resp.error)
-
-    def set_status(self, issue_id: str, status: str) -> None:
-        resp = self._call("set_status", issue_id=issue_id, status=status)
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.set_status failed: %s", resp.error)
-
-    def add_label(self, issue_id: str, label: str) -> None:
-        resp = self._call("add_label", issue_id=issue_id, label=label)
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.add_label failed: %s", resp.error)
-
-    def remove_label(self, issue_id: str, label: str) -> None:
-        resp = self._call("remove_label", issue_id=issue_id, label=label)
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.remove_label failed: %s", resp.error)
-
-    def sync(self) -> None:
-        resp = self._call("sync")
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.sync failed: %s", resp.error)
-
-    def run_raw(self, *args: str) -> str:
-        resp = self._call("run_raw", raw_args=list(args))
-        if not resp.ok:
-            log.warning("QueueTrackerProxy.run_raw failed: %s", resp.error)
-            return ""
-        return resp.result or ""
