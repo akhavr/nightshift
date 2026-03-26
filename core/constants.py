@@ -11,3 +11,4 @@ LOCK_RETRY_BASE_DELAY_S = 1      # Base delay for exponential backoff (1, 2, 4, 
 
 # ── Tracker IPC ──────────────────────────────────────
 TRACKER_IPC_TIMEOUT_S = 60       # Per-request timeout for socket clients
+TRACKER_IPC_MAX_MESSAGE_BYTES = 1_048_576  # 1 MB buffer limit for recv_json_line

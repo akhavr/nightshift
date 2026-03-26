@@ -1,14 +1,16 @@
 """Tests for core/tracker_ipc.py — IPC protocol serialization and execution."""
 
 import json
+import socket
 import pytest
 
+from core.constants import TRACKER_IPC_MAX_MESSAGE_BYTES
 from core.protocols import TrackerIssue, TrackerComment
 from core.tracker_ipc import (
     TrackerRequest, TrackerResponse,
     serialize_tracker_issue, deserialize_tracker_issue,
     serialize_tracker_comment, deserialize_tracker_comment,
-    execute_tracker_method,
+    execute_tracker_method, recv_json_line,
 )
 from tests.conftest import MockTracker, make_test_issue
 
@@ -170,3 +172,72 @@ class TestExecuteTrackerMethod:
         resp = execute_tracker_method(BrokenTracker(), req)
         assert not resp.ok
         assert "disk on fire" in resp.error
+
+
+class TestRecvJsonLine:
+    """Tests for recv_json_line including buffer size limit."""
+
+    def _make_socket_pair(self):
+        """Create a connected pair of Unix sockets for testing."""
+        s1, s2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        return s1, s2
+
+    def test_normal_message(self):
+        sender, receiver = self._make_socket_pair()
+        try:
+            sender.sendall(b'{"method":"sync"}\n')
+            result = recv_json_line(receiver)
+            assert result == '{"method":"sync"}'
+        finally:
+            sender.close()
+            receiver.close()
+
+    def test_connection_closed_with_data(self):
+        sender, receiver = self._make_socket_pair()
+        try:
+            sender.sendall(b'partial data')
+            sender.close()
+            result = recv_json_line(receiver)
+            assert result == "partial data"
+        finally:
+            receiver.close()
+
+    def test_connection_closed_empty(self):
+        sender, receiver = self._make_socket_pair()
+        try:
+            sender.close()
+            result = recv_json_line(receiver)
+            assert result == ""
+        finally:
+            receiver.close()
+
+    def test_buffer_limit_exceeded(self):
+        """A client that sends >1MB without a newline gets an empty response."""
+        import threading
+        sender, receiver = self._make_socket_pair()
+        try:
+            oversized = b"x" * (TRACKER_IPC_MAX_MESSAGE_BYTES + 1)
+
+            # Send in a thread since sendall blocks when kernel buffer is full
+            def send_data():
+                try:
+                    sender.sendall(oversized)
+                except OSError:
+                    pass  # receiver may close before send completes
+
+            t = threading.Thread(target=send_data)
+            t.start()
+            result = recv_json_line(receiver)
+            assert result == ""
+            receiver.close()
+            t.join(timeout=2)
+        finally:
+            sender.close()
+
+
+class TestSocketRegistryRemoved:
+    """Verify socket tracker is not in the registry (used only programmatically)."""
+
+    def test_socket_not_in_tracker_registry(self):
+        from core.config.factories import TRACKER_REGISTRY
+        assert "socket" not in TRACKER_REGISTRY

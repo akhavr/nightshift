@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
+from core.constants import TRACKER_IPC_MAX_MESSAGE_BYTES
 from core.protocols import TrackerIssue, TrackerComment
 
 log = logging.getLogger(__name__)
@@ -83,6 +84,9 @@ def recv_json_line(sock: socket.socket) -> str:
 
     Used by both the socket client and socket server to receive
     JSON-lines messages over Unix domain sockets.
+
+    Buffer is capped at TRACKER_IPC_MAX_MESSAGE_BYTES (1 MB) to prevent
+    unbounded memory growth from misbehaving clients that never send a newline.
     """
     buf = b""
     while True:
@@ -92,6 +96,10 @@ def recv_json_line(sock: socket.socket) -> str:
         buf += chunk
         if b"\n" in buf:
             return buf.split(b"\n", 1)[0].decode()
+        if len(buf) > TRACKER_IPC_MAX_MESSAGE_BYTES:
+            log.error("recv_json_line: buffer exceeded %d bytes without newline, "
+                      "discarding", TRACKER_IPC_MAX_MESSAGE_BYTES)
+            return ""
 
 
 class TrackerIPCBase:
