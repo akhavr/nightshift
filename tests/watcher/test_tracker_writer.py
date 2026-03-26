@@ -2,6 +2,7 @@
 
 import json
 import os
+import queue
 import socket
 import threading
 import time
@@ -11,6 +12,7 @@ from core.protocols import TrackerIssue, TrackerComment
 from core.tracker_ipc import TrackerRequest, TrackerResponse
 from host.watcher.tracker_writer import (
     TrackerWriter, TrackerSocketServer, QueueTrackerProxy,
+    _PendingResult,
 )
 from tests.conftest import MockTracker, make_test_issue
 
@@ -122,6 +124,148 @@ class TestTrackerWriter:
         finally:
             shutdown.set()
             writer.stop()
+
+    def test_submit_returns_error_when_queue_full(self):
+        """submit() returns error response when the queue is full."""
+        shutdown = threading.Event()
+
+        class BlockingTracker(MockTracker):
+            def __init__(self):
+                super().__init__()
+                self.block = threading.Event()
+
+            def sync(self):
+                self.block.wait(timeout=10)
+                super().sync()
+
+        tracker = BlockingTracker()
+        # Use a tiny queue (size 1) to make it easy to fill
+        writer = TrackerWriter(tracker, shutdown)
+        writer._queue = queue.Queue(maxsize=1)
+        writer.start()
+
+        try:
+            # First request blocks the writer thread
+            req1 = TrackerRequest(method="sync", args={})
+            t = threading.Thread(target=writer.submit, args=(req1, 10))
+            t.start()
+            time.sleep(0.1)  # let it start processing
+
+            # Second fills the queue
+            req2 = TrackerRequest(method="sync", args={})
+            writer._queue.put((req2, _PendingResult()), timeout=1)
+
+            # Third should get queue-full error
+            req3 = TrackerRequest(method="sync", args={})
+            resp = writer.submit(req3, timeout=1)
+            assert not resp.ok
+            assert "queue full" in resp.error.lower()
+        finally:
+            tracker.block.set()
+            shutdown.set()
+            writer.stop()
+            t.join(timeout=5)
+
+    def test_submit_returns_error_on_timeout(self):
+        """submit() returns timeout error when writer doesn't respond in time."""
+        shutdown = threading.Event()
+
+        class BlockingTracker(MockTracker):
+            def sync(self):
+                time.sleep(5)  # block longer than timeout
+
+        writer = TrackerWriter(BlockingTracker(), shutdown)
+        writer.start()
+
+        try:
+            req = TrackerRequest(method="sync", args={})
+            resp = writer.submit(req, timeout=0.1)
+            assert not resp.ok
+            assert "timed out" in resp.error.lower()
+        finally:
+            shutdown.set()
+            writer.stop()
+
+    def test_stop_when_queue_full(self):
+        """stop() clears queue and resolves pending requests when queue is full."""
+        shutdown = threading.Event()
+
+        class BlockingTracker(MockTracker):
+            def __init__(self):
+                super().__init__()
+                self.block = threading.Event()
+
+            def sync(self):
+                self.block.wait(timeout=10)
+
+        tracker = BlockingTracker()
+        writer = TrackerWriter(tracker, shutdown)
+        writer._queue = queue.Queue(maxsize=1)
+        writer.start()
+
+        # Submit a request that blocks the writer
+        req1 = TrackerRequest(method="sync", args={})
+        t1 = threading.Thread(target=writer.submit, args=(req1, 10))
+        t1.start()
+        time.sleep(0.1)
+
+        # Fill the queue completely
+        pending = _PendingResult()
+        req2 = TrackerRequest(method="sync", args={})
+        writer._queue.put((req2, pending), timeout=1)
+
+        # Now stop() must handle the full queue
+        tracker.block.set()
+        shutdown.set()
+        writer.stop()
+        t1.join(timeout=5)
+
+        # Pending request should have been resolved (either executed or errored)
+        result = pending.wait(timeout=1)
+        assert result is not None
+
+    def test_drain_processes_remaining_items(self):
+        """After shutdown, remaining queued items are still processed."""
+        shutdown = threading.Event()
+
+        class SlowTracker(MockTracker):
+            def __init__(self):
+                super().__init__()
+                self.call_count = 0
+                self.gate = threading.Event()
+
+            def sync(self):
+                self.call_count += 1
+                if self.call_count == 1:
+                    self.gate.wait(timeout=5)
+                super().sync()
+
+        tracker = SlowTracker()
+        writer = TrackerWriter(tracker, shutdown)
+        writer.start()
+
+        # First sync blocks the writer
+        req1 = TrackerRequest(method="sync", args={})
+        t1 = threading.Thread(target=writer.submit, args=(req1, 10))
+        t1.start()
+        time.sleep(0.1)
+
+        # Queue a second request while writer is blocked
+        req2 = TrackerRequest(method="sync", args={})
+        pending2 = _PendingResult()
+        writer._queue.put((req2, pending2))
+
+        # Signal shutdown and unblock the first request
+        shutdown.set()
+        tracker.gate.set()
+        writer.stop()
+        t1.join(timeout=5)
+
+        # The drain loop should have processed req2
+        result = pending2.wait(timeout=1)
+        assert result is not None
+        assert result.ok
+        assert tracker.synced == 2
 
 
 class TestTrackerSocketServer:
@@ -247,6 +391,98 @@ class TestTrackerSocketServer:
             shutdown.set()
             server.stop()
             writer.stop()
+
+
+    def test_handle_connection_invalid_json(self, tmp_path):
+        """Server sends error response when client sends invalid JSON."""
+        shutdown = threading.Event()
+        tracker = MockTracker()
+        writer = TrackerWriter(tracker, shutdown)
+        writer.start()
+
+        sock_path = tmp_path / "tracker.sock"
+        server = TrackerSocketServer(sock_path, writer, shutdown)
+        server.start()
+
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5)
+            client.connect(str(sock_path))
+            # Send invalid JSON
+            client.sendall(b"not valid json\n")
+            data = b""
+            while b"\n" not in data:
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+            client.close()
+
+            resp = TrackerResponse.from_json(data.decode().strip())
+            assert not resp.ok
+            assert resp.id == "unknown"
+        finally:
+            shutdown.set()
+            server.stop()
+            writer.stop()
+
+    def test_handle_connection_empty_data(self, tmp_path):
+        """Server handles client that connects and immediately disconnects."""
+        shutdown = threading.Event()
+        tracker = MockTracker()
+        writer = TrackerWriter(tracker, shutdown)
+        writer.start()
+
+        sock_path = tmp_path / "tracker.sock"
+        server = TrackerSocketServer(sock_path, writer, shutdown)
+        server.start()
+
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(2)
+            client.connect(str(sock_path))
+            client.close()
+            # Just verify no crash — server should continue running
+            time.sleep(0.1)
+            # Verify server is still operational
+            client2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client2.settimeout(2)
+            client2.connect(str(sock_path))
+            req = TrackerRequest(method="sync", args={})
+            client2.sendall((req.to_json() + "\n").encode())
+            data = b""
+            while b"\n" not in data:
+                chunk = client2.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+            client2.close()
+            resp = TrackerResponse.from_json(data.decode().strip())
+            assert resp.ok
+        finally:
+            shutdown.set()
+            server.stop()
+            writer.stop()
+
+    def test_run_exits_when_socket_closed_before_select(self, tmp_path):
+        """Socket server _run() handles socket closed during select."""
+        shutdown = threading.Event()
+        tracker = MockTracker()
+        writer = TrackerWriter(tracker, shutdown)
+        writer.start()
+
+        sock_path = tmp_path / "tracker.sock"
+        server = TrackerSocketServer(sock_path, writer, shutdown)
+        server.start()
+
+        # Close the server socket directly to trigger the error path
+        server._server_sock.close()
+        time.sleep(0.5)  # let the select loop hit the error
+
+        # Server thread should exit cleanly
+        shutdown.set()
+        server.stop()
+        writer.stop()
 
 
 class TestQueueTrackerProxy:

@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.config import load_workflow, create_tracker
+from core.config import load_workflow
 from host.tracker_client import get_tracker_with_fallback
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S

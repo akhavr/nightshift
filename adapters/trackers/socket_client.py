@@ -18,10 +18,6 @@ from core.tracker_ipc import (
 log = logging.getLogger(__name__)
 
 
-class TrackerUnavailableError(Exception):
-    """Raised when the tracker socket is not available (watcher not running)."""
-
-
 class SocketTrackerClient(TrackerIPCBase):
     """IssueTracker implementation that communicates via Unix socket.
 
@@ -41,9 +37,10 @@ class SocketTrackerClient(TrackerIPCBase):
             sock.connect(self._socket_path)
         except (ConnectionRefusedError, FileNotFoundError, OSError) as e:
             sock.close()
-            raise TrackerUnavailableError(
-                f"Cannot connect to tracker socket at {self._socket_path}: {e}"
-            ) from e
+            log.warning("Cannot connect to tracker socket at %s: %s",
+                        self._socket_path, e)
+            return TrackerResponse(id=request.id, ok=False,
+                                   error=f"Tracker unavailable: {e}")
 
         try:
             sock.sendall((request.to_json() + "\n").encode())

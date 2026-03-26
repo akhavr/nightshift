@@ -8,7 +8,7 @@ import pytest
 
 from core.protocols import TrackerIssue, TrackerComment
 from core.tracker_ipc import TrackerRequest, TrackerResponse, serialize_tracker_issue
-from adapters.trackers.socket_client import SocketTrackerClient, TrackerUnavailableError
+from adapters.trackers.socket_client import SocketTrackerClient
 from tests.conftest import make_test_issue
 
 
@@ -126,11 +126,22 @@ class TestSocketTrackerClient:
         finally:
             shutdown.set()
 
-    def test_connection_refused_raises_unavailable(self, tmp_path):
+    def test_connection_refused_returns_error_response(self, tmp_path):
+        """Connection failure returns error TrackerResponse, not exception."""
         sock_path = tmp_path / "nonexistent.sock"
         client = SocketTrackerClient(sock_path)
-        with pytest.raises(TrackerUnavailableError):
-            client._call("get_issue", issue_id="abc")
+        resp = client._call("get_issue", issue_id="abc")
+        assert not resp.ok
+        assert "Tracker unavailable" in resp.error
+
+    def test_connection_refused_degrades_gracefully(self, tmp_path):
+        """TrackerIPCBase methods return empty/None when socket unavailable."""
+        sock_path = tmp_path / "nonexistent.sock"
+        client = SocketTrackerClient(sock_path)
+        assert client.get_issue("abc") is None
+        assert client.list_issues() == []
+        assert client.get_comments("abc") == []
+        assert client.run_raw("bug", "show") == ""
 
     def test_server_error_response(self, tmp_path):
         sock_path = tmp_path / "test.sock"
