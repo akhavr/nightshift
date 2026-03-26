@@ -35,11 +35,12 @@ class SocketTrackerClient(TrackerIPCBase):
     def _call(self, method: str, **kwargs) -> TrackerResponse:
         """Send a request and return the response."""
         request = TrackerRequest(method=method, args=kwargs)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(TRACKER_IPC_TIMEOUT_S)
             sock.connect(self._socket_path)
         except (ConnectionRefusedError, FileNotFoundError, OSError) as e:
+            sock.close()
             raise TrackerUnavailableError(
                 f"Cannot connect to tracker socket at {self._socket_path}: {e}"
             ) from e

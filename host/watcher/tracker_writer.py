@@ -21,7 +21,6 @@ from core.tracker_ipc import (
     recv_json_line,
 )
 from host.constants import (
-    TRACKER_SOCKET_FILENAME,
     TRACKER_WRITER_QUEUE_SIZE,
     TRACKER_SOCKET_MAX_WORKERS,
 )
