@@ -7,7 +7,10 @@ import threading
 import time
 from pathlib import Path
 
-from host.constants import REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME
+from host.constants import (
+    REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME,
+    BACKGROUND_LAUNCH_CHECK_S,
+)
 from core.config import load_workflow, create_tracker, WorkflowConfig
 from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
@@ -61,6 +64,7 @@ class HostWatcher:
         self._tracker = None
         self._config = None
         self._recently_launched: dict[str, float] = {}
+        self._background_procs: dict[str, tuple] = {}
         self._writer: TrackerWriter | None = None
         self._socket_server: TrackerSocketServer | None = None
         self._proxy: QueueTrackerProxy | None = None
@@ -239,6 +243,7 @@ class HostWatcher:
             self.reviews.check_for_auto_review()
             self.reviews.check_reviewer_done()
             self._sync_issue_data()
+            self.check_background_launches()
             self.monitor.check_orphaned_sessions()
             self.monitor.check_auth_failures()
             self.monitor.check_closed_issues()
@@ -280,10 +285,72 @@ class HostWatcher:
             log.warning(f"Tracker sync failed: {e}")
 
     def _launch_background(self, cmd: list[str], sid: str):
-        """Launch a subprocess in background, logging its output."""
+        """Launch a subprocess in background, logging its output.
+
+        Stores the Popen handle so check_background_launches() can detect
+        early failures and revert session status.
+        """
         log_file = self.sessions_dir.parent / "watcher.log"
+        f = None
         try:
             f = open(log_file, "a")
-            subprocess.Popen(cmd, cwd=str(self.repo_dir), stdout=f, stderr=f)
+            proc = subprocess.Popen(cmd, cwd=str(self.repo_dir), stdout=f, stderr=f)
+            self._background_procs[sid] = (proc, f, time.time())
         except Exception as e:
             log.error(f"[{sid}] Failed to launch {cmd}: {e}")
+            if f is not None:
+                f.close()
+
+    def check_background_launches(self):
+        """Poll recently launched background processes for early exit.
+
+        If a process exits with non-zero within the grace period, log the
+        error and revert associated session status so recovery paths can
+        pick it up.
+        """
+        done_sids = []
+        for sid, (proc, log_fh, launch_time) in list(self._background_procs.items()):
+            rc = proc.poll()
+            if rc is None:
+                # Still running -- close log handle (subprocess inherited the fd)
+                # and stop tracking after grace period
+                elapsed = time.time() - launch_time
+                if elapsed > BACKGROUND_LAUNCH_CHECK_S:
+                    log_fh.close()
+                    done_sids.append(sid)
+                continue
+            # Process exited
+            log_fh.close()
+            done_sids.append(sid)
+            if rc != 0:
+                log.error(f"[{sid}] Background launch failed (exit code {rc})")
+                self._revert_failed_launch(sid)
+
+        for sid in done_sids:
+            self._background_procs.pop(sid, None)
+
+    def _revert_failed_launch(self, sid: str):
+        """Revert session status after a background launch failure.
+
+        For review sessions: revert the coder session from 'reviewing'
+        back to 'waiting:review' so auto-review can retry.
+        """
+        from host.constants import REVIEW_SESSION_PREFIX
+        from host.session_utils import read_state, update_status
+
+        if not sid.startswith(REVIEW_SESSION_PREFIX):
+            return
+
+        coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
+        coder_dir = self.sessions_dir / coder_sid
+        if not coder_dir.exists() or not (coder_dir / "state.json").exists():
+            return
+
+        try:
+            state = read_state(coder_dir)
+            if state.get("status") == "reviewing":
+                update_status(coder_dir, "waiting:review")
+                log.info(f"[{coder_sid}] Reverted from 'reviewing' to "
+                         f"'waiting:review' after review launch failure")
+        except Exception as e:
+            log.error(f"[{coder_sid}] Failed to revert status after launch failure: {e}")

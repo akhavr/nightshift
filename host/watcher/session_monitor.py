@@ -89,9 +89,28 @@ class SessionMonitor:
         # the container exited after @@DONE@@, so it's not an orphan.
         # Coder sessions in waiting:review are expected to have no
         # container — the coder is paused while the review handles them.
+        #
+        # Coder sessions stuck in "reviewing" with no review container are
+        # also recovered: the review launch likely failed, so revert to
+        # waiting:review for retry.
         if status == "waiting:review" and is_review_session:
             if state.get("completed_at"):
                 return  # normal completion, not an orphan
+        elif status == "reviewing" and not is_review_session:
+            # Coder session stuck in "reviewing" — check if the review
+            # container is actually running.  If not, revert to
+            # waiting:review so auto-review can retry.
+            review_sid = f"{REVIEW_SESSION_PREFIX}{sid}"
+            if review_sid in self._recently_launched:
+                if now - self._recently_launched[review_sid] < ORPHAN_GRACE_PERIOD_S:
+                    return  # review container still starting
+            review_container = f"nightshift-{review_sid}"
+            if _pkg().docker_container_status(review_container) in ("running", "paused"):
+                return  # review container is alive
+            log.warning(f"[{sid}] Stuck in 'reviewing' with no review container — "
+                        f"reverting to 'waiting:review'")
+            update_status(session_dir, "waiting:review")
+            return
         elif status not in ("working", "starting"):
             return
 
