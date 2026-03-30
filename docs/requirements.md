@@ -53,9 +53,9 @@ A human (or automated reviewer) can request revisions. For sessions in review (`
 - **Status:** covered
 
 ### REQ-009: Automated code review
-When a REVIEW.md template exists, the system automatically launches a reviewer agent against completed work. The reviewer can approve or request revisions, with configurable max review rounds. When a review session hits max-turns, the system checks if a verdict was already emitted: if yes, it treats the review as successfully completed; if no, it falls back to human review on the coder session.
+When a REVIEW.md template exists, the system automatically launches a reviewer agent against completed work. The reviewer can approve or request revisions, with configurable max review rounds. When a review session hits max-turns, the system checks if a verdict was already emitted: if yes, it treats the review as successfully completed; if no, it falls back to human review on the coder session. Background launch failures are detected by polling Popen exit codes; on failure, the coder session is reverted from "reviewing" to "waiting:review" for retry. The orphan detector also recovers coder sessions stuck in "reviewing" with no review container.
 
-- **Tests:** test_review_step.py, test_assistant_text_logging.py, test_post_run.py (TestReviewMaxTurns, TestScanConversationForVerdict), watcher/test_review_orchestrator.py (TestReviewNoVerdict)
+- **Tests:** test_review_step.py, test_assistant_text_logging.py, test_post_run.py (TestReviewMaxTurns, TestScanConversationForVerdict), watcher/test_review_orchestrator.py (TestReviewNoVerdict), watcher/test_host_watcher.py (TestLaunchBackground, TestCheckBackgroundLaunches), watcher/test_session_monitor.py (TestReviewingStatusRecovery)
 - **Status:** covered
 
 ### REQ-010: Notifications via pluggable channels
@@ -208,7 +208,8 @@ All git-bug operations are serialized through a single writer thread in the watc
 | watcher/test_graceful_shutdown.py | REQ-002 |
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
 | watcher/test_config_reload.py | REQ-023 |
-| watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-011, REQ-017 |
+| watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-009, REQ-011, REQ-017 |
+| watcher/test_host_watcher.py | REQ-009 |
 | test_tracker_ipc.py | REQ-026 |
 | test_socket_tracker_client.py | REQ-026 |
 | test_tracker_fallback.py | REQ-026 |

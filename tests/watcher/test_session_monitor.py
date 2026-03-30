@@ -790,3 +790,94 @@ class TestWorkflowPassthrough:
         cmd = launched_cmds[0]
         wf_idx = cmd.index("--workflow")
         assert cmd[wf_idx + 1] == str(w.monitor.workflow_path)
+
+
+# ---------------------------------------------------------------------------
+# "reviewing" status recovery tests
+# ---------------------------------------------------------------------------
+
+class TestReviewingStatusRecovery:
+    """Coder sessions stuck in 'reviewing' with no review container are reverted."""
+
+    def test_reviewing_no_review_container_reverts_to_waiting_review(self, tmp_path):
+        """Coder stuck in 'reviewing' with no review container -> revert."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "waiting:review"
+        # Should NOT have tried to resume the session as an orphan
+        assert launched == []
+
+    def test_reviewing_with_running_review_container_left_alone(self, tmp_path):
+        """Coder in 'reviewing' with running review container -> no change."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        def mock_status(container):
+            if "review-" in container:
+                return "running"
+            return None
+
+        with patch("host.watcher.docker_container_status", side_effect=mock_status):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "reviewing"  # unchanged
+        assert launched == []
+
+    def test_reviewing_with_recently_launched_review_left_alone(self, tmp_path):
+        """Coder in 'reviewing' with recently launched review -> no change (grace period)."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        w._recently_launched["review-abc"] = time.time()  # just launched
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "reviewing"  # unchanged
+        assert launched == []
+
+    def test_reviewing_with_expired_recently_launched_reverts(self, tmp_path):
+        """Coder in 'reviewing' with expired grace period -> revert."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        w._recently_launched["review-abc"] = time.time() - 9999  # expired
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "waiting:review"
+
+    def test_review_session_in_reviewing_not_affected(self, tmp_path):
+        """Review session (not coder) in 'reviewing' status is NOT handled here."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "review-abc", status="reviewing", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((sd / "state.json").read_text())
+        # Review sessions in "reviewing" are not handled by the new code path
+        assert state["status"] == "reviewing"
+        assert launched == []
