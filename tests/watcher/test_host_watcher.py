@@ -124,7 +124,7 @@ class TestLaunchBackground:
         assert "abc" in w._background_procs
         proc, log_fh, launch_time = w._background_procs["abc"]
         assert proc is not None
-        assert not log_fh.closed or True  # might be open or closed, just check it exists
+        assert log_fh is not None
         proc.wait()  # clean up
 
     def test_file_handle_closed_on_launch_failure(self, tmp_path):

@@ -9,8 +9,9 @@ from pathlib import Path
 
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME,
-    BACKGROUND_LAUNCH_CHECK_S,
+    BACKGROUND_LAUNCH_CHECK_S, REVIEW_SESSION_PREFIX,
 )
+from host.session_utils import read_state, update_status
 from core.config import load_workflow, create_tracker, WorkflowConfig
 from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
@@ -335,9 +336,6 @@ class HostWatcher:
         For review sessions: revert the coder session from 'reviewing'
         back to 'waiting:review' so auto-review can retry.
         """
-        from host.constants import REVIEW_SESSION_PREFIX
-        from host.session_utils import read_state, update_status
-
         if not sid.startswith(REVIEW_SESSION_PREFIX):
             return
 
