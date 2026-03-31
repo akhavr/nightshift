@@ -23,7 +23,6 @@ from core.upgrade import (
     TemplateVersion,
     CANONICAL_TEMPLATE,
     CANONICAL_REVIEW_TEMPLATE,
-    DEFAULT_VERSION,
     VERSION_KEY,
 )
 
@@ -667,6 +666,14 @@ class TestTemplateVersion:
         assert TemplateVersion(1, 0) >= TemplateVersion(1, 0)
         assert TemplateVersion(1, 1) <= TemplateVersion(2, 0)
 
+    def test_hashable(self):
+        """TemplateVersion instances can be used in sets and as dict keys."""
+        v1 = TemplateVersion(1, 0)
+        v2 = TemplateVersion(1, 0)
+        v3 = TemplateVersion(2, 0)
+        assert hash(v1) == hash(v2)
+        assert {v1, v2, v3} == {TemplateVersion(1, 0), TemplateVersion(2, 0)}
+
     def test_is_major_bump_from(self):
         assert TemplateVersion(2, 0).is_major_bump_from(TemplateVersion(1, 0))
         assert TemplateVersion(2, 0).is_major_bump_from(TemplateVersion(1, 5))
@@ -708,8 +715,9 @@ class TestMajorBumpBlocking:
 
         # File should NOT be modified
         assert "old prompt" in workflow.read_text()
-        err = capsys.readouterr().err
-        assert "--force" in err
+        captured = capsys.readouterr()
+        assert "--force" in captured.err
+        assert "nightshift upgrade --apply --force" in captured.err
 
     def test_major_bump_with_force_applies(self, tmp_path, capsys):
         """Major version bump with --apply --force should write."""

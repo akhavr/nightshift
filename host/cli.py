@@ -26,8 +26,7 @@ from core.upgrade import (
 from core.upstream import (
     diff_reverse, detect_operation, validate_proposal,
     validate_line_count, build_proposal,
-    count_prompt_lines,
-    UpstreamProposal,
+    count_prompt_lines, UpstreamProposal,
     PROMPT_SOFT_CAP_LINES, PROMPT_HARD_CAP_LINES,
 )
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
@@ -434,6 +433,7 @@ def _upgrade_template(project_path: Path, canonical_path: Path,
     else:
         print(f"\n{label} prompt sections are identical (only version bump needed).")
 
+    applied = False
     if apply:
         if is_major and not force:
             print(f"\n  Major version bump for {label} requires --force. "
@@ -444,12 +444,18 @@ def _upgrade_template(project_path: Path, canonical_path: Path,
             project_path.write_text(updated)
             print(f"\nApplied upgrade to {project_path} "
                   f"(template_version: {canonical_version}).")
+            applied = True
 
     # Consolidation trigger: warn when template exceeds soft cap
     line_count = count_prompt_lines(canonical_text)
     if line_count > PROMPT_SOFT_CAP_LINES:
         print(f"\n  Template at {line_count}/{PROMPT_HARD_CAP_LINES} lines "
               f"— consider consolidation")
+
+    # Return False when apply was requested but blocked (major without --force),
+    # so the caller can show the --apply hint.
+    if apply and not applied:
+        return False
 
     return True
 
@@ -510,15 +516,14 @@ def _upstream_template(project_path: Path, canonical_path: Path,
     print(f"\n{label}: detected operation: {operation}")
 
     # Run validation
-    issues = validate_proposal(project_text, canonical_text, operation)
+    issues = validate_proposal(project_text, operation)
     if issues:
         print(f"\n{label} validation issues:", file=sys.stderr)
         for issue in issues:
             print(f"  - {issue}", file=sys.stderr)
         print(f"\nFix validation issues before filing upstream.",
               file=sys.stderr)
-        # Show diff even in dry-run for diagnostic purposes, but don't
-        # build a proposal — it would be rejected in either mode.
+        # Validation failed — don't build a proposal.
         return None
 
     # Show soft cap warning even if not a blocking issue

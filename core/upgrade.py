@@ -17,10 +17,6 @@ CANONICAL_REVIEW_TEMPLATE = TEMPLATES_DIR / "REVIEW.md"
 # Field name in YAML front matter
 VERSION_KEY = "template_version"
 
-# Missing template_version is treated as version 0.0
-DEFAULT_VERSION = 0
-
-
 class TemplateVersion:
     """Represents a template version with major.minor semantics.
 
@@ -76,6 +72,9 @@ class TemplateVersion:
         if isinstance(other, TemplateVersion):
             return (self.major, self.minor) > (other.major, other.minor)
         return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash((self.major, self.minor))
 
     def __repr__(self) -> str:
         return f"TemplateVersion({self.major}, {self.minor})"

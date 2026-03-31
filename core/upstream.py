@@ -186,8 +186,7 @@ def validate_line_count(text: str, operation: str) -> tuple[str, str] | None:
     return None
 
 
-def validate_proposal(project_text: str, canonical_text: str,
-                       operation: str) -> list[str]:
+def validate_proposal(project_text: str, operation: str) -> list[str]:
     """Run all client-side validation filters on a proposal.
 
     Returns a list of issues found (empty means the proposal is clean).

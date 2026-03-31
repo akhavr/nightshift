@@ -215,21 +215,21 @@ class TestValidateProposal:
         project = "---\nv: 1\n---\n{{ issue.title }} prompt"
         canonical = "---\nv: 1\n---\nold prompt"
         with patch("core.upstream.load_blocklist", return_value=[]):
-            issues = validate_proposal(project, canonical, "add")
+            issues = validate_proposal(project, "add")
         assert issues == []
 
     def test_blocklist_term_returns_issue(self):
         project = "---\nv: 1\n---\nuse my-project"
         canonical = "---\nv: 1\n---\nold prompt"
         with patch("core.upstream.load_blocklist", return_value=["my-project"]):
-            issues = validate_proposal(project, canonical, "add")
+            issues = validate_proposal(project, "add")
         assert any("my-project" in i for i in issues)
 
     def test_unknown_jinja2_var_returns_issue(self):
         project = "---\nv: 1\n---\n{{ custom_thing }}"
         canonical = "---\nv: 1\n---\nold prompt"
         with patch("core.upstream.load_blocklist", return_value=[]):
-            issues = validate_proposal(project, canonical, "add")
+            issues = validate_proposal(project, "add")
         assert any("custom_thing" in i for i in issues)
 
     def test_add_over_hard_cap_returns_issue(self):
@@ -237,7 +237,7 @@ class TestValidateProposal:
         project = f"---\nv: 1\n---\n{lines}"
         canonical = "---\nv: 1\n---\nold"
         with patch("core.upstream.load_blocklist", return_value=[]):
-            issues = validate_proposal(project, canonical, "add")
+            issues = validate_proposal(project, "add")
         assert any("hard cap" in i for i in issues)
 
 
@@ -471,3 +471,104 @@ class TestCmdUpstream:
         mock_tracker.run_raw.assert_called_once()
         mock_tracker.add_label.assert_called_once()
         mock_tracker.sync.assert_called_once()
+
+    def test_tracker_run_raw_failure(self, tmp_path, capsys):
+        """When tracker.run_raw raises, the error is printed and filing continues."""
+        from host.cli import cmd_upstream
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nnew improved prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 1\n---\nold prompt")
+
+        args = MagicMock()
+        args.dry_run = False
+        args.project_name = "test-proj"
+        args.workflow = str(workflow)
+
+        mock_tracker = MagicMock()
+        mock_tracker.run_raw.side_effect = RuntimeError("git-bug lock error")
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical), \
+             patch("host.cli.load_workflow"), \
+             patch("host.cli.get_tracker_with_fallback",
+                   return_value=mock_tracker), \
+             patch("core.upstream.load_blocklist", return_value=[]), \
+             patch("builtins.input", return_value="y"):
+            cmd_upstream(args)
+
+        err = capsys.readouterr().err
+        assert "Failed to file upstream proposal" in err
+        assert "git-bug lock error" in err
+        # sync should not be called since no issue was filed
+        mock_tracker.sync.assert_not_called()
+
+    def test_tracker_sync_failure(self, tmp_path, capsys):
+        """When tracker.sync raises after filing, a warning is printed."""
+        from host.cli import cmd_upstream
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nnew improved prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 1\n---\nold prompt")
+
+        args = MagicMock()
+        args.dry_run = False
+        args.project_name = "test-proj"
+        args.workflow = str(workflow)
+
+        mock_tracker = MagicMock()
+        mock_tracker.run_raw.return_value = "abc123"
+        mock_tracker.sync.side_effect = RuntimeError("network error")
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical), \
+             patch("host.cli.load_workflow"), \
+             patch("host.cli.get_tracker_with_fallback",
+                   return_value=mock_tracker), \
+             patch("core.upstream.load_blocklist", return_value=[]), \
+             patch("builtins.input", return_value="y"):
+            cmd_upstream(args)
+
+        out = capsys.readouterr()
+        assert "Filed upstream proposal" in out.out
+        assert "tracker sync failed" in out.err
+        assert "network error" in out.err
+
+    def test_review_md_upstream_proposal(self, tmp_path, capsys):
+        """REVIEW.md changes should also generate an upstream proposal."""
+        from host.cli import cmd_upstream
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nsame prompt")
+
+        canonical_wf = tmp_path / "canonical_wf.md"
+        canonical_wf.write_text("---\ntemplate_version: 1\n---\nsame prompt")
+
+        review = tmp_path / "REVIEW.md"
+        review.write_text("---\ntemplate_version: 1\n---\nimproved review prompt")
+
+        canonical_rv = tmp_path / "canonical_rv.md"
+        canonical_rv.write_text("---\ntemplate_version: 1\n---\nold review prompt")
+
+        args = MagicMock()
+        args.dry_run = True
+        args.project_name = "test-proj"
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical_wf), \
+             patch("host.cli.CANONICAL_REVIEW_TEMPLATE", canonical_rv), \
+             patch("core.upstream.load_blocklist", return_value=[]):
+            cmd_upstream(args)
+
+        out = capsys.readouterr().out
+        assert "REVIEW.md" in out
+        assert "replace" in out
+        assert "Dry run complete" in out
