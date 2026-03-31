@@ -25,6 +25,7 @@ def test_overflow_config_defaults():
     oc = OverflowConfig()
     assert oc.extra_args == []
     assert oc.env == {}
+    assert oc.litellm_config is None
 
 
 def test_overflow_config_with_values():
@@ -472,3 +473,142 @@ def test_diff_config_no_overflow_change():
 def test_overflow_flag_filename_constant():
     """OVERFLOW_FLAG_FILENAME is defined and correct."""
     assert OVERFLOW_FLAG_FILENAME == "overflow"
+
+
+# ── Litellm proxy support ───────────────────────────────────────────────────
+
+
+def test_overflow_config_with_litellm():
+    """OverflowConfig stores litellm_config path."""
+    oc = OverflowConfig(litellm_config="litellm-config.yaml")
+    assert oc.litellm_config == "litellm-config.yaml"
+
+
+def test_parse_overflow_litellm_config(tmp_path):
+    """litellm_config is parsed from WORKFLOW.md overflow section."""
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("""\
+---
+overflow:
+  litellm_config: litellm-config.yaml
+  env:
+    OVERFLOW_API_KEY: sk-test
+---
+Prompt.
+""")
+    config = load_workflow(workflow)
+    assert config.overflow.litellm_config == "litellm-config.yaml"
+    assert config.overflow.env["OVERFLOW_API_KEY"] == "sk-test"
+
+
+def test_parse_overflow_no_litellm_config():
+    """Missing litellm_config defaults to None."""
+    config = WorkflowConfig()
+    raw = {"overflow": {"env": {"KEY": "val"}}}
+    _parse_overflow(raw, config)
+    assert config.overflow.litellm_config is None
+
+
+def test_docker_cmd_with_litellm_config():
+    """litellm config is mounted and ANTHROPIC_BASE_URL points to proxy."""
+    from core.constants import LITELLM_CONFIG_CONTAINER_PATH, LITELLM_PROXY_PORT
+
+    overflow = OverflowConfig(
+        litellm_config="/path/to/litellm-config.yaml",
+        env={"OVERFLOW_API_KEY": "sk-test"},
+    )
+    cmd = _build_cmd_with_overflow(overflow=overflow)
+
+    # Check mount
+    mount_pairs = []
+    for i, arg in enumerate(cmd):
+        if arg == "-v" and i + 1 < len(cmd):
+            mount_pairs.append(cmd[i + 1])
+
+    litellm_mounts = [m for m in mount_pairs if LITELLM_CONFIG_CONTAINER_PATH in m]
+    assert len(litellm_mounts) == 1
+    assert litellm_mounts[0].endswith(":ro")
+
+    # Check ANTHROPIC_BASE_URL points to proxy
+    env_pairs = []
+    for i, arg in enumerate(cmd):
+        if arg == "-e" and i + 1 < len(cmd):
+            env_pairs.append(cmd[i + 1])
+
+    base_url_entries = [e for e in env_pairs if e.startswith("ANTHROPIC_BASE_URL=")]
+    assert len(base_url_entries) >= 1
+    # The last one should be the proxy URL (overflow env appended after passthrough)
+    assert base_url_entries[-1] == f"ANTHROPIC_BASE_URL=http://localhost:{LITELLM_PROXY_PORT}"
+
+
+def test_docker_cmd_no_litellm_mount_without_config():
+    """Without litellm_config, no litellm mount appears."""
+    from core.constants import LITELLM_CONFIG_CONTAINER_PATH
+
+    overflow = OverflowConfig(
+        env={"ANTHROPIC_API_KEY": "sk-alt"},
+    )
+    cmd = _build_cmd_with_overflow(overflow=overflow)
+
+    mount_pairs = []
+    for i, arg in enumerate(cmd):
+        if arg == "-v" and i + 1 < len(cmd):
+            mount_pairs.append(cmd[i + 1])
+
+    litellm_mounts = [m for m in mount_pairs if LITELLM_CONFIG_CONTAINER_PATH in m]
+    assert len(litellm_mounts) == 0
+
+
+def test_launch_passes_overflow_with_litellm_config(tmp_path, monkeypatch):
+    """launch.py activates overflow when only litellm_config is set."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
+
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text("""\
+---
+overflow:
+  litellm_config: litellm-config.yaml
+  env:
+    OVERFLOW_API_KEY: sk-test
+---
+Prompt.
+""")
+
+    from host.launch import main
+
+    monkeypatch.setattr("sys.argv", [
+        "launch.py", "test-issue-id",
+        "--workflow", str(wf),
+    ])
+    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
+    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
+    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+
+    captured_kwargs = {}
+
+    def mock_run_container(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("host.launch.run_container", mock_run_container)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs.get("overflow") is not None
+    assert captured_kwargs["overflow"].litellm_config == "litellm-config.yaml"
+
+
+def test_litellm_constants():
+    """Litellm proxy constants are defined and sensible."""
+    from core.constants import (
+        LITELLM_PROXY_PORT, LITELLM_CONFIG_CONTAINER_PATH,
+        LITELLM_HEALTH_TIMEOUT_S, LITELLM_HEALTH_POLL_INTERVAL_S,
+    )
+    assert LITELLM_PROXY_PORT == 4000
+    assert LITELLM_CONFIG_CONTAINER_PATH == "/session/litellm-config.yaml"
+    assert LITELLM_HEALTH_TIMEOUT_S == 30
+    assert LITELLM_HEALTH_POLL_INTERVAL_S == 0.5

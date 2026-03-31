@@ -173,7 +173,7 @@ Downstream projects can propose prompt improvements back to the canonical templa
 - **Status:** covered
 
 ### REQ-028: Manual overflow to alternate LLM provider
-Users can manually switch new container launches to an alternate Anthropic-compatible LLM provider via `nightshift overflow on/off`. The overflow config (extra_args, env vars) is defined in WORKFLOW.md's `overflow` section with `$VAR` references resolved from `.env`. A flag file (`.nightshift/overflow`) controls activation. When active, overflow env vars and extra_args are injected into new docker commands. Already-running containers are unaffected. `nightshift status` shows overflow state. No watcher restart needed.
+Users can manually switch new container launches to an alternate Anthropic-compatible LLM provider via `nightshift overflow on/off`. The overflow config (extra_args, env vars, litellm_config) is defined in WORKFLOW.md's `overflow` section with `$VAR` references resolved from `.env`. A flag file (`.nightshift/overflow`) controls activation. When active, overflow env vars and extra_args are injected into new docker commands. Already-running containers are unaffected. `nightshift status` shows overflow state. No watcher restart needed. When `litellm_config` is set, the container starts a litellm proxy on localhost:4000 for model name remapping — `ANTHROPIC_BASE_URL` is automatically set to point to the proxy, and the config file is mounted read-only into the container.
 
 - **Tests:** test_overflow.py
 - **Status:** covered
