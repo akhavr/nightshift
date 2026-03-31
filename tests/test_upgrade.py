@@ -20,6 +20,7 @@ from core.upgrade import (
     load_canonical_template,
     load_canonical_review_template,
     _set_version_in_yaml,
+    TemplateVersion,
     CANONICAL_TEMPLATE,
     CANONICAL_REVIEW_TEMPLATE,
     DEFAULT_VERSION,
@@ -33,27 +34,31 @@ from core.upgrade import (
 class TestReadTemplateVersion:
     def test_reads_version_from_front_matter(self):
         text = "---\ntemplate_version: 3\nagent:\n  kind: claude-code\n---\nprompt"
-        assert read_template_version(text) == 3
+        assert read_template_version(text) == TemplateVersion(3, 0)
+
+    def test_reads_dotted_version(self):
+        text = "---\ntemplate_version: 2.1\nagent:\n  kind: claude-code\n---\nprompt"
+        assert read_template_version(text) == TemplateVersion(2, 1)
 
     def test_missing_version_returns_zero(self):
         text = "---\nagent:\n  kind: claude-code\n---\nprompt"
-        assert read_template_version(text) == DEFAULT_VERSION
+        assert read_template_version(text) == TemplateVersion(0, 0)
 
     def test_no_front_matter_returns_zero(self):
         text = "Just a plain prompt with no YAML."
-        assert read_template_version(text) == DEFAULT_VERSION
+        assert read_template_version(text) == TemplateVersion(0, 0)
 
     def test_malformed_yaml_returns_zero(self):
         text = "---\n: invalid: yaml: [[[[\n---\nprompt"
-        assert read_template_version(text) == DEFAULT_VERSION
+        assert read_template_version(text) == TemplateVersion(0, 0)
 
     def test_non_dict_front_matter_returns_zero(self):
         text = "---\n- list\n- item\n---\nprompt"
-        assert read_template_version(text) == DEFAULT_VERSION
+        assert read_template_version(text) == TemplateVersion(0, 0)
 
     def test_non_int_version_returns_zero(self):
         text = "---\ntemplate_version: abc\n---\nprompt"
-        assert read_template_version(text) == DEFAULT_VERSION
+        assert read_template_version(text) == TemplateVersion(0, 0)
 
 
 # ── get_canonical_version ────────────────────────────────────────────────────
@@ -62,11 +67,11 @@ class TestReadTemplateVersion:
 class TestGetCanonicalVersion:
     def test_reads_from_shipped_template(self):
         version = get_canonical_version()
-        assert version >= 1
+        assert version >= TemplateVersion(1, 0)
 
     def test_missing_template_returns_zero(self):
         with patch("core.upgrade.CANONICAL_TEMPLATE", Path("/nonexistent/WORKFLOW.md")):
-            assert get_canonical_version() == DEFAULT_VERSION
+            assert get_canonical_version() == TemplateVersion(0, 0)
 
 
 # ── get_prompt_section / get_yaml_section ────────────────────────────────────
@@ -167,6 +172,7 @@ class TestApplyUpgrade:
         canonical = "---\ntemplate_version: 2\nagent:\n  kind: claude-code\n---\nnew prompt"
         result = apply_upgrade(project, canonical)
         assert "max_turns: 99" in result
+        assert "template_version: 2.0" in result
         assert "new prompt" in result
         assert "old prompt" not in result
 
@@ -174,14 +180,14 @@ class TestApplyUpgrade:
         project = "---\ntemplate_version: 1\nagent:\n  kind: claude-code\n---\nold"
         canonical = "---\ntemplate_version: 3\nagent:\n  kind: claude-code\n---\nnew"
         result = apply_upgrade(project, canonical)
-        assert "template_version: 3" in result
+        assert "template_version: 3.0" in result
         assert "template_version: 1" not in result
 
     def test_adds_version_when_missing(self):
         project = "---\nagent:\n  kind: claude-code\n---\nold"
         canonical = "---\ntemplate_version: 1\nagent:\n  kind: claude-code\n---\nnew"
         result = apply_upgrade(project, canonical)
-        assert "template_version: 1" in result
+        assert "template_version: 1.0" in result
 
     def test_prompt_section_fully_replaced(self):
         project = "---\nv: 0\n---\nold alpha\nold beta\nold gamma"
@@ -225,7 +231,7 @@ class TestCmdUpgrade:
             cmd_upgrade(args)
 
         out = capsys.readouterr().out
-        assert "0 -> 1" in out
+        assert "0.0 -> 1.0" in out
         assert "old prompt" in out or "new prompt" in out
 
     def test_apply_writes_file(self, tmp_path, capsys):
@@ -239,6 +245,7 @@ class TestCmdUpgrade:
 
         args = MagicMock()
         args.apply = True
+        args.force = True
         args.workflow = str(workflow)
 
         with patch("host.cli.repo_root", return_value=tmp_path), \
@@ -247,7 +254,7 @@ class TestCmdUpgrade:
             cmd_upgrade(args)
 
         updated = workflow.read_text()
-        assert "template_version: 1" in updated
+        assert "template_version: 1.0" in updated
         assert "new prompt" in updated
         assert "max_turns" not in updated  # canonical's yaml not used
         assert "kind: claude-code" in updated  # project's yaml preserved
@@ -354,7 +361,7 @@ class TestInitVersionHint:
         args.workflow = None
 
         with patch("host.cli.repo_root", return_value=repo), \
-             patch("host.cli.get_canonical_version", return_value=1):
+             patch("host.cli.get_canonical_version", return_value=TemplateVersion(1, 0)):
             cmd_init(args)
 
         out = capsys.readouterr().out
@@ -382,7 +389,7 @@ class TestInitVersionHint:
         args.workflow = None
 
         with patch("host.cli.repo_root", return_value=repo), \
-             patch("host.cli.get_canonical_version", return_value=1):
+             patch("host.cli.get_canonical_version", return_value=TemplateVersion(1, 0)):
             cmd_init(args)
 
         out = capsys.readouterr().out
@@ -395,11 +402,11 @@ class TestInitVersionHint:
 class TestGetCanonicalReviewVersion:
     def test_reads_from_shipped_template(self):
         version = get_canonical_review_version()
-        assert version >= 1
+        assert version >= TemplateVersion(1, 0)
 
     def test_missing_template_returns_zero(self):
         with patch("core.upgrade.CANONICAL_REVIEW_TEMPLATE", Path("/nonexistent/REVIEW.md")):
-            assert get_canonical_review_version() == DEFAULT_VERSION
+            assert get_canonical_review_version() == TemplateVersion(0, 0)
 
 
 # ── load_canonical_review_template ────────────────────────────────────────
@@ -437,6 +444,7 @@ class TestCmdUpgradeReview:
 
         args = MagicMock()
         args.apply = True
+        args.force = True
         args.workflow = str(workflow)
 
         with patch("host.cli.repo_root", return_value=tmp_path), \
@@ -446,7 +454,7 @@ class TestCmdUpgradeReview:
             cmd_upgrade(args)
 
         updated = review.read_text()
-        assert "template_version: 1" in updated
+        assert "template_version: 1.0" in updated
         assert "new review prompt" in updated
         assert "old review prompt" not in updated
 
@@ -477,7 +485,7 @@ class TestCmdUpgradeReview:
 
         out = capsys.readouterr().out
         assert "REVIEW.md" in out
-        assert "0 -> 1" in out
+        assert "0.0 -> 1.0" in out
         assert "nightshift upgrade --apply" in out
 
     def test_review_skipped_when_no_review_file(self, tmp_path, capsys):
@@ -525,6 +533,7 @@ class TestCmdUpgradeReview:
 
         args = MagicMock()
         args.apply = True
+        args.force = True
         args.workflow = str(workflow)
 
         with patch("host.cli.repo_root", return_value=tmp_path), \
@@ -620,8 +629,186 @@ class TestInitReviewTemplate:
         args.workflow = None
 
         with patch("host.cli.repo_root", return_value=repo), \
-             patch("host.cli.get_canonical_review_version", return_value=1):
+             patch("host.cli.get_canonical_review_version", return_value=TemplateVersion(1, 0)):
             cmd_init(args)
 
         out = capsys.readouterr().out
         assert "REVIEW.md template is behind" in out
+
+
+# ── TemplateVersion ────────────────────────────────────────────────────────
+
+
+class TestTemplateVersion:
+    def test_parse_int(self):
+        v = TemplateVersion.parse(3)
+        assert v == TemplateVersion(3, 0)
+
+    def test_parse_dotted_string(self):
+        v = TemplateVersion.parse("2.1")
+        assert v == TemplateVersion(2, 1)
+
+    def test_parse_none(self):
+        v = TemplateVersion.parse(None)
+        assert v == TemplateVersion(0, 0)
+
+    def test_parse_float(self):
+        v = TemplateVersion.parse(1.2)
+        assert v == TemplateVersion(1, 2)
+
+    def test_str(self):
+        assert str(TemplateVersion(2, 1)) == "2.1"
+        assert str(TemplateVersion(0, 0)) == "0.0"
+
+    def test_comparison(self):
+        assert TemplateVersion(1, 0) < TemplateVersion(2, 0)
+        assert TemplateVersion(1, 0) < TemplateVersion(1, 1)
+        assert TemplateVersion(2, 0) > TemplateVersion(1, 9)
+        assert TemplateVersion(1, 0) >= TemplateVersion(1, 0)
+        assert TemplateVersion(1, 1) <= TemplateVersion(2, 0)
+
+    def test_is_major_bump_from(self):
+        assert TemplateVersion(2, 0).is_major_bump_from(TemplateVersion(1, 0))
+        assert TemplateVersion(2, 0).is_major_bump_from(TemplateVersion(1, 5))
+        assert not TemplateVersion(1, 1).is_major_bump_from(TemplateVersion(1, 0))
+        assert not TemplateVersion(1, 0).is_major_bump_from(TemplateVersion(1, 0))
+
+    def test_backward_compat_int_version(self):
+        """Integer versions (legacy) should be treated as N.0."""
+        text = "---\ntemplate_version: 1\n---\nprompt"
+        v = read_template_version(text)
+        assert v == TemplateVersion(1, 0)
+        assert v < TemplateVersion(1, 1)
+        assert v < TemplateVersion(2, 0)
+
+
+# ── Major bump blocking ─────────────────────────────────────────────────────
+
+
+class TestMajorBumpBlocking:
+    def test_major_bump_requires_force(self, tmp_path, capsys):
+        """Major version bump with --apply but no --force should not write."""
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1.0\n---\nold prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 2.0\n---\nnew prompt")
+
+        args = MagicMock()
+        args.apply = True
+        args.force = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical):
+            cmd_upgrade(args)
+
+        # File should NOT be modified
+        assert "old prompt" in workflow.read_text()
+        err = capsys.readouterr().err
+        assert "--force" in err
+
+    def test_major_bump_with_force_applies(self, tmp_path, capsys):
+        """Major version bump with --apply --force should write."""
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1.0\n---\nold prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 2.0\n---\nnew prompt")
+
+        args = MagicMock()
+        args.apply = True
+        args.force = True
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical):
+            cmd_upgrade(args)
+
+        updated = workflow.read_text()
+        assert "new prompt" in updated
+        assert "template_version: 2.0" in updated
+
+    def test_minor_bump_applies_without_force(self, tmp_path, capsys):
+        """Minor version bump should apply with just --apply."""
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1.0\n---\nold prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 1.1\n---\nnew prompt")
+
+        args = MagicMock()
+        args.apply = True
+        args.force = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical):
+            cmd_upgrade(args)
+
+        updated = workflow.read_text()
+        assert "new prompt" in updated
+        assert "template_version: 1.1" in updated
+
+    def test_major_bump_shows_warning(self, tmp_path, capsys):
+        """Major version bump should show a WARNING in output."""
+        from host.cli import cmd_upgrade
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1.0\n---\nold prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 2.0\n---\nnew prompt")
+
+        args = MagicMock()
+        args.apply = False
+        args.force = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical):
+            cmd_upgrade(args)
+
+        out = capsys.readouterr().out
+        assert "MAJOR" in out
+        assert "WARNING" in out
+
+
+# ── Consolidation trigger ────────────────────────────────────────────────────
+
+
+class TestConsolidationTrigger:
+    def test_upgrade_warns_when_over_soft_cap(self, tmp_path, capsys):
+        """Upgrade should warn about consolidation when exceeding soft cap."""
+        from host.cli import cmd_upgrade
+        from core.upstream import PROMPT_SOFT_CAP_LINES
+
+        prompt_lines = "\n".join(f"line {i}" for i in range(PROMPT_SOFT_CAP_LINES + 5))
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1.0\n---\nold")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text(f"---\ntemplate_version: 1.1\n---\n{prompt_lines}")
+
+        args = MagicMock()
+        args.apply = False
+        args.force = False
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical):
+            cmd_upgrade(args)
+
+        out = capsys.readouterr().out
+        assert "consider consolidation" in out.lower()

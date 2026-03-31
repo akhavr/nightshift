@@ -26,7 +26,9 @@ from core.upgrade import (
 from core.upstream import (
     diff_reverse, detect_operation, validate_proposal,
     validate_line_count, build_proposal,
+    count_prompt_lines,
     UpstreamProposal,
+    PROMPT_SOFT_CAP_LINES, PROMPT_HARD_CAP_LINES,
 )
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
@@ -376,23 +378,37 @@ def cmd_init(a):
     print("  3. Run: nightshift start <issue-id>")
 
 
-def _upgrade_template(project_path: Path, canonical_path: Path,
-                      label: str, apply: bool) -> bool:
-    """Diff and optionally apply a canonical template upgrade to a project file.
+def _load_template_pair(project_path: Path, canonical_path: Path,
+                        label: str) -> tuple[str, str] | None:
+    """Load project and canonical template texts.
 
-    Returns True if the file was behind and needed an upgrade, False if up to date.
-    Skips silently if the project file does not exist.
+    Returns (project_text, canonical_text) or None if either file is missing.
+    Prints appropriate messages for missing files.
     """
     if not project_path.exists():
-        return False
+        return None
 
     if not canonical_path.exists():
         print(f"Canonical {label} template not found. Reinstall nightshift.",
               file=sys.stderr)
-        return False
+        return None
 
-    project_text = project_path.read_text()
-    canonical_text = canonical_path.read_text()
+    return project_path.read_text(), canonical_path.read_text()
+
+
+def _upgrade_template(project_path: Path, canonical_path: Path,
+                      label: str, apply: bool,
+                      force: bool = False) -> bool:
+    """Diff and optionally apply a canonical template upgrade to a project file.
+
+    Returns True if the file was behind and needed an upgrade, False if up to date.
+    Skips silently if the project file does not exist.
+    Major version bumps require force=True to apply.
+    """
+    pair = _load_template_pair(project_path, canonical_path, label)
+    if pair is None:
+        return False
+    project_text, canonical_text = pair
 
     project_version = read_template_version(project_text)
     canonical_version = read_template_version(canonical_text)
@@ -401,7 +417,15 @@ def _upgrade_template(project_path: Path, canonical_path: Path,
         print(f"{label} is up to date (template_version: {project_version}).")
         return False
 
-    print(f"{label} template_version: {project_version} -> {canonical_version}")
+    is_major = canonical_version.is_major_bump_from(project_version)
+    bump_label = "MAJOR" if is_major else "minor"
+    print(f"{label} template_version: {project_version} -> {canonical_version} "
+          f"({bump_label} version bump)")
+
+    if is_major:
+        print(f"\n  WARNING: This is a major version bump for {label}. "
+              f"Behavioral changes (replacements/consolidations) were made. "
+              f"Review the diff carefully.")
 
     diff = diff_prompt_sections(project_text, canonical_text, label=label)
     if diff:
@@ -411,10 +435,22 @@ def _upgrade_template(project_path: Path, canonical_path: Path,
         print(f"\n{label} prompt sections are identical (only version bump needed).")
 
     if apply:
-        updated = apply_upgrade(project_text, canonical_text)
-        project_path.write_text(updated)
-        print(f"\nApplied upgrade to {project_path} "
-              f"(template_version: {canonical_version}).")
+        if is_major and not force:
+            print(f"\n  Major version bump for {label} requires --force. "
+                  f"Run `nightshift upgrade --apply --force` to apply.",
+                  file=sys.stderr)
+        else:
+            updated = apply_upgrade(project_text, canonical_text)
+            project_path.write_text(updated)
+            print(f"\nApplied upgrade to {project_path} "
+                  f"(template_version: {canonical_version}).")
+
+    # Consolidation trigger: warn when template exceeds soft cap
+    line_count = count_prompt_lines(canonical_text)
+    if line_count > PROMPT_SOFT_CAP_LINES:
+        print(f"\n  Template at {line_count}/{PROMPT_HARD_CAP_LINES} lines "
+              f"— consider consolidation")
+
     return True
 
 
@@ -437,13 +473,14 @@ def cmd_upgrade(a):
               file=sys.stderr)
         sys.exit(1)
 
+    force = getattr(a, "force", False)
     workflow_changed = _upgrade_template(
-        workflow_path, CANONICAL_TEMPLATE, "WORKFLOW.md", a.apply)
+        workflow_path, CANONICAL_TEMPLATE, "WORKFLOW.md", a.apply, force)
 
     # Also upgrade REVIEW.md if it exists next to the workflow file
     review_path = workflow_path.parent / "REVIEW.md"
     review_changed = _upgrade_template(
-        review_path, CANONICAL_REVIEW_TEMPLATE, "REVIEW.md", a.apply)
+        review_path, CANONICAL_REVIEW_TEMPLATE, "REVIEW.md", a.apply, force)
 
     if not workflow_changed and not review_changed:
         return
@@ -453,23 +490,16 @@ def cmd_upgrade(a):
 
 
 def _upstream_template(project_path: Path, canonical_path: Path,
-                        label: str, project_name: str,
-                        dry_run: bool) -> UpstreamProposal | None:
+                        label: str, project_name: str) -> UpstreamProposal | None:
     """Diff a project template against canonical and validate for upstreaming.
 
     Returns an UpstreamProposal if there are changes to propose, None otherwise.
     Prints validation issues and diff to stdout/stderr.
     """
-    if not project_path.exists():
+    pair = _load_template_pair(project_path, canonical_path, label)
+    if pair is None:
         return None
-
-    if not canonical_path.exists():
-        print(f"Canonical {label} template not found. Reinstall nightshift.",
-              file=sys.stderr)
-        return None
-
-    project_text = project_path.read_text()
-    canonical_text = canonical_path.read_text()
+    project_text, canonical_text = pair
 
     diff_text = diff_reverse(project_text, canonical_text, label=label)
     if not diff_text:
@@ -525,14 +555,14 @@ def cmd_upstream(a):
 
     wf_proposal = _upstream_template(
         workflow_path, CANONICAL_TEMPLATE, "WORKFLOW.md",
-        project_name, a.dry_run)
+        project_name)
     if wf_proposal:
         proposals.append(wf_proposal)
 
     review_path = workflow_path.parent / "REVIEW.md"
     rv_proposal = _upstream_template(
         review_path, CANONICAL_REVIEW_TEMPLATE, "REVIEW.md",
-        project_name, a.dry_run)
+        project_name)
     if rv_proposal:
         proposals.append(rv_proposal)
 
@@ -869,6 +899,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sp = s.add_parser("upgrade", help="Upgrade WORKFLOW.md prompt to latest template")
     sp.add_argument("--apply", action="store_true",
                     help="Apply the upgrade (default: dry-run showing diff)")
+    sp.add_argument("--force", action="store_true",
+                    help="Force apply major version bumps (behavioral changes)")
     sp.set_defaults(func=cmd_upgrade)
 
     sp = s.add_parser("upstream",
