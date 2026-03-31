@@ -66,6 +66,7 @@ class AutoStartConfig:
 class OverflowConfig:
     extra_args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    litellm_config: str | None = None  # path to litellm-config.yaml for proxy-based model remapping
 
 
 @dataclass

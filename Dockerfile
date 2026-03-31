@@ -11,6 +11,7 @@ RUN curl -sL https://github.com/git-bug/git-bug/releases/latest/download/git-bug
 
 COPY requirements.txt /opt/nightshift/
 RUN pip install --break-system-packages -r /opt/nightshift/requirements.txt
+RUN pip install --break-system-packages 'litellm[proxy]'
 
 COPY core/ /opt/nightshift/core/
 COPY adapters/ /opt/nightshift/adapters/
