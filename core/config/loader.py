@@ -10,6 +10,7 @@ import yaml
 from core.config.models import (
     WorkflowConfig, AgentConfig, TrackerConfig, WorkspaceConfig,
     NotifierConfig, MergeConfig, HooksConfig, ReviewConfig, AutoStartConfig,
+    OverflowConfig,
 )
 
 log = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
     _parse_hooks(raw, config)
     _parse_review(raw, config)
     _parse_auto_start(raw, config)
+    _parse_overflow(raw, config)
 
     if "terminal_statuses" in raw:
         config.terminal_statuses = [str(s) for s in raw["terminal_statuses"]]
@@ -143,6 +145,16 @@ def _parse_auto_start(raw: dict, config: WorkflowConfig):
         label=str(asc.get("label", "nightshift")),
         poll_interval_s=int(asc.get("poll_interval_s", 30)),
         max_concurrent=int(asc.get("max_concurrent", 1)),
+    )
+
+
+def _parse_overflow(raw: dict, config: WorkflowConfig):
+    if "overflow" not in raw:
+        return
+    o = raw["overflow"]
+    config.overflow = OverflowConfig(
+        extra_args=o.get("extra_args", []),
+        env=o.get("env", {}),
     )
 
 

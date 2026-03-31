@@ -4,6 +4,7 @@
 No hardcoded adapter imports. Adapter selection is driven by WORKFLOW.md.
 """
 
+import json
 import logging
 import os
 import subprocess
@@ -155,6 +156,16 @@ def main():
     step = os.environ.get("STEP", "")
 
     config = load_workflow(Path("/workspace/WORKFLOW.md"))
+
+    # Extend agent extra_args with overflow args injected by host
+    overflow_args_raw = os.environ.get("OVERFLOW_EXTRA_ARGS", "")
+    if overflow_args_raw:
+        try:
+            overflow_args = json.loads(overflow_args_raw)
+            config.agent.extra_args = list(overflow_args) + config.agent.extra_args
+        except json.JSONDecodeError as e:
+            log.error(f"Failed to parse OVERFLOW_EXTRA_ARGS: {e}")
+
     max_turns = int(os.environ.get("MAX_TURNS", config.agent.max_turns))
 
     tracker, agent, workspace_mgr, workspace, state_mgr, notifier = _create_adapters(config)

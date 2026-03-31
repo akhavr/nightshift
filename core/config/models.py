@@ -63,6 +63,12 @@ class AutoStartConfig:
 
 
 @dataclass
+class OverflowConfig:
+    extra_args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class WorkflowConfig:
     """Fully parsed, typed configuration from WORKFLOW.md."""
     agent: AgentConfig = field(default_factory=AgentConfig)
@@ -73,5 +79,6 @@ class WorkflowConfig:
     hooks: HooksConfig = field(default_factory=HooksConfig)
     review: ReviewConfig = field(default_factory=ReviewConfig)
     auto_start: AutoStartConfig = field(default_factory=AutoStartConfig)
+    overflow: OverflowConfig = field(default_factory=OverflowConfig)
     terminal_statuses: list[str] = field(default_factory=lambda: ["closed"])
     prompt_template: str = ""

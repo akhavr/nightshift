@@ -1,0 +1,474 @@
+"""Tests for overflow feature (REQ-028): alternate LLM provider switching."""
+
+import json
+import os
+import sys
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from core.config.models import OverflowConfig, WorkflowConfig
+from core.config.loader import load_workflow, _parse_overflow
+from host.constants import OVERFLOW_FLAG_FILENAME
+from host.docker_cmd import build_docker_cmd
+from host.cli import cmd_overflow, cmd_status, _overflow_flag_path
+
+
+# ── OverflowConfig dataclass ────────────────────────────────────────────────
+
+
+def test_overflow_config_defaults():
+    """OverflowConfig has empty defaults."""
+    oc = OverflowConfig()
+    assert oc.extra_args == []
+    assert oc.env == {}
+
+
+def test_overflow_config_with_values():
+    """OverflowConfig stores extra_args and env."""
+    oc = OverflowConfig(
+        extra_args=["--model", "m2.7"],
+        env={"ANTHROPIC_BASE_URL": "https://example.com"},
+    )
+    assert oc.extra_args == ["--model", "m2.7"]
+    assert oc.env["ANTHROPIC_BASE_URL"] == "https://example.com"
+
+
+def test_workflow_config_has_overflow():
+    """WorkflowConfig includes an overflow field with correct default."""
+    wc = WorkflowConfig()
+    assert isinstance(wc.overflow, OverflowConfig)
+    assert wc.overflow.extra_args == []
+    assert wc.overflow.env == {}
+
+
+# ── Config parsing ──────────────────────────────────────────────────────────
+
+
+def test_parse_overflow_from_yaml(tmp_path):
+    """Overflow section is parsed from WORKFLOW.md YAML front matter."""
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("""\
+---
+overflow:
+  extra_args: ["--model", "m2.7"]
+  env:
+    ANTHROPIC_BASE_URL: https://api.minimax.io/anthropic
+    ANTHROPIC_API_KEY: sk-test-key
+---
+Prompt body here.
+""")
+    config = load_workflow(workflow)
+    assert config.overflow.extra_args == ["--model", "m2.7"]
+    assert config.overflow.env["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
+    assert config.overflow.env["ANTHROPIC_API_KEY"] == "sk-test-key"
+
+
+def test_parse_overflow_missing():
+    """Missing overflow section produces empty defaults."""
+    config = WorkflowConfig()
+    raw = {}
+    _parse_overflow(raw, config)
+    assert config.overflow.extra_args == []
+    assert config.overflow.env == {}
+
+
+def test_parse_overflow_env_var_resolution(tmp_path, monkeypatch):
+    """$VAR references in overflow config are resolved from environment."""
+    monkeypatch.setenv("OVERFLOW_MODEL", "m2.7")
+    monkeypatch.setenv("OVERFLOW_BASE_URL", "https://api.minimax.io/anthropic")
+    monkeypatch.setenv("OVERFLOW_API_KEY", "sk-resolved-key")
+
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("""\
+---
+overflow:
+  extra_args: ["--model", "$OVERFLOW_MODEL"]
+  env:
+    ANTHROPIC_BASE_URL: $OVERFLOW_BASE_URL
+    ANTHROPIC_API_KEY: $OVERFLOW_API_KEY
+---
+Prompt.
+""")
+    config = load_workflow(workflow)
+    assert config.overflow.extra_args == ["--model", "m2.7"]
+    assert config.overflow.env["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
+    assert config.overflow.env["ANTHROPIC_API_KEY"] == "sk-resolved-key"
+
+
+def test_parse_overflow_partial():
+    """Overflow section with only extra_args, no env."""
+    config = WorkflowConfig()
+    raw = {"overflow": {"extra_args": ["--model", "test"]}}
+    _parse_overflow(raw, config)
+    assert config.overflow.extra_args == ["--model", "test"]
+    assert config.overflow.env == {}
+
+
+# ── docker_cmd with overflow ────────────────────────────────────────────────
+
+
+def _build_cmd_with_overflow(overflow=None):
+    """Helper to build a docker command with optional overflow."""
+    return build_docker_cmd(
+        repo=Path("/repo"),
+        workspace_mount="/workspace",
+        session_dir=Path("/session"),
+        container_name="nightshift-abc123",
+        worktree_name="agent-abc123",
+        issue_id="abc123",
+        short_id="abc123",
+        max_turns=50,
+        step="coder",
+        is_resume=False,
+        workflow_path="/repo/WORKFLOW.md",
+        image="nightshift:latest",
+        overflow=overflow,
+    )
+
+
+def test_docker_cmd_no_overflow():
+    """Without overflow, no overflow env vars appear in docker command."""
+    cmd = _build_cmd_with_overflow(overflow=None)
+    cmd_str = " ".join(cmd)
+    assert "OVERFLOW_EXTRA_ARGS" not in cmd_str
+
+
+def test_docker_cmd_with_overflow_env():
+    """Overflow env vars are injected into docker command."""
+    overflow = OverflowConfig(
+        extra_args=[],
+        env={"ANTHROPIC_BASE_URL": "https://alt.api", "ANTHROPIC_API_KEY": "sk-alt"},
+    )
+    cmd = _build_cmd_with_overflow(overflow=overflow)
+
+    # Find the overflow env vars in the command
+    env_pairs = []
+    for i, arg in enumerate(cmd):
+        if arg == "-e" and i + 1 < len(cmd):
+            env_pairs.append(cmd[i + 1])
+
+    assert "ANTHROPIC_BASE_URL=https://alt.api" in env_pairs
+    assert "ANTHROPIC_API_KEY=sk-alt" in env_pairs
+
+
+def test_docker_cmd_with_overflow_extra_args():
+    """Overflow extra_args are passed as OVERFLOW_EXTRA_ARGS env var."""
+    overflow = OverflowConfig(
+        extra_args=["--model", "m2.7"],
+        env={},
+    )
+    cmd = _build_cmd_with_overflow(overflow=overflow)
+
+    env_pairs = []
+    for i, arg in enumerate(cmd):
+        if arg == "-e" and i + 1 < len(cmd):
+            env_pairs.append(cmd[i + 1])
+
+    overflow_args_entries = [e for e in env_pairs if e.startswith("OVERFLOW_EXTRA_ARGS=")]
+    assert len(overflow_args_entries) == 1
+    parsed = json.loads(overflow_args_entries[0].split("=", 1)[1])
+    assert parsed == ["--model", "m2.7"]
+
+
+def test_docker_cmd_overflow_env_overrides_passthrough(monkeypatch):
+    """Overflow env vars appear after passthrough vars, effectively overriding them."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-primary")
+    overflow = OverflowConfig(
+        extra_args=[],
+        env={"ANTHROPIC_API_KEY": "sk-overflow"},
+    )
+    cmd = _build_cmd_with_overflow(overflow=overflow)
+
+    # Collect all ANTHROPIC_API_KEY values in order
+    api_keys = []
+    for i, arg in enumerate(cmd):
+        if arg == "-e" and i + 1 < len(cmd) and cmd[i + 1].startswith("ANTHROPIC_API_KEY="):
+            api_keys.append(cmd[i + 1])
+
+    # Docker uses the last -e value for a given var, so overflow should be last
+    assert len(api_keys) == 2
+    assert api_keys[-1] == "ANTHROPIC_API_KEY=sk-overflow"
+
+
+# ── ANTHROPIC_BASE_URL passthrough ──────────────────────────────────────────
+
+
+def test_anthropic_base_url_passthrough(monkeypatch):
+    """ANTHROPIC_BASE_URL is now in _PASSTHROUGH_ENV_VARS."""
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://custom.api")
+    cmd = _build_cmd_with_overflow(overflow=None)
+
+    env_pairs = []
+    for i, arg in enumerate(cmd):
+        if arg == "-e" and i + 1 < len(cmd):
+            env_pairs.append(cmd[i + 1])
+
+    assert "ANTHROPIC_BASE_URL=https://custom.api" in env_pairs
+
+
+# ── CLI overflow command ────────────────────────────────────────────────────
+
+
+def test_cmd_overflow_on(tmp_path, capsys):
+    """'nightshift overflow on' creates the flag file."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    flag = ns_dir / OVERFLOW_FLAG_FILENAME
+
+    args = MagicMock()
+    args.state = "on"
+
+    with patch("host.cli._overflow_flag_path", return_value=flag):
+        cmd_overflow(args)
+
+    assert flag.exists()
+    out = capsys.readouterr().out
+    assert "ON" in out
+
+
+def test_cmd_overflow_off(tmp_path, capsys):
+    """'nightshift overflow off' removes the flag file."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    flag = ns_dir / OVERFLOW_FLAG_FILENAME
+    flag.touch()
+
+    args = MagicMock()
+    args.state = "off"
+
+    with patch("host.cli._overflow_flag_path", return_value=flag):
+        cmd_overflow(args)
+
+    assert not flag.exists()
+    out = capsys.readouterr().out
+    assert "OFF" in out
+
+
+def test_cmd_overflow_off_no_file(tmp_path, capsys):
+    """'nightshift overflow off' is safe when flag file doesn't exist."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    flag = ns_dir / OVERFLOW_FLAG_FILENAME
+
+    args = MagicMock()
+    args.state = "off"
+
+    with patch("host.cli._overflow_flag_path", return_value=flag):
+        cmd_overflow(args)
+
+    assert not flag.exists()
+
+
+def test_cmd_overflow_creates_parent_dir(tmp_path, capsys):
+    """'nightshift overflow on' creates .nightshift/ if it doesn't exist."""
+    flag = tmp_path / ".nightshift" / OVERFLOW_FLAG_FILENAME
+
+    args = MagicMock()
+    args.state = "on"
+
+    with patch("host.cli._overflow_flag_path", return_value=flag):
+        cmd_overflow(args)
+
+    assert flag.exists()
+
+
+# ── CLI status shows overflow state ─────────────────────────────────────────
+
+
+def test_cmd_status_shows_overflow_on(tmp_path, capsys):
+    """'nightshift status' shows 'Overflow: ON' when flag is present."""
+    ns_dir = tmp_path / ".nightshift"
+    sessions = ns_dir / "sessions"
+    sessions.mkdir(parents=True)
+    flag = ns_dir / OVERFLOW_FLAG_FILENAME
+    flag.touch()
+
+    args = MagicMock()
+
+    with patch("host.cli._overflow_flag_path", return_value=flag), \
+         patch("host.cli.sessions_dir", return_value=sessions):
+        cmd_status(args)
+
+    out = capsys.readouterr().out
+    assert "Overflow: ON" in out
+
+
+def test_cmd_status_no_overflow_header(tmp_path, capsys):
+    """'nightshift status' does not show overflow header when flag is absent."""
+    ns_dir = tmp_path / ".nightshift"
+    sessions = ns_dir / "sessions"
+    sessions.mkdir(parents=True)
+    flag = ns_dir / OVERFLOW_FLAG_FILENAME
+
+    args = MagicMock()
+
+    with patch("host.cli._overflow_flag_path", return_value=flag), \
+         patch("host.cli.sessions_dir", return_value=sessions):
+        cmd_status(args)
+
+    out = capsys.readouterr().out
+    assert "Overflow" not in out
+
+
+# ── launch.py overflow flag check ──────────────────────────────────────────
+
+
+def test_launch_passes_overflow_when_flag_present(tmp_path, monkeypatch):
+    """launch.py passes overflow config to run_container when flag is present."""
+    # Create overflow flag
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
+
+    # Create a minimal workflow with overflow config
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text("""\
+---
+overflow:
+  extra_args: ["--model", "m2.7"]
+  env:
+    ANTHROPIC_API_KEY: sk-overflow
+---
+Prompt.
+""")
+
+    from host.launch import main
+
+    monkeypatch.setattr("sys.argv", [
+        "launch.py", "test-issue-id",
+        "--workflow", str(wf),
+    ])
+    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
+    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
+    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+
+    captured_kwargs = {}
+
+    def mock_run_container(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("host.launch.run_container", mock_run_container)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs.get("overflow") is not None
+    assert captured_kwargs["overflow"].extra_args == ["--model", "m2.7"]
+    assert captured_kwargs["overflow"].env["ANTHROPIC_API_KEY"] == "sk-overflow"
+
+
+def test_launch_no_overflow_without_flag(tmp_path, monkeypatch):
+    """launch.py passes overflow=None when flag file is absent."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    # No overflow flag file
+
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text("""\
+---
+overflow:
+  extra_args: ["--model", "m2.7"]
+  env:
+    ANTHROPIC_API_KEY: sk-overflow
+---
+Prompt.
+""")
+
+    from host.launch import main
+
+    monkeypatch.setattr("sys.argv", [
+        "launch.py", "test-issue-id",
+        "--workflow", str(wf),
+    ])
+    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
+    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
+    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+
+    captured_kwargs = {}
+
+    def mock_run_container(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("host.launch.run_container", mock_run_container)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs.get("overflow") is None
+
+
+# ── Entrypoint OVERFLOW_EXTRA_ARGS parsing ──────────────────────────────────
+
+
+def test_entrypoint_overflow_extra_args(monkeypatch):
+    """Entrypoint extends agent extra_args with OVERFLOW_EXTRA_ARGS env var."""
+    from core.config.models import AgentConfig
+
+    config = WorkflowConfig()
+    config.agent = AgentConfig(extra_args=["--existing"])
+
+    monkeypatch.setenv("OVERFLOW_EXTRA_ARGS", json.dumps(["--model", "m2.7"]))
+
+    overflow_args_raw = os.environ.get("OVERFLOW_EXTRA_ARGS", "")
+    if overflow_args_raw:
+        overflow_args = json.loads(overflow_args_raw)
+        config.agent.extra_args = list(overflow_args) + config.agent.extra_args
+
+    assert config.agent.extra_args == ["--model", "m2.7", "--existing"]
+
+
+def test_entrypoint_no_overflow_extra_args():
+    """Without OVERFLOW_EXTRA_ARGS, agent extra_args remain unchanged."""
+    from core.config.models import AgentConfig
+
+    config = WorkflowConfig()
+    config.agent = AgentConfig(extra_args=["--existing"])
+
+    overflow_args_raw = os.environ.get("OVERFLOW_EXTRA_ARGS", "")
+    if overflow_args_raw:
+        overflow_args = json.loads(overflow_args_raw)
+        config.agent.extra_args = list(overflow_args) + config.agent.extra_args
+
+    assert config.agent.extra_args == ["--existing"]
+
+
+# ── Watcher _diff_config detects overflow changes ───────────────────────────
+
+
+def test_diff_config_detects_overflow_change():
+    """_diff_config reports overflow changes between old and new config."""
+    from host.watcher.host_watcher import _diff_config
+
+    old = WorkflowConfig()
+    new = WorkflowConfig()
+    new.overflow = OverflowConfig(extra_args=["--model", "m2.7"])
+
+    changes = _diff_config(old, new)
+    assert "overflow" in changes
+
+
+def test_diff_config_no_overflow_change():
+    """_diff_config does not report overflow when it hasn't changed."""
+    from host.watcher.host_watcher import _diff_config
+
+    old = WorkflowConfig()
+    new = WorkflowConfig()
+
+    changes = _diff_config(old, new)
+    assert "overflow" not in changes
+
+
+# ── Constant ────────────────────────────────────────────────────────────────
+
+
+def test_overflow_flag_filename_constant():
+    """OVERFLOW_FLAG_FILENAME is defined and correct."""
+    assert OVERFLOW_FLAG_FILENAME == "overflow"
