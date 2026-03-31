@@ -1,0 +1,9 @@
+# Project-specific terms that should not appear in canonical templates.
+# One term per line, case-insensitive. Lines starting with # are comments.
+# Add project names, framework names, absolute paths, etc.
+#
+# Examples:
+# my-project
+# /home/user/code
+# django
+# rails

@@ -166,6 +166,12 @@ All git-bug operations are serialized through a single writer thread in the watc
 - **Tests:** test_tracker_ipc.py, test_socket_tracker_client.py, test_tracker_fallback.py, watcher/test_tracker_writer.py
 - **Status:** covered
 
+### REQ-027: Upstream template proposals
+Downstream projects can propose prompt improvements back to the canonical templates via `nightshift upstream`. The command diffs local prompt sections against canonical (reverse of `nightshift upgrade`), runs client-side validation filters (blocklist terms, Jinja2 variable whitelist, line count caps), shows the diff for confirmation, and files a git-bug issue in the upstream repo. Each proposal declares an operation type (add, replace, consolidate). A template lint suite gates canonical template changes. Extends REQ-024.
+
+- **Tests:** test_upstream.py, test_template_lint.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -201,6 +207,8 @@ All git-bug operations are serialized through a single writer thread in the watc
 | test_issue_redump.py | REQ-016b |
 | watcher/test_issue_sync.py | REQ-016b |
 | test_stream_parser.py | REQ-004, REQ-014 |
+| test_upstream.py | REQ-027 |
+| test_template_lint.py | REQ-027 |
 | test_upgrade.py | REQ-024 |
 | test_watcher.py | REQ-017, REQ-019, REQ-020 |
 | test_worktree_git_fix.py | REQ-001 |

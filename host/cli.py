@@ -23,6 +23,12 @@ from core.upgrade import (
     CANONICAL_TEMPLATE, CANONICAL_REVIEW_TEMPLATE,
     load_canonical_template, load_canonical_review_template,
 )
+from core.upstream import (
+    diff_reverse, detect_operation, validate_proposal,
+    validate_line_count, build_proposal, count_prompt_lines,
+    UpstreamProposal,
+    PROMPT_SOFT_CAP_LINES, PROMPT_HARD_CAP_LINES,
+)
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
 from host.docker_utils import docker_stop
@@ -447,6 +453,117 @@ def cmd_upgrade(a):
         print("\nRun `nightshift upgrade --apply` to apply these changes.")
 
 
+def _upstream_template(project_path: Path, canonical_path: Path,
+                        label: str, project_name: str,
+                        dry_run: bool) -> UpstreamProposal | None:
+    """Diff a project template against canonical and validate for upstreaming.
+
+    Returns an UpstreamProposal if there are changes to propose, None otherwise.
+    Prints validation issues and diff to stdout/stderr.
+    """
+    if not project_path.exists():
+        return None
+
+    if not canonical_path.exists():
+        print(f"Canonical {label} template not found. Reinstall nightshift.",
+              file=sys.stderr)
+        return None
+
+    project_text = project_path.read_text()
+    canonical_text = canonical_path.read_text()
+
+    diff_text = diff_reverse(project_text, canonical_text, label=label)
+    if not diff_text:
+        print(f"{label}: no prompt differences vs canonical.")
+        return None
+
+    operation = detect_operation(canonical_text, project_text)
+    print(f"\n{label}: detected operation: {operation}")
+
+    # Run validation
+    issues = validate_proposal(project_text, canonical_text, operation)
+    if issues:
+        print(f"\n{label} validation issues:", file=sys.stderr)
+        for issue in issues:
+            print(f"  - {issue}", file=sys.stderr)
+        if not dry_run:
+            print(f"\nFix validation issues before filing upstream.",
+                  file=sys.stderr)
+            return None
+
+    # Show soft cap warning even if not a blocking issue
+    line_warning = validate_line_count(project_text, operation)
+    if line_warning and line_warning.startswith("Warning:"):
+        print(f"  {line_warning}")
+
+    # Show diff
+    print(f"\n{label} proposed changes:\n")
+    print(diff_text)
+
+    proposal = build_proposal(project_text, canonical_text,
+                               label, project_name)
+    return proposal
+
+
+def cmd_upstream(a):
+    """Propose local prompt improvements back to the canonical templates."""
+    try:
+        repo_root()  # validate we're in a git repo
+    except subprocess.CalledProcessError:
+        print("Not inside a git repository.", file=sys.stderr)
+        sys.exit(1)
+
+    workflow_path = _resolve_workflow(a)
+    if not workflow_path.exists():
+        print(f"{workflow_path} not found. Run `nightshift init` first.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    project_name = a.project_name or Path.cwd().name
+
+    proposals = []
+
+    wf_proposal = _upstream_template(
+        workflow_path, CANONICAL_TEMPLATE, "WORKFLOW.md",
+        project_name, a.dry_run)
+    if wf_proposal:
+        proposals.append(wf_proposal)
+
+    review_path = workflow_path.parent / "REVIEW.md"
+    rv_proposal = _upstream_template(
+        review_path, CANONICAL_REVIEW_TEMPLATE, "REVIEW.md",
+        project_name, a.dry_run)
+    if rv_proposal:
+        proposals.append(rv_proposal)
+
+    if not proposals:
+        print("\nNo differences to propose upstream.")
+        return
+
+    if a.dry_run:
+        print("\nDry run complete. Use `nightshift upstream` (without --dry-run) to file.")
+        return
+
+    # File issues upstream via the tracker CLI
+    wf = _resolve_workflow(a)
+    config = load_workflow(wf)
+    tracker = get_tracker_with_fallback(config, repo_root())
+
+    for proposal in proposals:
+        title = (f"[upstream] {proposal.operation}: "
+                 f"{proposal.template_label} from {proposal.project_name}")
+        body = proposal.format_issue_body()
+        try:
+            output = tracker.run_raw("bug", "new", "-t", title, "-m", body)
+            issue_id = output.strip() if output else "unknown"
+            tracker.add_label(issue_id, "upstream")
+            tracker.sync()
+            print(f"\nFiled upstream proposal: {title} (ID: {issue_id})")
+        except Exception as e:
+            print(f"Failed to file upstream proposal for "
+                  f"{proposal.template_label}: {e}", file=sys.stderr)
+
+
 def _report_accept_failure(config, repo: Path, issue_id: str, message: str):
     """Post accept failure to tracker as a comment."""
     try:
@@ -741,6 +858,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--apply", action="store_true",
                     help="Apply the upgrade (default: dry-run showing diff)")
     sp.set_defaults(func=cmd_upgrade)
+
+    sp = s.add_parser("upstream",
+                       help="Propose local prompt improvements to canonical templates")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show diff and validation without filing (default: file issues)")
+    sp.add_argument("--project-name", default=None,
+                    help="Project name for provenance (default: current directory name)")
+    sp.set_defaults(func=cmd_upstream)
 
     return p
 
