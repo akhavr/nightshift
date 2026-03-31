@@ -17,30 +17,93 @@ CANONICAL_REVIEW_TEMPLATE = TEMPLATES_DIR / "REVIEW.md"
 # Field name in YAML front matter
 VERSION_KEY = "template_version"
 
-# Missing template_version is treated as version 0
-DEFAULT_VERSION = 0
+class TemplateVersion:
+    """Represents a template version with major.minor semantics.
+
+    Stored as 'major.minor' in YAML front matter (e.g., '1.0', '2.1').
+    Plain integers are treated as 'N.0' for backward compatibility.
+    Minor bumps are for additive changes; major bumps are for behavioral
+    changes (replacements, consolidations).
+    """
+
+    def __init__(self, major: int = 0, minor: int = 0):
+        self.major = major
+        self.minor = minor
+
+    @classmethod
+    def parse(cls, value) -> "TemplateVersion":
+        """Parse a version from YAML value (int, float, or string)."""
+        if value is None:
+            return cls(0, 0)
+        s = str(value).strip()
+        if "." in s:
+            parts = s.split(".", 1)
+            return cls(int(parts[0]), int(parts[1]))
+        return cls(int(s), 0)
+
+    def is_major_bump_from(self, old: "TemplateVersion") -> bool:
+        """Return True if upgrading from old to self is a major bump."""
+        return self.major > old.major
+
+    def __str__(self) -> str:
+        return f"{self.major}.{self.minor}"
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, TemplateVersion):
+            return self.major == other.major and self.minor == other.minor
+        return NotImplemented
+
+    def __lt__(self, other) -> bool:
+        if isinstance(other, TemplateVersion):
+            return (self.major, self.minor) < (other.major, other.minor)
+        return NotImplemented
+
+    def __le__(self, other) -> bool:
+        if isinstance(other, TemplateVersion):
+            return (self.major, self.minor) <= (other.major, other.minor)
+        return NotImplemented
+
+    def __ge__(self, other) -> bool:
+        if isinstance(other, TemplateVersion):
+            return (self.major, self.minor) >= (other.major, other.minor)
+        return NotImplemented
+
+    def __gt__(self, other) -> bool:
+        if isinstance(other, TemplateVersion):
+            return (self.major, self.minor) > (other.major, other.minor)
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash((self.major, self.minor))
+
+    def __repr__(self) -> str:
+        return f"TemplateVersion({self.major}, {self.minor})"
 
 
-def read_template_version(text: str) -> int:
-    """Extract template_version from a template file's text. Returns 0 if missing."""
+def read_template_version(text: str) -> TemplateVersion:
+    """Extract template_version from a template file's text.
+
+    Returns TemplateVersion(0, 0) if missing.
+    Supports both integer (e.g. 1) and dotted (e.g. 1.1) formats.
+    """
     fm, _ = split_front_matter(text)
     if not fm:
-        return DEFAULT_VERSION
+        return TemplateVersion(0, 0)
     try:
         raw = yaml.safe_load(fm)
         if not isinstance(raw, dict):
-            return DEFAULT_VERSION
-        return int(raw.get(VERSION_KEY, DEFAULT_VERSION))
+            return TemplateVersion(0, 0)
+        return TemplateVersion.parse(raw.get(VERSION_KEY, 0))
     except (yaml.YAMLError, ValueError, TypeError) as e:
         log.warning("Failed to parse template_version: %s", e)
-        return DEFAULT_VERSION
+        return TemplateVersion(0, 0)
 
 
-def get_canonical_version() -> int:
+def get_canonical_version() -> TemplateVersion:
     """Read the template_version from the shipped canonical template."""
     if not CANONICAL_TEMPLATE.exists():
         log.warning("Canonical template not found at %s", CANONICAL_TEMPLATE)
-        return DEFAULT_VERSION
+        return TemplateVersion(0, 0)
     return read_template_version(CANONICAL_TEMPLATE.read_text())
 
 
@@ -75,10 +138,11 @@ def diff_prompt_sections(project_text: str, canonical_text: str,
     return "".join(diff_lines)
 
 
-def _set_version_in_yaml(yaml_text: str, version: int) -> str:
+def _set_version_in_yaml(yaml_text: str, version) -> str:
     """Set or update template_version in the raw YAML string.
 
-    Preserves the rest of the YAML content as-is (no re-serialization).
+    Accepts int, str, or TemplateVersion. Preserves the rest of the YAML
+    content as-is (no re-serialization).
     """
     lines = yaml_text.splitlines(keepends=True)
     version_line = f"{VERSION_KEY}: {version}\n"
@@ -112,11 +176,11 @@ def load_canonical_template(base_branch: str = "main") -> str:
     return text.replace("base_branch: main", f"base_branch: {base_branch}")
 
 
-def get_canonical_review_version() -> int:
+def get_canonical_review_version() -> TemplateVersion:
     """Read the template_version from the shipped canonical review template."""
     if not CANONICAL_REVIEW_TEMPLATE.exists():
         log.warning("Canonical review template not found at %s", CANONICAL_REVIEW_TEMPLATE)
-        return DEFAULT_VERSION
+        return TemplateVersion(0, 0)
     return read_template_version(CANONICAL_REVIEW_TEMPLATE.read_text())
 
 
