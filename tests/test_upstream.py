@@ -248,7 +248,10 @@ class TestBuildProposal:
     def test_builds_proposal_with_correct_fields(self):
         canonical = "---\nv: 1\n---\nold prompt"
         project = "---\nv: 1\n---\nnew prompt"
-        proposal = build_proposal(project, canonical, "WORKFLOW.md", "test-project")
+        op = detect_operation(canonical, project)
+        diff = diff_reverse(project, canonical, label="WORKFLOW.md")
+        proposal = build_proposal(project, canonical, "WORKFLOW.md", "test-project",
+                                  op, diff)
         assert proposal.template_label == "WORKFLOW.md"
         assert proposal.operation == "replace"
         assert proposal.project_name == "test-project"
@@ -257,7 +260,10 @@ class TestBuildProposal:
     def test_format_issue_body(self):
         canonical = "---\nv: 1\n---\nold prompt"
         project = "---\nv: 1\n---\nnew prompt"
-        proposal = build_proposal(project, canonical, "WORKFLOW.md", "my-proj")
+        op = detect_operation(canonical, project)
+        diff = diff_reverse(project, canonical, label="WORKFLOW.md")
+        proposal = build_proposal(project, canonical, "WORKFLOW.md", "my-proj",
+                                  op, diff)
         body = proposal.format_issue_body()
         assert "WORKFLOW.md" in body
         assert "replace" in body

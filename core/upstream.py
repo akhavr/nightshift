@@ -217,13 +217,14 @@ def validate_proposal(project_text: str, operation: str) -> list[str]:
 
 
 def build_proposal(project_text: str, canonical_text: str,
-                    label: str, project_name: str) -> UpstreamProposal:
-    """Build an UpstreamProposal from project and canonical texts.
+                    label: str, project_name: str,
+                    operation: str, diff_text: str) -> UpstreamProposal:
+    """Build an UpstreamProposal from pre-computed operation and diff.
 
+    Callers must pass operation (from detect_operation) and diff_text
+    (from diff_reverse) to avoid redundant computation.
     Does not perform validation — call validate_proposal() first.
     """
-    operation = detect_operation(canonical_text, project_text)
-    diff_text = diff_reverse(project_text, canonical_text, label=label)
     line_count = count_prompt_lines(project_text)
 
     return UpstreamProposal(
