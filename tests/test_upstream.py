@@ -185,21 +185,26 @@ class TestValidateLineCount:
         text = f"---\nv: 1\n---\n{lines}"
         result = validate_line_count(text, "add")
         assert result is not None
-        assert "hard cap" in result
+        level, message = result
+        assert level == "error"
+        assert "hard cap" in message
 
     def test_replace_over_hard_cap_returns_warning_not_error(self):
         lines = "\n".join(f"line {i}" for i in range(PROMPT_HARD_CAP_LINES + 1))
         text = f"---\nv: 1\n---\n{lines}"
         result = validate_line_count(text, "replace")
         assert result is not None
-        assert "Warning:" in result
+        level, message = result
+        assert level == "warning"
+        assert "soft cap" in message or "consolidation" in message.lower()
 
     def test_over_soft_cap_returns_warning(self):
         lines = "\n".join(f"line {i}" for i in range(PROMPT_SOFT_CAP_LINES + 5))
         text = f"---\nv: 1\n---\n{lines}"
         result = validate_line_count(text, "replace")
         assert result is not None
-        assert "Warning:" in result
+        level, message = result
+        assert level == "warning"
 
 
 # ── validate_proposal ────────────────────────────────────────────────────────
@@ -407,7 +412,32 @@ class TestCmdUpstream:
             cmd_upstream(args)
 
         out = capsys.readouterr()
+        # Validation issues block: no confirmation prompt, no filing
         assert "No differences" in out.out or "my-project" in out.err
+
+    def test_user_declines_confirmation(self, tmp_path, capsys):
+        from host.cli import cmd_upstream
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nnew improved prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 1\n---\nold prompt")
+
+        args = MagicMock()
+        args.dry_run = False
+        args.project_name = "test-proj"
+        args.workflow = str(workflow)
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical), \
+             patch("core.upstream.load_blocklist", return_value=[]), \
+             patch("builtins.input", return_value="n"):
+            cmd_upstream(args)
+
+        out = capsys.readouterr().out
+        assert "Aborted" in out
 
     def test_files_issue_on_valid_proposal(self, tmp_path, capsys):
         from host.cli import cmd_upstream
@@ -432,7 +462,8 @@ class TestCmdUpstream:
              patch("host.cli.load_workflow"), \
              patch("host.cli.get_tracker_with_fallback",
                    return_value=mock_tracker), \
-             patch("core.upstream.load_blocklist", return_value=[]):
+             patch("core.upstream.load_blocklist", return_value=[]), \
+             patch("builtins.input", return_value="y"):
             cmd_upstream(args)
 
         out = capsys.readouterr().out

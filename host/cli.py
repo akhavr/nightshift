@@ -25,9 +25,8 @@ from core.upgrade import (
 )
 from core.upstream import (
     diff_reverse, detect_operation, validate_proposal,
-    validate_line_count, build_proposal, count_prompt_lines,
+    validate_line_count, build_proposal,
     UpstreamProposal,
-    PROMPT_SOFT_CAP_LINES, PROMPT_HARD_CAP_LINES,
 )
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
@@ -486,15 +485,16 @@ def _upstream_template(project_path: Path, canonical_path: Path,
         print(f"\n{label} validation issues:", file=sys.stderr)
         for issue in issues:
             print(f"  - {issue}", file=sys.stderr)
-        if not dry_run:
-            print(f"\nFix validation issues before filing upstream.",
-                  file=sys.stderr)
-            return None
+        print(f"\nFix validation issues before filing upstream.",
+              file=sys.stderr)
+        # Show diff even in dry-run for diagnostic purposes, but don't
+        # build a proposal — it would be rejected in either mode.
+        return None
 
     # Show soft cap warning even if not a blocking issue
-    line_warning = validate_line_count(project_text, operation)
-    if line_warning and line_warning.startswith("Warning:"):
-        print(f"  {line_warning}")
+    line_result = validate_line_count(project_text, operation)
+    if line_result and line_result[0] == "warning":
+        print(f"  {line_result[1]}")
 
     # Show diff
     print(f"\n{label} proposed changes:\n")
@@ -544,11 +544,17 @@ def cmd_upstream(a):
         print("\nDry run complete. Use `nightshift upstream` (without --dry-run) to file.")
         return
 
+    # Confirm before filing
+    answer = input("\nFile upstream proposal(s)? [y/N] ").strip().lower()
+    if answer != "y":
+        print("Aborted.")
+        return
+
     # File issues upstream via the tracker CLI
-    wf = _resolve_workflow(a)
-    config = load_workflow(wf)
+    config = load_workflow(workflow_path)
     tracker = get_tracker_with_fallback(config, repo_root())
 
+    filed = False
     for proposal in proposals:
         title = (f"[upstream] {proposal.operation}: "
                  f"{proposal.template_label} from {proposal.project_name}")
@@ -557,11 +563,17 @@ def cmd_upstream(a):
             output = tracker.run_raw("bug", "new", "-t", title, "-m", body)
             issue_id = output.strip() if output else "unknown"
             tracker.add_label(issue_id, "upstream")
-            tracker.sync()
+            filed = True
             print(f"\nFiled upstream proposal: {title} (ID: {issue_id})")
         except Exception as e:
             print(f"Failed to file upstream proposal for "
                   f"{proposal.template_label}: {e}", file=sys.stderr)
+
+    if filed:
+        try:
+            tracker.sync()
+        except Exception as e:
+            print(f"Warning: tracker sync failed: {e}", file=sys.stderr)
 
 
 def _report_accept_failure(config, repo: Path, issue_id: str, message: str):

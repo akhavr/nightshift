@@ -8,13 +8,9 @@ import logging
 import re
 from pathlib import Path
 
-from core.config.loader import split_front_matter
 from core.upgrade import (
     TEMPLATES_DIR,
-    CANONICAL_TEMPLATE,
-    CANONICAL_REVIEW_TEMPLATE,
     get_prompt_section,
-    read_template_version,
     diff_prompt_sections,
 )
 
@@ -136,7 +132,7 @@ def extract_jinja2_vars(text: str) -> set[str]:
 
 
 def count_prompt_lines(text: str) -> int:
-    """Count the number of non-empty lines in the prompt section."""
+    """Count the number of lines in the prompt section."""
     prompt = get_prompt_section(text).strip()
     if not prompt:
         return 0
@@ -166,21 +162,24 @@ def validate_jinja2_vars(text: str) -> list[str]:
     return unknown
 
 
-def validate_line_count(text: str, operation: str) -> str | None:
+def validate_line_count(text: str, operation: str) -> tuple[str, str] | None:
     """Validate prompt line count against limits.
 
-    Returns an error message if the hard cap is exceeded for 'add' operations,
-    or a warning if the soft cap is exceeded. Returns None if OK.
+    Returns a (level, message) tuple where level is 'error' or 'warning',
+    or None if OK. 'error' means the proposal should be rejected;
+    'warning' is informational only.
     """
     lines = count_prompt_lines(text)
 
     if operation == "add" and lines > PROMPT_HARD_CAP_LINES:
-        return (f"Add operation would result in {lines} lines, "
+        return ("error",
+                f"Add operation would result in {lines} lines, "
                 f"exceeding the hard cap of {PROMPT_HARD_CAP_LINES}. "
                 f"Consider a consolidation instead.")
 
     if lines > PROMPT_SOFT_CAP_LINES:
-        return (f"Warning: Template at {lines}/{PROMPT_HARD_CAP_LINES} lines "
+        return ("warning",
+                f"Template at {lines}/{PROMPT_HARD_CAP_LINES} lines "
                 f"(soft cap: {PROMPT_SOFT_CAP_LINES}). "
                 f"Consider consolidation.")
 
@@ -211,9 +210,9 @@ def validate_proposal(project_text: str, canonical_text: str,
             f"Only these are allowed: {', '.join(sorted(KNOWN_JINJA2_VARS))}")
 
     # Check line count
-    line_issue = validate_line_count(project_text, operation)
-    if line_issue and line_issue.startswith("Add operation"):
-        issues.append(line_issue)
+    line_result = validate_line_count(project_text, operation)
+    if line_result and line_result[0] == "error":
+        issues.append(line_result[1])
 
     return issues
 
