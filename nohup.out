@@ -1,0 +1,480 @@
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 746, in <module>
+    HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start).run()
+    ^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 743, in main
+    except subprocess.CalledProcessError:
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 122, in run
+    time.sleep(2)
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 622, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 618, in main
+    a.func(a)
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    subprocess.run(cmd)
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 749, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 746, in main
+    HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start).run()
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 112, in run
+    tg_answers, tg_reviews = self._poll_telegram_all() if self.tg_enabled else ({}, {})
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 582, in _poll_telegram_all
+    resp = requests.get(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 571, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 1448, in getresponse
+    response.begin()
+  File "/usr/lib/python3.12/http/client.py", line 336, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 297, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 707, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1252, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1104, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 622, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 618, in main
+    a.func(a)
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    subprocess.run(cmd)
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 749, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 746, in main
+    HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start).run()
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 112, in run
+    tg_answers, tg_reviews = self._poll_telegram_all() if self.tg_enabled else ({}, {})
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 582, in _poll_telegram_all
+    resp = requests.get(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 571, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 1448, in getresponse
+    response.begin()
+  File "/usr/lib/python3.12/http/client.py", line 336, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 297, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 707, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1252, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1104, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 622, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 618, in main
+    a.func(a)
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    subprocess.run(cmd)
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 749, in <module>
+    existing_sids.add(state.get("issue_id", ""))
+
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 746, in main
+    if session_dir.is_dir() and (session_dir / "state.json").exists():
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 112, in run
+    
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 582, in _poll_telegram_all
+    for session_dir in self.sessions_dir.iterdir():
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 571, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 1448, in getresponse
+    response.begin()
+  File "/usr/lib/python3.12/http/client.py", line 336, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 297, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 707, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1252, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1104, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 622, in <module>
+    
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 618, in main
+    import shutil
+^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    subprocess.run(cmd)
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1038, in <module>
+    
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1035, in main
+    repo = Path.cwd()
+^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 127, in run
+    time.sleep(2)
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 691, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 687, in main
+    a.func(a)
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    subprocess.run(cmd)
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1040, in <module>
+    )
+^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1037, in main
+    "input_field_placeholder": "Answer...",
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 115, in run
+    if self.tg_enabled:
+                        
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 871, in _poll_telegram_all
+    self._review_comment_counts.pop(sid, None)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 571, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 1448, in getresponse
+    response.begin()
+  File "/usr/lib/python3.12/http/client.py", line 336, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 297, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 707, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1252, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1104, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 691, in <module>
+    except subprocess.CalledProcessError:
+    ^^^^^^
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 687, in main
+    def main():
+        ^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    subprocess.run(cmd)
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1094, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1091, in main
+    HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start).run()
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 133, in run
+    tg_answers, tg_reviews = self._poll_telegram_all() if self.tg_enabled else ({}, {})
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 925, in _poll_telegram_all
+    resp = requests.get(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 73, in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/api.py", line 59, in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connectionpool.py", line 534, in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+  File "/home/akhavr/src/agent-worker/.venv/lib/python3.12/site-packages/urllib3/connection.py", line 571, in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 1448, in getresponse
+    response.begin()
+  File "/usr/lib/python3.12/http/client.py", line 336, in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/http/client.py", line 297, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/socket.py", line 707, in readinto
+    return self._sock.recv_into(b)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1252, in recv_into
+    return self.read(nbytes, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/ssl.py", line 1104, in read
+    return self._sslobj.read(len, buffer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 755, in <module>
+    main()
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 751, in main
+    a.func(a)
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    subprocess.run(cmd)
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1094, in <module>
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 1091, in main
+  File "/home/akhavr/src/agent-worker/host/watcher.py", line 145, in run
+KeyboardInterrupt
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log
+Traceback (most recent call last):
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 755, in <module>
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 751, in main
+  File "/home/akhavr/src/agent-worker/host/cli.py", line 81, in cmd_watcher
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    ^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1201, in communicate
+    self.wait()
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2053, in _wait
+    (pid, sts) = self._try_wait(0)
+                 ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2011, in _try_wait
+    (pid, sts) = os.waitpid(self.pid, wait_flags)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+/home/akhavr/src/agent-worker/.venv/bin/python: can't open file '/home/akhavr/src/agent-worker/host/watcher.py': [Errno 2] No such file or directory
+Logging to /home/akhavr/src/agent-worker/.nightshift/watcher.log

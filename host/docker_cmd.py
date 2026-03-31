@@ -3,17 +3,19 @@
 Builds the `docker run` command for launching the agent container.
 """
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
+from core.config.models import OverflowConfig
 from host.docker_utils import docker_remove
 
 
 _PASSTHROUGH_ENV_VARS = (
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     "NOTIFY_WEBHOOK_URL", "SLACK_WEBHOOK",
-    "ANTHROPIC_API_KEY", "GITHUB_TOKEN",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GITHUB_TOKEN",
 )
 
 
@@ -32,13 +34,28 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
                      container_name: str, worktree_name: str,
                      issue_id: str, short_id: str, max_turns: int,
                      step: str, is_resume: bool, workflow_path: str,
-                     image: str) -> list[str]:
-    """Build the docker run command with all mounts and env vars."""
+                     image: str,
+                     overflow: OverflowConfig | None = None) -> list[str]:
+    """Build the docker run command with all mounts and env vars.
+
+    Args:
+        overflow: If provided, inject overflow env vars and extra_args
+            into the container (alternate LLM provider).
+    """
     notify_env = []
     for var in _PASSTHROUGH_ENV_VARS:
         val = os.environ.get(var, "")
         if val:
             notify_env += ["-e", f"{var}={val}"]
+
+    # Overflow env vars override passthrough values (appended later wins)
+    overflow_env: list[str] = []
+    overflow_args_env: list[str] = []
+    if overflow:
+        for key, val in overflow.env.items():
+            overflow_env += ["-e", f"{key}={val}"]
+        if overflow.extra_args:
+            overflow_args_env += ["-e", f"OVERFLOW_EXTRA_ARGS={json.dumps(overflow.extra_args)}"]
 
     workflow_mount_path = str(Path(workflow_path).resolve())
 
@@ -59,6 +76,8 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "-e", f"STEP={step}",
         "-e", f"PROJECT_NAME={repo.name}",
         *notify_env,
+        *overflow_env,
+        *overflow_args_env,
         image,
     ]
 
@@ -75,12 +94,13 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
 def run_container(repo: Path, workspace_mount: str, session_dir: Path,
                   names: dict, issue_id: str, max_turns: int,
                   step: str, is_resume: bool, workflow_path: str,
-                  image: str) -> int:
+                  image: str,
+                  overflow: OverflowConfig | None = None) -> int:
     """Build docker command, run the container, return its exit code."""
     docker_cmd = build_docker_cmd(
         repo, workspace_mount, session_dir, names["container_name"],
         names["worktree_name"], issue_id, names["short_id"], max_turns,
-        step, is_resume, workflow_path, image,
+        step, is_resume, workflow_path, image, overflow=overflow,
     )
 
     # Remove any stale container with the same name (e.g. leftover from a

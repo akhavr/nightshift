@@ -172,6 +172,12 @@ Downstream projects can propose prompt improvements back to the canonical templa
 - **Tests:** test_upstream.py, test_template_lint.py
 - **Status:** covered
 
+### REQ-028: Manual overflow to alternate LLM provider
+Users can manually switch new container launches to an alternate Anthropic-compatible LLM provider via `nightshift overflow on/off`. The overflow config (extra_args, env vars) is defined in WORKFLOW.md's `overflow` section with `$VAR` references resolved from `.env`. A flag file (`.nightshift/overflow`) controls activation. When active, overflow env vars and extra_args are injected into new docker commands. Already-running containers are unaffected. `nightshift status` shows overflow state. No watcher restart needed.
+
+- **Tests:** test_overflow.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -222,6 +228,7 @@ Downstream projects can propose prompt improvements back to the canonical templa
 | test_socket_tracker_client.py | REQ-026 |
 | test_tracker_fallback.py | REQ-026 |
 | watcher/test_tracker_writer.py | REQ-026 |
+| test_overflow.py | REQ-028 |
 
 ---
 

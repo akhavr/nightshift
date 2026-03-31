@@ -15,7 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
 from host.tracker_client import get_tracker_with_fallback
 from core.review import collect_review_feedback, build_revise_prompt
-from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN, HISTORY_FOLLOW_POLL_S
+from host.constants import (
+    SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN,
+    HISTORY_FOLLOW_POLL_S, OVERFLOW_FLAG_FILENAME,
+)
 from core.upgrade import (
     read_template_version, get_canonical_version,
     get_canonical_review_version,
@@ -159,6 +162,9 @@ def _truncate_title(title: str, max_len: int = TITLE_MAX_LEN) -> str:
 
 def cmd_status(a):
     sd = sessions_dir()
+    overflow_active = _overflow_flag_path().exists()
+    if overflow_active:
+        print("Overflow: ON")
     if not sd.exists():
         print("No sessions."); return
     print(f"{'SESSION':<14} {'STATUS':<26} {'STEP':>5} {'CPS':>4}  {'TITLE'}")
@@ -829,6 +835,24 @@ def cmd_cleanup(a):
     print(f"Cleaned up {sid}")
 
 
+def _overflow_flag_path() -> Path:
+    """Return the path to the overflow flag file."""
+    return repo_root() / ".nightshift" / OVERFLOW_FLAG_FILENAME
+
+
+def cmd_overflow(a):
+    """Toggle overflow mode (alternate LLM provider) on or off."""
+    flag = _overflow_flag_path()
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    if a.state == "on":
+        flag.touch()
+        print("Overflow ON -- new container launches will use the alternate provider.")
+    elif a.state == "off":
+        if flag.exists():
+            flag.unlink()
+        print("Overflow OFF -- new container launches will use the primary provider.")
+
+
 def _register_session_commands(s):
     """Register session lifecycle commands."""
     sp = s.add_parser("start")
@@ -915,6 +939,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--project-name", default=None,
                     help="Project name for provenance (default: current directory name)")
     sp.set_defaults(func=cmd_upstream)
+
+    sp = s.add_parser("overflow", help="Switch new launches to alternate LLM provider")
+    sp.add_argument("state", choices=["on", "off"],
+                    help="Turn overflow on or off")
+    sp.set_defaults(func=cmd_overflow)
 
     return p
 

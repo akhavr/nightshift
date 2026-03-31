@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
-from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX
+from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
@@ -114,9 +114,17 @@ def main():
     dump_issue_data(config, repo, session_dir, args.issue_id,
                     names["is_review"], args.resume)
 
+    # Check overflow flag file
+    overflow = None
+    overflow_flag = repo / ".nightshift" / OVERFLOW_FLAG_FILENAME
+    if overflow_flag.exists() and (config.overflow.extra_args or config.overflow.env):
+        overflow = config.overflow
+        print(f"Overflow active: using alternate provider")
+
     returncode = run_container(
         repo, workspace_mount, session_dir, names, args.issue_id,
         max_turns, args.step, args.resume, str(workflow_path), args.image,
+        overflow=overflow,
     )
 
     if not names["is_review"]:

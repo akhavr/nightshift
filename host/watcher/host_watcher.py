@@ -42,6 +42,8 @@ def _diff_config(old: WorkflowConfig, new: WorkflowConfig) -> list[str]:
         changes.append("workspace")
     if old.agent != new.agent:
         changes.append("agent")
+    if old.overflow != new.overflow:
+        changes.append("overflow")
     return changes
 
 
