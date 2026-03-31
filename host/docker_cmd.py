@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from core.config.models import OverflowConfig
+from core.constants import LITELLM_CONFIG_CONTAINER_PATH, LITELLM_PROXY_PORT
 from host.docker_utils import docker_remove
 
 
@@ -51,11 +52,17 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
     # Overflow env vars override passthrough values (appended later wins)
     overflow_env: list[str] = []
     overflow_args_env: list[str] = []
+    overflow_mounts: list[str] = []
     if overflow:
         for key, val in overflow.env.items():
             overflow_env += ["-e", f"{key}={val}"]
         if overflow.extra_args:
             overflow_args_env += ["-e", f"OVERFLOW_EXTRA_ARGS={json.dumps(overflow.extra_args)}"]
+        if overflow.litellm_config:
+            config_path = str(Path(overflow.litellm_config).resolve())
+            overflow_mounts += ["-v", f"{config_path}:{LITELLM_CONFIG_CONTAINER_PATH}:ro"]
+            proxy_url = f"http://localhost:{LITELLM_PROXY_PORT}"
+            overflow_env += ["-e", f"ANTHROPIC_BASE_URL={proxy_url}"]
 
     workflow_mount_path = str(Path(workflow_path).resolve())
 
@@ -75,6 +82,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "-e", f"MAX_TURNS={max_turns}",
         "-e", f"STEP={step}",
         "-e", f"PROJECT_NAME={repo.name}",
+        *overflow_mounts,
         *notify_env,
         *overflow_env,
         *overflow_args_env,
