@@ -250,7 +250,7 @@ class TestBuildProposal:
         project = "---\nv: 1\n---\nnew prompt"
         op = detect_operation(canonical, project)
         diff = diff_reverse(project, canonical, label="WORKFLOW.md")
-        proposal = build_proposal(project, canonical, "WORKFLOW.md", "test-project",
+        proposal = build_proposal(project, "WORKFLOW.md", "test-project",
                                   op, diff)
         assert proposal.template_label == "WORKFLOW.md"
         assert proposal.operation == "replace"
@@ -262,7 +262,7 @@ class TestBuildProposal:
         project = "---\nv: 1\n---\nnew prompt"
         op = detect_operation(canonical, project)
         diff = diff_reverse(project, canonical, label="WORKFLOW.md")
-        proposal = build_proposal(project, canonical, "WORKFLOW.md", "my-proj",
+        proposal = build_proposal(project, "WORKFLOW.md", "my-proj",
                                   op, diff)
         body = proposal.format_issue_body()
         assert "WORKFLOW.md" in body

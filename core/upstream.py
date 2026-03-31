@@ -216,8 +216,7 @@ def validate_proposal(project_text: str, operation: str) -> list[str]:
     return issues
 
 
-def build_proposal(project_text: str, canonical_text: str,
-                    label: str, project_name: str,
+def build_proposal(project_text: str, label: str, project_name: str,
                     operation: str, diff_text: str) -> UpstreamProposal:
     """Build an UpstreamProposal from pre-computed operation and diff.
 

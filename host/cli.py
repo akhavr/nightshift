@@ -535,8 +535,7 @@ def _upstream_template(project_path: Path, canonical_path: Path,
     print(f"\n{label} proposed changes:\n")
     print(diff_text)
 
-    proposal = build_proposal(project_text, canonical_text,
-                               label, project_name,
+    proposal = build_proposal(project_text, label, project_name,
                                operation, diff_text)
     return proposal
 
