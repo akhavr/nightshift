@@ -7,7 +7,6 @@ uses --resume <conversation_id> to restart with context preserved.
 
 import json
 import logging
-import os
 import re
 import subprocess
 import time
@@ -21,9 +20,6 @@ log = logging.getLogger(__name__)
 
 EVENT_SEPARATOR = "--JSON Event--"
 CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
-
-# Env vars forwarded to the subprocess
-LLM_ENV_VARS = ("LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL")
 
 
 class OpenHandsAgent(HeadlessAgentBase):
@@ -45,18 +41,10 @@ class OpenHandsAgent(HeadlessAgentBase):
         if self._session_id:
             cmd += ["--resume", self._session_id]
 
-        env = os.environ.copy()
-        for var in LLM_ENV_VARS:
-            val = os.environ.get(var)
-            if val is not None:
-                env[var] = val
-            elif var in env:
-                del env[var]
-
         self._process = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True,
-            cwd=str(workspace), bufsize=1, env=env,
+            cwd=str(workspace), bufsize=1,
         )
         self._pid = self._process.pid
         self._last_event = time.monotonic()
@@ -126,8 +114,8 @@ class OpenHandsAgent(HeadlessAgentBase):
     def _parse_action(self, ev: dict, raw: str) -> AgentEvent:
         """Parse an ActionEvent into the appropriate AgentEvent.
 
-        Critical markers (FinishAction, FileEditorAction) are checked before
-        reasoning_content so they are never shadowed by @@LOG@@.
+        Marker actions (FinishAction, FileEditorAction, TerminalAction) are
+        checked before reasoning_content so they are never shadowed by @@LOG@@.
         """
         action_type = ev.get("action_type", "")
 
@@ -146,20 +134,20 @@ class OpenHandsAgent(HeadlessAgentBase):
                 raw=raw,
             )
 
-        # reasoning_content on non-critical action types
-        reasoning = ev.get("reasoning_content", "")
-        if reasoning:
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content=f"@@LOG@@ {reasoning}",
-                raw=raw,
-            )
-
         if action_type == "TerminalAction":
             command = ev.get("command", "")
             return AgentEvent(
                 type=AgentEventType.TOOL_CALL,
                 content=f"TerminalAction: {command}",
+                raw=raw,
+            )
+
+        # reasoning_content on non-marker action types
+        reasoning = ev.get("reasoning_content", "")
+        if reasoning:
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@LOG@@ {reasoning}",
                 raw=raw,
             )
 

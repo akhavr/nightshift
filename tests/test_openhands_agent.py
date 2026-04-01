@@ -4,7 +4,6 @@ REQ: REQ-030
 """
 
 import json
-import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -91,41 +90,21 @@ class TestStart:
             "-t", "Fix the bug",
         ]
 
-    def test_sets_llm_env_vars(self):
+    def test_inherits_parent_env(self):
+        """Subprocess inherits parent env (no env= kwarg), so LLM_* vars pass through."""
         from adapters.agents.openhands import OpenHandsAgent
 
         agent = OpenHandsAgent()
-        env = {"LLM_API_KEY": "sk-test", "LLM_MODEL": "gpt-4", "LLM_BASE_URL": "http://localhost:8000"}
-        with patch.dict(os.environ, env):
-            with patch("adapters.agents.openhands.subprocess.Popen") as mock_popen:
-                mock_proc = MagicMock()
-                mock_proc.pid = 42
-                mock_proc.stderr = MagicMock()
-                mock_popen.return_value = mock_proc
+        with patch("adapters.agents.openhands.subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.pid = 42
+            mock_proc.stderr = MagicMock()
+            mock_popen.return_value = mock_proc
 
-                agent.start("test", Path("/workspace"))
+            agent.start("test", Path("/workspace"))
 
-        call_env = mock_popen.call_args[1]["env"]
-        assert call_env["LLM_API_KEY"] == "sk-test"
-        assert call_env["LLM_MODEL"] == "gpt-4"
-        assert call_env["LLM_BASE_URL"] == "http://localhost:8000"
-
-    def test_llm_base_url_optional(self):
-        from adapters.agents.openhands import OpenHandsAgent
-
-        agent = OpenHandsAgent()
-        env = {"LLM_API_KEY": "sk-test", "LLM_MODEL": "gpt-4"}
-        with patch.dict(os.environ, env, clear=True):
-            with patch("adapters.agents.openhands.subprocess.Popen") as mock_popen:
-                mock_proc = MagicMock()
-                mock_proc.pid = 42
-                mock_proc.stderr = MagicMock()
-                mock_popen.return_value = mock_proc
-
-                agent.start("test", Path("/workspace"))
-
-        call_env = mock_popen.call_args[1]["env"]
-        assert "LLM_BASE_URL" not in call_env
+        # No env= kwarg means subprocess inherits parent environment
+        assert "env" not in mock_popen.call_args[1]
 
     def test_resume_includes_flag(self):
         from adapters.agents.openhands import OpenHandsAgent
@@ -291,6 +270,21 @@ class TestParse:
         ev = agent._parse(raw)
         assert ev is not None
         assert "@@CHECKPOINT@@" in ev.content
+        assert "@@LOG@@" not in ev.content
+
+    def test_terminal_action_not_shadowed_by_reasoning(self):
+        """TerminalAction must emit TOOL_CALL even when reasoning_content is present."""
+        agent = self._agent()
+        raw = json.dumps({
+            "kind": "ActionEvent", "source": "agent",
+            "action_type": "TerminalAction",
+            "command": "ls -la",
+            "reasoning_content": "Let me check the directory...",
+        })
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.TOOL_CALL
+        assert "ls -la" in ev.content
         assert "@@LOG@@" not in ev.content
 
 
