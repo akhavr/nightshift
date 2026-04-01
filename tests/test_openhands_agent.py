@@ -380,7 +380,7 @@ class TestStallDetection:
         agent._process = mock_proc
         agent._last_event = time.monotonic() - 1.0  # already past stall
 
-        with patch("adapters.agents.openhands.select.select", return_value=([], [], [])):
+        with patch("adapters.agents.base.select.select", return_value=([], [], [])):
             events = list(agent.stream_events())
 
         assert any(e.type == AgentEventType.STALL for e in events)
