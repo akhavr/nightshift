@@ -71,7 +71,7 @@ Key core modules:
 - `tracker_ipc.py` — IPC protocol for single-writer tracker architecture: `TrackerRequest`/`TrackerResponse` dataclasses (JSON-lines encoding), serialization helpers, `execute_tracker_method()` dispatcher, `recv_json_line()` shared socket utility, and `TrackerIPCBase` (base class providing all IssueTracker method implementations for IPC-backed clients — subclasses only override `_call()`).
 
 **`adapters/`** — Concrete implementations organized by concern:
-- `agents/` — `ClaudeCodeAgent` (fire-and-forget `-p` mode, `--resume` for multi-turn, parses `--output-format stream-json`), `CodexAgent` (stub)
+- `agents/` — `HeadlessAgentBase` in `base.py` (shared process lifecycle: stream with select, stall detection, terminate). `ClaudeCodeAgent` (fire-and-forget `-p` mode, `--resume` for multi-turn, parses `--output-format stream-json`), `OpenHandsAgent` (headless `--json` mode, `--resume` for multi-turn, parses `--JSON Event--`-separated JSON events), `CodexAgent` (stub)
 - `trackers/` — `GitBugTracker` (shells out to `git-bug` CLI, v0.10.1 syntax), `StaticTracker` (file-backed tracker for containers — reads pre-dumped JSON, supports `reload()` for mtime-based re-read, appends write operations to `tracker-outbox.jsonl` for host processing), `SocketTrackerClient` (connects to watcher's Unix socket for zero-contention tracker access; extends `TrackerIPCBase` from `core/tracker_ipc`)
 - `notifiers/` — `TelegramNotifier` (force_reply Q&A with polling thread), `WebhookNotifier`, `CompositeNotifier` (broadcasts to all, Q&A through primary)
 - `workspaces/` — `GitWorktreeManager` (creates git worktrees per issue, host-side)

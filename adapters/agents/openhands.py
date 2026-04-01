@@ -9,20 +9,16 @@ import json
 import logging
 import os
 import re
-import select
 import subprocess
 import time
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
+from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
 from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
 
-READ_TIMEOUT_S = 10.0
-STALL_TIMEOUT_S = 300.0
-PROCESS_TERMINATE_TIMEOUT_S = 10
-TOOL_RESULT_PREVIEW_LEN = 500
 EVENT_SEPARATOR = "--JSON Event--"
 CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
 
@@ -30,20 +26,14 @@ CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
 LLM_ENV_VARS = ("LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL")
 
 
-class OpenHandsAgent:
+class OpenHandsAgent(HeadlessAgentBase):
     def __init__(
         self,
         command: str = "openhands",
-        stall_timeout_s: float = STALL_TIMEOUT_S,
+        stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
     ):
-        self.command = command
-        self.stall_timeout_s = stall_timeout_s
-        self.extra_args = extra_args or []
-        self._pid: int | None = None
-        self._process: subprocess.Popen | None = None
-        self._last_event: float = 0
-        self._session_id: str | None = None
+        super().__init__(command, stall_timeout_s, extra_args)
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         cmd = [
@@ -71,67 +61,9 @@ class OpenHandsAgent:
         self._pid = self._process.pid
         self._last_event = time.monotonic()
 
-    def stream_events(self) -> Iterator[AgentEvent]:
-        if not self._process:
-            return
-        stdout = self._process.stdout
-        while True:
-            if self._process.poll() is not None:
-                # Drain remaining stdout
-                for line in stdout:
-                    ev = self._parse(line.rstrip("\n"))
-                    if ev:
-                        yield ev
-                # Extract session ID from stderr
-                self._extract_session_id()
-                yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
-                return
-
-            ready, _, _ = select.select([stdout], [], [], READ_TIMEOUT_S)
-            if ready:
-                line = stdout.readline()
-                if not line:
-                    self._extract_session_id()
-                    yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
-                    return
-                self._last_event = time.monotonic()
-                ev = self._parse(line.rstrip("\n"))
-                if ev:
-                    yield ev
-            else:
-                elapsed = time.monotonic() - self._last_event
-                if self.stall_timeout_s > 0 and elapsed > self.stall_timeout_s:
-                    yield AgentEvent(
-                        type=AgentEventType.STALL,
-                        content=f"No output for {elapsed:.0f}s",
-                    )
-                    return
-
-    def send_input(self, text: str) -> None:
-        raise RuntimeError(
-            "send_input() not supported in headless mode. "
-            "Use terminate() + start() with the answer as prompt."
-        )
-
-    def is_alive(self) -> bool:
-        return self._process is not None and self._process.poll() is None
-
-    def terminate(self) -> None:
-        if self._process and self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=PROCESS_TERMINATE_TIMEOUT_S)
-            except Exception as e:
-                log.warning(f"Process did not terminate cleanly: {e}")
-                self._process.kill()
-                self._process.wait()
-        self._process = None
-        self._pid = None
-        # _session_id preserved for resume
-
-    @property
-    def pid(self) -> int | None:
-        return self._pid
+    def _on_process_exit(self) -> None:
+        """Extract conversation ID from stderr for resume support."""
+        self._extract_session_id()
 
     def _extract_session_id(self) -> None:
         """Read stderr and extract conversation ID if present."""
@@ -160,15 +92,6 @@ class OpenHandsAgent:
 
         kind = ev.get("kind", "")
 
-        # Check for reasoning_content first (can appear on any event)
-        reasoning = ev.get("reasoning_content", "")
-        if reasoning:
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content=f"@@LOG@@ {reasoning}",
-                raw=raw,
-            )
-
         if kind == "ActionEvent":
             return self._parse_action(ev, raw)
 
@@ -188,12 +111,32 @@ class OpenHandsAgent:
                 raw=raw,
             )
 
+        # reasoning_content on unknown event kinds
+        reasoning = ev.get("reasoning_content", "")
+        if reasoning:
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@LOG@@ {reasoning}",
+                raw=raw,
+            )
+
         # Unknown kind
         return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
 
     def _parse_action(self, ev: dict, raw: str) -> AgentEvent:
-        """Parse an ActionEvent into the appropriate AgentEvent."""
+        """Parse an ActionEvent into the appropriate AgentEvent.
+
+        Critical markers (FinishAction, FileEditorAction) are checked before
+        reasoning_content so they are never shadowed by @@LOG@@.
+        """
         action_type = ev.get("action_type", "")
+
+        if action_type == "FinishAction":
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content="@@DONE@@",
+                raw=raw,
+            )
 
         if action_type == "FileEditorAction":
             summary = ev.get("summary", "file edit")
@@ -203,10 +146,12 @@ class OpenHandsAgent:
                 raw=raw,
             )
 
-        if action_type == "FinishAction":
+        # reasoning_content on non-critical action types
+        reasoning = ev.get("reasoning_content", "")
+        if reasoning:
             return AgentEvent(
                 type=AgentEventType.TEXT,
-                content="@@DONE@@",
+                content=f"@@LOG@@ {reasoning}",
                 raw=raw,
             )
 

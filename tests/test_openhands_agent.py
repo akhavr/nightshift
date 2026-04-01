@@ -5,10 +5,9 @@ REQ: REQ-030
 
 import json
 import os
-import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -46,7 +45,8 @@ EVENT_SEPARATOR = "--JSON Event--"
 
 class TestConstructor:
     def test_defaults(self):
-        from adapters.agents.openhands import OpenHandsAgent, STALL_TIMEOUT_S
+        from adapters.agents.openhands import OpenHandsAgent
+        from adapters.agents.base import STALL_TIMEOUT_S
 
         agent = OpenHandsAgent()
         assert agent.command == "openhands"
@@ -265,6 +265,33 @@ class TestParse:
         ev = agent._parse(raw)
         assert ev is not None
         assert "@@CHECKPOINT@@" in ev.content
+
+    def test_finish_action_not_shadowed_by_reasoning(self):
+        """FinishAction must emit @@DONE@@ even when reasoning_content is present."""
+        agent = self._agent()
+        raw = json.dumps({
+            "kind": "ActionEvent", "source": "agent",
+            "action_type": "FinishAction",
+            "reasoning_content": "I'm done with the task.",
+        })
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert "@@DONE@@" in ev.content
+        assert "@@LOG@@" not in ev.content
+
+    def test_checkpoint_not_shadowed_by_reasoning(self):
+        """FileEditorAction must emit @@CHECKPOINT@@ even when reasoning_content is present."""
+        agent = self._agent()
+        raw = json.dumps({
+            "kind": "ActionEvent", "source": "agent",
+            "action_type": "FileEditorAction",
+            "summary": "edited file",
+            "reasoning_content": "Thinking about the edit...",
+        })
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert "@@CHECKPOINT@@" in ev.content
+        assert "@@LOG@@" not in ev.content
 
 
 # ── stream_events() ──────────────────────────────────────────
