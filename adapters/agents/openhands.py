@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 READ_TIMEOUT_S = 10.0
 STALL_TIMEOUT_S = 300.0
 PROCESS_TERMINATE_TIMEOUT_S = 10
+DEFAULT_MAX_TURNS = 50
+STDERR_JOIN_TIMEOUT_S = 5
+LOG_TRUNCATE_CHARS = 200
+OBSERVATION_TRUNCATE_CHARS = 500
 
 
 class OpenHandsAgent:
@@ -38,7 +42,7 @@ class OpenHandsAgent:
         self._last_event: float = 0
         self._stderr_thread: threading.Thread | None = None
 
-    def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
+    def start(self, prompt: str, workspace: Path, max_turns: int = DEFAULT_MAX_TURNS) -> None:
         cmd = [
             self.command, "run",
             "--prompt", prompt,
@@ -110,7 +114,7 @@ class OpenHandsAgent:
                 self._process.kill()
                 self._process.wait()
         if self._stderr_thread:
-            self._stderr_thread.join(timeout=5)
+            self._stderr_thread.join(timeout=STDERR_JOIN_TIMEOUT_S)
             self._stderr_thread = None
         self._process = None
         self._pid = None
@@ -136,7 +140,7 @@ class OpenHandsAgent:
         try:
             ev = json.loads(raw)
         except json.JSONDecodeError:
-            log.warning(f"Failed to parse openhands output: {raw[:200]}")
+            log.warning(f"Failed to parse openhands output: {raw[:LOG_TRUNCATE_CHARS]}")
             return None
 
         event_type = ev.get("type", "")
@@ -190,7 +194,7 @@ class OpenHandsAgent:
         content = ev.get("content", "")
         return AgentEvent(
             type=AgentEventType.TOOL_RESULT,
-            content=content[:500],
+            content=content[:OBSERVATION_TRUNCATE_CHARS],
             raw=raw,
         )
 
