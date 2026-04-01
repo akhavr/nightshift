@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 AGENT_REGISTRY: dict[str, tuple[str, str]] = {
     "claude-code": ("adapters.agents.claude_code", "ClaudeCodeAgent"),
     "codex": ("adapters.agents.codex", "CodexAgent"),
+    "openhands": ("adapters.agents.openhands", "OpenHandsAgent"),
 }
 
 TRACKER_REGISTRY: dict[str, tuple[str, str]] = {

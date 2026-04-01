@@ -178,6 +178,12 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 - **Tests:** test_overflow.py
 - **Status:** covered
 
+### REQ-030: OpenHands agent adapter
+The system supports OpenHands as an alternative coding agent. The adapter translates OpenHands JSON events (separated by "--JSON Event--" lines) into nightshift markers: FileEditorAction→@@CHECKPOINT@@, FinishAction→@@DONE@@, reasoning_content→@@LOG@@, TerminalAction→tool_call, ObservationEvent→tool_result. Session IDs are extracted from stderr for resume support.
+
+- **Tests:** test_openhands_agent.py, test_config_factories.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -191,7 +197,7 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 | test_cli_env.py | REQ-012, REQ-013 |
 | test_cli_helpers.py | REQ-001, REQ-005, REQ-006, REQ-012 |
 | test_composite_notifier.py | REQ-010 |
-| test_config_factories.py | REQ-011, REQ-022 |
+| test_config_factories.py | REQ-011, REQ-022, REQ-030 |
 | test_docker_utils.py | REQ-019 |
 | test_dotenv.py | REQ-013 |
 | test_git_bug_lock_retry.py | REQ-025 |
@@ -228,6 +234,7 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 | test_socket_tracker_client.py | REQ-026 |
 | test_tracker_fallback.py | REQ-026 |
 | watcher/test_tracker_writer.py | REQ-026 |
+| test_openhands_agent.py | REQ-030 |
 | test_overflow.py | REQ-028 |
 
 ---
