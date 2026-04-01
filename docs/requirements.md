@@ -178,6 +178,18 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 - **Tests:** test_overflow.py
 - **Status:** covered
 
+### REQ-029: Merge-needed handoff
+When the host resumes a session and the base branch has advanced, it merges the latest base into the agent worktree. If the merge conflicts, the host writes `merge-needed.txt` to the session dir. On container startup, the entrypoint reads and deletes the file, prepending merge instructions to the agent prompt so the agent resolves conflicts, runs tests, and continues.
+
+- **Tests:** test_entrypoint_merge.py, test_workspace_setup.py
+- **Status:** covered
+
+### REQ-030: OpenHands agent adapter
+The system supports OpenHands as an alternative coding agent via `agent.kind: openhands`. Uses litellm under the hood for multi-provider LLM support. Configured via `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` env vars in WORKFLOW.md's agent section. The adapter implements the `CodingAgent` protocol with marker translation from OpenHands JSON events to the nightshift marker protocol (`@@LOG@@`, `@@CHECKPOINT@@`, `@@DONE@@`, etc.).
+
+- **Tests:** test_openhands_agent.py, test_config_factories.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -191,7 +203,7 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 | test_cli_env.py | REQ-012, REQ-013 |
 | test_cli_helpers.py | REQ-001, REQ-005, REQ-006, REQ-012 |
 | test_composite_notifier.py | REQ-010 |
-| test_config_factories.py | REQ-011, REQ-022 |
+| test_config_factories.py | REQ-011, REQ-022, REQ-030 |
 | test_docker_utils.py | REQ-019 |
 | test_dotenv.py | REQ-013 |
 | test_git_bug_lock_retry.py | REQ-025 |
@@ -229,6 +241,9 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 | test_tracker_fallback.py | REQ-026 |
 | watcher/test_tracker_writer.py | REQ-026 |
 | test_overflow.py | REQ-028 |
+| test_entrypoint_merge.py | REQ-029 |
+| test_workspace_setup.py | REQ-029 |
+| test_openhands_agent.py | REQ-030 |
 
 ---
 
