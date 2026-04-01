@@ -179,7 +179,7 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 - **Status:** covered
 
 ### REQ-030: OpenHands agent adapter
-The system supports OpenHands as an alternative coding agent via `agent.kind: openhands`. Uses litellm under the hood for multi-provider LLM support. Configured via `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` env vars in WORKFLOW.md's agent section. The adapter implements the `CodingAgent` protocol with marker translation from OpenHands JSON events to the nightshift marker protocol (`@@LOG@@`, `@@CHECKPOINT@@`, `@@DONE@@`, etc.).
+The system supports OpenHands as an alternative coding agent via `agent.kind: openhands`. Uses litellm under the hood for multi-provider LLM support. Configured via `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` env vars in WORKFLOW.md's agent section. The adapter implements the `CodingAgent` protocol, translating OpenHands JSON events (actions, observations, status) to `AgentEvent` types, with `finish` and `complete` status mapped to `@@DONE@@`.
 
 - **Tests:** test_openhands_agent.py, test_config_factories.py
 - **Status:** covered

@@ -68,6 +68,32 @@ class TestStart:
         assert "--model" in cmd
         assert "gpt-4" in cmd
 
+    @patch("adapters.agents.openhands.subprocess.Popen")
+    def test_start_uses_stderr_pipe(self, mock_popen, agent):
+        mock_proc = MagicMock()
+        mock_proc.pid = 1
+        mock_popen.return_value = mock_proc
+
+        agent.start("test", Path("/ws"))
+
+        call_kwargs = mock_popen.call_args[1]
+        assert call_kwargs["stderr"] == subprocess.PIPE
+
+    @patch("adapters.agents.openhands.subprocess.Popen")
+    def test_stderr_is_logged(self, mock_popen, agent, caplog):
+        mock_proc = MagicMock()
+        mock_proc.pid = 1
+        mock_proc.stderr = iter(["warning: something bad\n", "error: fatal\n"])
+        mock_popen.return_value = mock_proc
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            agent.start("test", Path("/ws"))
+            agent._stderr_thread.join(timeout=5)
+
+        assert "something bad" in caplog.text
+        assert "error: fatal" in caplog.text
+
 
 class TestSendInput:
     def test_send_input_raises(self, agent):

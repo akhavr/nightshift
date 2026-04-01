@@ -9,11 +9,12 @@ import json
 import logging
 import select
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Iterator, Optional
 
-from core.protocols import CodingAgent, AgentEvent, AgentEventType
+from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class OpenHandsAgent:
         self._pid: int | None = None
         self._process: subprocess.Popen | None = None
         self._last_event: float = 0
+        self._stderr_thread: threading.Thread | None = None
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         cmd = [
@@ -47,11 +49,15 @@ class OpenHandsAgent:
         ]
         self._process = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True,
+            stderr=subprocess.PIPE, text=True,
             cwd=str(workspace), bufsize=1,
         )
         self._pid = self._process.pid
         self._last_event = time.monotonic()
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr, daemon=True,
+        )
+        self._stderr_thread.start()
 
     def stream_events(self) -> Iterator[AgentEvent]:
         if not self._process:
@@ -103,8 +109,21 @@ class OpenHandsAgent:
                 log.warning(f"Terminate wait failed, killing: {e}")
                 self._process.kill()
                 self._process.wait()
+        if self._stderr_thread:
+            self._stderr_thread.join(timeout=5)
+            self._stderr_thread = None
         self._process = None
         self._pid = None
+
+    def _drain_stderr(self) -> None:
+        """Read stderr in a background thread and log each line."""
+        proc = self._process
+        if not proc or not proc.stderr:
+            return
+        for line in proc.stderr:
+            stripped = line.rstrip("\n")
+            if stripped:
+                log.warning("openhands stderr: %s", stripped)
 
     @property
     def pid(self) -> int | None:
