@@ -692,10 +692,10 @@ Prompt.
     assert captured_kwargs["overflow"].litellm_config == "litellm-config.yaml"
 
 
-def test_overflow_skipped_for_review_step(tmp_path, monkeypatch):
-    """launch.py skips overflow when step='review', even when flag file exists."""
+def _launch_with_step(tmp_path, monkeypatch, step):
+    """Helper: launch main() with overflow config and given step, return captured kwargs."""
     ns_dir = tmp_path / ".nightshift"
-    ns_dir.mkdir()
+    ns_dir.mkdir(exist_ok=True)
     (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
 
     wf = tmp_path / "WORKFLOW.md"
@@ -714,7 +714,7 @@ Prompt.
     monkeypatch.setattr("sys.argv", [
         "launch.py", "test-issue-id",
         "--workflow", str(wf),
-        "--step", "review",
+        "--step", step,
     ])
     monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
@@ -732,51 +732,20 @@ Prompt.
     with pytest.raises(SystemExit):
         main()
 
-    assert captured_kwargs.get("overflow") is None
+    return captured_kwargs
+
+
+def test_overflow_skipped_for_review_step(tmp_path, monkeypatch):
+    """launch.py skips overflow when step='review', even when flag file exists."""
+    captured = _launch_with_step(tmp_path, monkeypatch, "review")
+    assert captured.get("overflow") is None
 
 
 def test_overflow_applied_for_coder_step(tmp_path, monkeypatch):
     """launch.py applies overflow when step='coder' and flag file exists."""
-    ns_dir = tmp_path / ".nightshift"
-    ns_dir.mkdir()
-    (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
-
-    wf = tmp_path / "WORKFLOW.md"
-    wf.write_text("""\
----
-overflow:
-  extra_args: ["--model", "m2.7"]
-  env:
-    ANTHROPIC_API_KEY: sk-overflow
----
-Prompt.
-""")
-
-    from host.launch import main
-
-    monkeypatch.setattr("sys.argv", [
-        "launch.py", "test-issue-id",
-        "--workflow", str(wf),
-        "--step", "coder",
-    ])
-    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
-    monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
-    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
-    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
-
-    captured_kwargs = {}
-
-    def mock_run_container(*args, **kwargs):
-        captured_kwargs.update(kwargs)
-        return 0
-
-    monkeypatch.setattr("host.launch.run_container", mock_run_container)
-
-    with pytest.raises(SystemExit):
-        main()
-
-    assert captured_kwargs.get("overflow") is not None
-    assert captured_kwargs["overflow"].extra_args == ["--model", "m2.7"]
+    captured = _launch_with_step(tmp_path, monkeypatch, "coder")
+    assert captured.get("overflow") is not None
+    assert captured["overflow"].extra_args == ["--model", "m2.7"]
 
 
 def test_litellm_constants():
