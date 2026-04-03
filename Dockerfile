@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
 
 ARG CLAUDE_CODE_VERSION=latest
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+RUN npm install -g @openai/codex
 
 RUN curl -sL https://github.com/git-bug/git-bug/releases/latest/download/git-bug_linux_amd64 \
     -o /usr/local/bin/git-bug && chmod +x /usr/local/bin/git-bug

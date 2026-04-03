@@ -22,6 +22,8 @@ _PASSTHROUGH_ENV_VARS = (
     "OVERFLOW_API_KEY", "OVERFLOW_BASE_URL", "OVERFLOW_MODEL",
     # OpenHands uses LLM_* env vars (litellm under the hood)
     "LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL",
+    # Codex uses CODEX_* env vars for model provider configuration
+    "CODEX_MODEL_PROVIDER",
 )
 
 

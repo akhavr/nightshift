@@ -18,6 +18,20 @@ fi
 # Create OpenHands conversation persistence directory
 mkdir -p "$HOME/.openhands" 2>/dev/null || true
 
+# Generate Codex config from env vars if OVERFLOW_API_KEY is set
+mkdir -p "$HOME/.codex" 2>/dev/null || true
+if [ -n "$OVERFLOW_API_KEY" ]; then
+    cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${OVERFLOW_MODEL:-qwen/qwen3-coder}"
+model_provider = "${CODEX_MODEL_PROVIDER:-openrouter}"
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "${OVERFLOW_BASE_URL:-https://openrouter.ai/api/v1}"
+env_key = "OVERFLOW_API_KEY"
+CODEXCFG
+fi
+
 # Note: litellm proxy removed - agents use LLM_*/ANTHROPIC_* env vars directly
 # OpenHands uses LLM_* (litellm built-in), Claude Code uses ANTHROPIC_*
 
