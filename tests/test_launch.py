@@ -714,6 +714,117 @@ class TestPostContainer:
         # Should not raise
         _post_container(session_dir, config, tmp_path, "issue1")
 
+    @patch("host.launch.get_tracker_with_fallback")
+    @patch("host.launch.subprocess.run")
+    def test_post_container_includes_cost_in_comment(self, mock_run, mock_create_tracker,
+                                                      tmp_path, config):
+        """Proof-of-work comment should contain 'Cost:' line when usage data exists."""
+        from host.launch import _post_container
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+        (session_dir / "state.json").write_text(json.dumps({
+            "status": "waiting:review",
+            "branch": "agent/abc123",
+            "checkpoints": [{"description": "Fixed bug"}],
+            "human_answers": [],
+            "usage": {
+                "input_tokens": 45000,
+                "output_tokens": 12000,
+                "cost_usd": 0.38,
+                "model": "claude-sonnet-4-6",
+            },
+        }))
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
+        mock_tracker = MagicMock()
+        mock_create_tracker.return_value = mock_tracker
+
+        _post_container(session_dir, config, tmp_path, "issue1")
+
+        comment_body = mock_tracker.add_comment.call_args[0][1]
+        assert "Cost:" in comment_body
+        assert "45K input" in comment_body
+        assert "$0.38" in comment_body
+        assert "claude-sonnet-4-6" in comment_body
+
+    @patch("host.launch.get_tracker_with_fallback")
+    @patch("host.launch.subprocess.run")
+    def test_usage_appended_to_jsonl_on_done(self, mock_run, mock_create_tracker,
+                                              tmp_path, config):
+        """After _post_container, usage.jsonl should have one new line with correct fields."""
+        from host.launch import _post_container
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+        (session_dir / "state.json").write_text(json.dumps({
+            "status": "waiting:review",
+            "branch": "agent/abc123",
+            "started_at": "2025-01-01T00:00:00",
+            "completed_at": "2025-01-01T01:00:00",
+            "step": 3,
+            "checkpoints": [],
+            "human_answers": [],
+            "usage": {
+                "input_tokens": 45000,
+                "output_tokens": 12000,
+                "cost_usd": 0.38,
+                "model": "claude-sonnet-4-6",
+            },
+        }))
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_tracker = MagicMock()
+        mock_create_tracker.return_value = mock_tracker
+
+        _post_container(session_dir, config, tmp_path, "issue1")
+
+        usage_file = tmp_path / ".nightshift" / "usage.jsonl"
+        assert usage_file.exists()
+        entry = json.loads(usage_file.read_text().strip())
+        assert entry["issue_id"] == "issue1"
+        assert entry["input_tokens"] == 45000
+        assert entry["output_tokens"] == 12000
+        assert entry["cost_usd"] == 0.38
+        assert entry["model"] == "claude-sonnet-4-6"
+        assert entry["resumes"] == 3
+
+    @patch("host.launch.get_tracker_with_fallback")
+    @patch("host.launch.subprocess.run")
+    def test_usage_jsonl_survives_cleanup(self, mock_run, mock_create_tracker,
+                                          tmp_path, config):
+        """After cleanup (session dir removed), usage.jsonl still contains the entry."""
+        from host.launch import _post_container
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+        (session_dir / "state.json").write_text(json.dumps({
+            "status": "waiting:review",
+            "branch": "agent/abc123",
+            "checkpoints": [],
+            "human_answers": [],
+            "usage": {
+                "input_tokens": 10000, "output_tokens": 5000,
+                "cost_usd": 0.12, "model": "claude-sonnet-4-6",
+            },
+        }))
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_tracker = MagicMock()
+        mock_create_tracker.return_value = mock_tracker
+
+        _post_container(session_dir, config, tmp_path, "issue1")
+
+        # Simulate cleanup: remove session dir
+        import shutil
+        shutil.rmtree(session_dir)
+
+        # usage.jsonl should still exist
+        usage_file = tmp_path / ".nightshift" / "usage.jsonl"
+        assert usage_file.exists()
+        entry = json.loads(usage_file.read_text().strip())
+        assert entry["input_tokens"] == 10000
+
 
 # ── prepare_review_session tests ────────────────────────
 

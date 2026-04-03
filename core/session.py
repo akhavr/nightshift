@@ -160,6 +160,7 @@ class SessionRunner:
         elif event.type == AgentEventType.TOOL_RESULT:
             self.state_mgr.append_conversation("tool_result", event.content)
         elif event.type == AgentEventType.SYSTEM:
+            self._maybe_record_usage(event)
             return self._handle_system_event(event.content)
         elif event.type == AgentEventType.AUTH_FAILURE:
             log.error(f"Auth failure: {event.content}")
@@ -177,6 +178,17 @@ class SessionRunner:
         elif event.type == AgentEventType.PROCESS_EXIT:
             return "STOP"
         return None
+
+    def _maybe_record_usage(self, event):
+        """If the event carries usage metadata, accumulate it in state."""
+        usage = event.metadata.get("usage")
+        if usage:
+            self.state_mgr.update_usage(
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                cost_usd=usage.get("cost_usd", 0.0),
+                model=usage.get("model", ""),
+            )
 
     def _handle_system_event(self, content: str) -> str | None:
         """Handle a system event (context limit, etc.)."""

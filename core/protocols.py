@@ -13,6 +13,18 @@ from typing import Protocol, Optional, Iterator, Any, runtime_checkable
 
 SHORT_ID_LEN = 12   # default truncation length for issue IDs
 
+
+# ── Usage Tracking ───────────────────────────────────────
+
+@dataclass
+class UsageData:
+    """Accumulated token usage and cost for a session."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    model: str = ""
+
+
 # ── Issue Tracker ─────────────────────────────────────────
 
 @dataclass

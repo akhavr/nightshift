@@ -212,6 +212,27 @@ class TestNotifyDone:
         assert st.status == "waiting:review"
 
 
+class TestUsageInNotifyDone:
+    def test_cost_line_in_proof_comment(self, tmp_path):
+        """notify_done() should include cost line when usage data exists."""
+        _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_usage(45000, 12000, 0.38, "claude-sonnet-4-6")
+        st = sm.load_state()
+        notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
+        comments = tracker.get_comments(issue.id)
+        assert any("Cost:" in c.body for c in comments)
+        assert any("45K input" in c.body for c in comments)
+        assert any("$0.38" in c.body for c in comments)
+
+    def test_no_cost_line_when_zero_usage(self, tmp_path):
+        """No cost line when usage is all zeros."""
+        _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        st = sm.load_state()
+        notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
+        comments = tracker.get_comments(issue.id)
+        assert not any("Cost:" in c.body for c in comments)
+
+
 class TestMaybeSummarizeCheckpoints:
     def test_skips_short_list(self, tmp_path):
         agent, _, _, ws_mgr, sm, ws, _ = _setup(tmp_path)

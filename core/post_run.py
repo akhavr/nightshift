@@ -131,6 +131,23 @@ def scan_conversation_for_verdict(state_mgr: StateManager) -> str | None:
     return None
 
 
+def _format_cost_line(usage) -> str:
+    """Format a one-line cost summary from UsageData (or dict with same fields)."""
+    input_t = getattr(usage, "input_tokens", 0) or 0
+    output_t = getattr(usage, "output_tokens", 0) or 0
+    cost = getattr(usage, "cost_usd", 0.0) or 0.0
+    model = getattr(usage, "model", "") or ""
+    if input_t == 0 and output_t == 0 and cost == 0.0:
+        return ""
+    # Format token counts as K for readability
+    in_k = f"{input_t / 1000:.0f}K" if input_t >= 1000 else str(input_t)
+    out_k = f"{output_t / 1000:.0f}K" if output_t >= 1000 else str(output_t)
+    parts = [f"{in_k} input / {out_k} output tokens, ${cost:.2f}"]
+    if model:
+        parts.append(f"({model})")
+    return "**Cost:** " + " ".join(parts)
+
+
 def notify_done(
     state_mgr: StateManager,
     workspace_mgr: WorkspaceManager,
@@ -143,17 +160,23 @@ def notify_done(
     """Post proof-of-work summary and notify."""
     state_mgr.update_status("waiting:review")
     state_mgr.mark_completed()
+    # Re-read state to get latest usage (accumulated during session)
+    current_state = state_mgr.load_state()
     diff = workspace_mgr.diff_stat(workspace.path) if workspace else "N/A"
     ticks = "```"
 
     summary_lines = [f"- {cp.description}" for cp in state.checkpoints]
     summary = "\n".join(summary_lines) if summary_lines else "No checkpoints recorded."
 
+    cost_line = _format_cost_line(current_state.usage)
+    cost_section = f"\n{cost_line}" if cost_line else ""
+
     proof = (
         f"🏁 **Work complete — awaiting review**\n\n"
         f"**Summary:**\n{summary}\n\n"
         f"**Q&A exchanges:** {len(state.human_answers)}\n"
         f"**Changes:**\n{ticks}\n{diff}\n{ticks}"
+        f"{cost_section}"
     )
     tracker.add_comment(issue.id, proof)
     tracker.add_label(issue.id, "needs-review")

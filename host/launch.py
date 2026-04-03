@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
-from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME
+from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
@@ -40,6 +40,49 @@ def _resolve_names(issue_id: str, step: str, config):
     }
 
 
+def _format_cost_line(usage: dict) -> str:
+    """Format a one-line cost summary from a usage dict in state.json."""
+    input_t = usage.get("input_tokens", 0) or 0
+    output_t = usage.get("output_tokens", 0) or 0
+    cost = usage.get("cost_usd", 0.0) or 0.0
+    model = usage.get("model", "") or ""
+    if input_t == 0 and output_t == 0 and cost == 0.0:
+        return ""
+    in_k = f"{input_t / 1000:.0f}K" if input_t >= 1000 else str(input_t)
+    out_k = f"{output_t / 1000:.0f}K" if output_t >= 1000 else str(output_t)
+    parts = [f"{in_k} input / {out_k} output tokens, ${cost:.2f}"]
+    if model:
+        parts.append(f"({model})")
+    return "**Cost:** " + " ".join(parts)
+
+
+def _append_usage_log(repo, state, issue_id, step="coder"):
+    """Append a usage entry to .nightshift/usage.jsonl (survives session cleanup)."""
+    usage = state.get("usage", {})
+    if not usage.get("input_tokens") and not usage.get("output_tokens"):
+        return
+    usage_file = repo / ".nightshift" / USAGE_LOG_FILENAME
+    usage_file.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "session_id": state.get("branch", "").split("/")[-1] if state.get("branch") else "",
+        "issue_id": issue_id,
+        "agent_kind": "claude-code",
+        "model": usage.get("model", ""),
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "cost_usd": usage.get("cost_usd", 0.0),
+        "started_at": state.get("started_at", ""),
+        "completed_at": state.get("completed_at", ""),
+        "resumes": state.get("step", 0),
+        "step": step,
+    }
+    try:
+        with open(usage_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print(f"Warning: failed to append usage log: {e}", file=sys.stderr)
+
+
 def _post_container(session_dir, config, repo, issue_id):
     """After container exits, post proof-of-work summary to the real tracker."""
     state_file = session_dir / "state.json"
@@ -49,6 +92,9 @@ def _post_container(session_dir, config, repo, issue_id):
     state = json.loads(state_file.read_text())
     if state.get("status") != "waiting:review":
         return
+
+    # Append usage log before posting (survives cleanup)
+    _append_usage_log(repo, state, issue_id)
 
     checkpoints = state.get("checkpoints", [])
     human_answers = state.get("human_answers", [])
@@ -64,12 +110,17 @@ def _post_container(session_dir, config, repo, issue_id):
     )
     diff = diff_result.stdout.strip() if diff_result.returncode == 0 else "N/A"
 
+    usage = state.get("usage", {})
+    cost_line = _format_cost_line(usage)
+    cost_section = f"\n{cost_line}\n" if cost_line else "\n"
+
     ticks = "```"
     proof = (
         f"🏁 **Work complete — awaiting review**\n\n"
         f"**Summary:**\n{summary}\n\n"
         f"**Q&A exchanges:** {len(human_answers)}\n"
-        f"**Changes:**\n{ticks}\n{diff}\n{ticks}\n\n"
+        f"**Changes:**\n{ticks}\n{diff}\n{ticks}"
+        f"{cost_section}\n"
         f"Review with: `nightshift accept/reject/revise {issue_id}`"
     )
 

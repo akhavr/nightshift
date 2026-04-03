@@ -121,8 +121,16 @@ class ClaudeCodeAgent(HeadlessAgentBase):
             if ev.get("subtype") == "success" and not ev.get("is_error"):
                 self._extra_events.append(AgentEvent(
                     type=AgentEventType.TEXT, content="@@DONE@@", raw=raw))
+            metadata = {}
+            if "cost_usd" in ev or "input_tokens" in ev or "output_tokens" in ev:
+                metadata["usage"] = {
+                    "input_tokens": ev.get("input_tokens", 0),
+                    "output_tokens": ev.get("output_tokens", 0),
+                    "cost_usd": ev.get("cost_usd", 0.0),
+                    "model": ev.get("model", ""),
+                }
             return AgentEvent(type=AgentEventType.SYSTEM,
-                              content=result_text, raw=raw)
+                              content=result_text, metadata=metadata, raw=raw)
 
         if t == "error":
             error_msg = ev.get("error", {})
