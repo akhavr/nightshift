@@ -190,6 +190,12 @@ The system supports using different agent kinds for development (coder) and revi
 - **Tests:** test_training_export.py
 - **Status:** covered
 
+### REQ-033: Codex agent adapter
+The system supports OpenAI Codex CLI as a coding agent via `agent.kind: codex`. The adapter inherits `HeadlessAgentBase` and runs `codex exec --json --full-auto` in fire-and-forget mode. JSONL events are parsed by `type` field: `thread.started` (session ID extraction), `item.completed` (agent messages and command executions), `turn.completed` (@@DONE@@ + token usage), `error`/`turn.failed` (auth failure detection). Resume uses `codex exec resume <thread_id> "prompt"`. Configured via `~/.codex/config.toml` with custom model providers (e.g., OpenRouter).
+
+- **Tests:** test_codex_agent.py
+- **Status:** covered
+
 ### REQ-032: Token usage tracking
 Token usage and cost are tracked per session and persisted to `.nightshift/usage.jsonl` (outside session dirs, survives cleanup). `ClaudeCodeAgent._parse()` extracts `cost_usd`, `input_tokens`, `output_tokens` from `result` events. `SessionRunner` accumulates usage via `StateManager.update_usage()` (additive across resumes). On session completion, `host/launch.py:_post_container()` appends a JSON-line entry to `usage.jsonl` and includes a cost summary in the proof-of-work comment. `nightshift usage [issue-id]` queries and aggregates the log.
 
@@ -209,6 +215,7 @@ Token usage and cost are tracked per session and persisted to `.nightshift/usage
 | test_cli_env.py | REQ-012, REQ-013 |
 | test_cli_helpers.py | REQ-001, REQ-005, REQ-006, REQ-012 |
 | test_composite_notifier.py | REQ-010 |
+| test_codex_agent.py | REQ-033 |
 | test_config_factories.py | REQ-011, REQ-022, REQ-030 |
 | test_docker_utils.py | REQ-019 |
 | test_dotenv.py | REQ-013 |

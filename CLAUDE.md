@@ -74,7 +74,7 @@ Key core modules:
 - `tracker_ipc.py` — IPC protocol for single-writer tracker architecture: `TrackerRequest`/`TrackerResponse` dataclasses (JSON-lines encoding), serialization helpers, `execute_tracker_method()` dispatcher, `recv_json_line()` shared socket utility, and `TrackerIPCBase` (base class providing all IssueTracker method implementations for IPC-backed clients — subclasses only override `_call()`).
 
 **`adapters/`** — Concrete implementations organized by concern:
-- `agents/` — `HeadlessAgentBase` in `base.py` (shared process lifecycle: stream with select, stall detection, terminate, `_is_auth_failure()` classmethod with per-subclass `AUTH_FAILURE_PATTERNS`). `ClaudeCodeAgent` (fire-and-forget `-p` mode, `--resume` for multi-turn, parses `--output-format stream-json`), `OpenHandsAgent` (headless `--json` mode, `--resume` for multi-turn, parses `--JSON Event--`-separated JSON events), `CodexAgent` (stub)
+- `agents/` — `HeadlessAgentBase` in `base.py` (shared process lifecycle: stream with select, stall detection, terminate, `_is_auth_failure()` classmethod with per-subclass `AUTH_FAILURE_PATTERNS`). `ClaudeCodeAgent` (fire-and-forget `-p` mode, `--resume` for multi-turn, parses `--output-format stream-json`), `OpenHandsAgent` (headless `--json` mode, `--resume` for multi-turn, parses `--JSON Event--`-separated JSON events), `CodexAgent` (headless `exec --json` mode, `exec resume <thread_id>` for multi-turn, parses JSONL events keyed by `type` field)
 - `trackers/` — `GitBugTracker` (shells out to `git-bug` CLI, v0.10.1 syntax), `StaticTracker` (file-backed tracker for containers — reads pre-dumped JSON, supports `reload()` for mtime-based re-read, appends write operations to `tracker-outbox.jsonl` for host processing), `SocketTrackerClient` (connects to watcher's Unix socket for zero-contention tracker access; extends `TrackerIPCBase` from `core/tracker_ipc`)
 - `notifiers/` — `TelegramNotifier` (force_reply Q&A with polling thread), `WebhookNotifier`, `CompositeNotifier` (broadcasts to all, Q&A through primary)
 - `workspaces/` — `GitWorktreeManager` (creates git worktrees per issue, host-side)
@@ -108,6 +108,7 @@ Key core modules:
 - **No God objects.** A class should have one responsibility. If it has 5+ unrelated methods, split it.
 - **DRY.** If the same pattern appears in 2+ places, extract a shared helper. Duplicated session-state I/O, subprocess calls, and path construction are the most common violations.
 - **Requirements traceability.** Every code change and git-bug issue must map to a requirement in `docs/requirements.md`. Before starting work, identify which REQ-xxx it falls under. If no existing requirement covers the change, ask the human whether to add a new REQ-xxx. New tests must be referenced in the traceability matrix. When a change modifies behavior covered by an existing requirement, update the requirement's test list and status if needed. Do not add, remove, or modify requirements without human approval.
+- **All code changes go through nightshift.** Do not implement features directly — file git-bug issues, label them `nightshift`, and let the agent work on them. This ensures provenance: every change has an issue, a session trace, and a review. The only exception is if the human explicitly says to implement directly.
 
 ## Issue Filing Guidelines
 

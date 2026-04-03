@@ -1,31 +1,181 @@
-"""OpenAI Codex app-server adapter (sketch).
+"""OpenAI Codex CLI adapter.
 
-Uses JSON-RPC over stdio: initialize → thread/start → turn/start → stream.
-See: https://developers.openai.com/codex/app-server/
+Headless JSONL mode: fire-and-forget with --json output.
+Events keyed by `type` field (thread.started, item.completed, turn.completed, etc.).
+Multi-turn uses `codex exec resume <thread_id> "prompt"`.
 """
 
+import json
+import logging
+import subprocess
+import time
 from pathlib import Path
-from typing import Iterator
-from core.protocols import CodingAgent, AgentEvent
+from typing import Optional
+
+from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
+from core.protocols import AgentEvent, AgentEventType
+
+log = logging.getLogger(__name__)
 
 
-class CodexAgent:
+class CodexAgent(HeadlessAgentBase):
+    AUTH_FAILURE_PATTERNS = (
+        "status 401",
+        "status 429",
+        "unauthorized",
+        "invalid api key",
+        "incorrect api key",
+        "authentication_error",
+        "rate limit",
+        "insufficient_quota",
+        "missing authentication",
+    )
+
+    def __init__(
+        self,
+        command: str = "codex",
+        stall_timeout_s: float = 300.0,
+        extra_args: list[str] | None = None,
+    ):
+        super().__init__(command, stall_timeout_s, extra_args)
+
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
-        raise NotImplementedError("Codex adapter not yet implemented")
+        if self._session_id:
+            cmd = [
+                self.command, "exec", "resume",
+                "--json", "--full-auto",
+                *self.extra_args,
+                self._session_id, prompt,
+            ]
+        else:
+            cmd = [
+                self.command, "exec",
+                "--json", "--full-auto",
+                *self.extra_args,
+                prompt,
+            ]
 
-    def stream_events(self) -> Iterator[AgentEvent]:
-        raise NotImplementedError
+        self._process = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+            cwd=str(workspace), bufsize=1,
+        )
+        self._pid = self._process.pid
+        self._last_event = time.monotonic()
 
-    def send_input(self, text: str) -> None:
-        # Send continuation turn/start on the existing thread
-        raise NotImplementedError
+    def _parse(self, raw: str) -> Optional[AgentEvent]:
+        """Parse a JSONL event line from codex exec."""
+        stripped = raw.strip()
+        if not stripped:
+            return None
 
-    def is_alive(self) -> bool:
-        raise NotImplementedError
+        try:
+            ev = json.loads(stripped)
+        except json.JSONDecodeError:
+            return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
 
-    def terminate(self) -> None:
-        raise NotImplementedError
+        if not isinstance(ev, dict):
+            return None
 
-    @property
-    def pid(self) -> int | None:
-        return None
+        event_type = ev.get("type", "")
+
+        if event_type == "thread.started":
+            thread_id = ev.get("thread_id", "")
+            if thread_id:
+                self._session_id = thread_id
+                log.info("Session ID: %s", thread_id)
+            return AgentEvent(
+                type=AgentEventType.SYSTEM,
+                content=f"thread:{thread_id}",
+                raw=raw,
+            )
+
+        if event_type == "turn.started":
+            return None
+
+        if event_type in ("item.started", "item.completed"):
+            return self._parse_item(ev, raw)
+
+        if event_type == "turn.completed":
+            metadata = {}
+            usage = ev.get("usage")
+            if isinstance(usage, dict):
+                metadata["usage"] = {
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                }
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content="@@DONE@@",
+                raw=raw,
+                metadata=metadata,
+            )
+
+        if event_type == "turn.failed":
+            error = ev.get("error", {})
+            msg = error.get("message", "") if isinstance(error, dict) else str(error)
+            if self._is_auth_failure(msg):
+                return AgentEvent(
+                    type=AgentEventType.AUTH_FAILURE,
+                    content=msg,
+                    raw=raw,
+                )
+            return AgentEvent(
+                type=AgentEventType.SYSTEM,
+                content=f"turn.failed: {msg}",
+                raw=raw,
+            )
+
+        if event_type == "error":
+            msg = ev.get("message", "")
+            if self._is_auth_failure(msg):
+                return AgentEvent(
+                    type=AgentEventType.AUTH_FAILURE,
+                    content=msg,
+                    raw=raw,
+                )
+            return AgentEvent(
+                type=AgentEventType.SYSTEM,
+                content=f"error: {msg}",
+                raw=raw,
+            )
+
+        return AgentEvent(type=AgentEventType.UNKNOWN, raw=raw)
+
+    def _parse_item(self, ev: dict, raw: str) -> Optional[AgentEvent]:
+        """Parse an item.started or item.completed event."""
+        item = ev.get("item", {})
+        if not isinstance(item, dict):
+            return None
+
+        item_type = item.get("type", "")
+        status = item.get("status", "")
+
+        if item_type == "agent_message":
+            text = item.get("text", "")
+            if not text:
+                return None
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=text,
+                raw=raw,
+            )
+
+        if item_type == "command_execution":
+            command = item.get("command", "")
+            if status == "in_progress":
+                return AgentEvent(
+                    type=AgentEventType.TOOL_CALL,
+                    content=command[:TOOL_RESULT_PREVIEW_LEN],
+                    raw=raw,
+                )
+            output = item.get("aggregated_output", "")
+            exit_code = item.get("exit_code")
+            content = f"exit={exit_code}: {output}" if output else f"exit={exit_code}"
+            return AgentEvent(
+                type=AgentEventType.TOOL_RESULT,
+                content=content[:TOOL_RESULT_PREVIEW_LEN],
+                raw=raw,
+            )
+
+        return AgentEvent(type=AgentEventType.SYSTEM, content=f"item:{item_type}", raw=raw)
