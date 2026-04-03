@@ -203,9 +203,9 @@ Token usage and cost are tracked per session and persisted to `.nightshift/usage
 - **Status:** covered
 
 ### REQ-033: Codex CLI Docker support
-The Docker image includes the OpenAI Codex CLI (`@openai/codex`) so `agent.kind: codex` works inside containers. The entrypoint generates `~/.codex/config.toml` from overflow env vars (`OVERFLOW_API_KEY`, `OVERFLOW_BASE_URL`, `OVERFLOW_MODEL`) when present. `CODEX_MODEL_PROVIDER` is passed through to the container.
+The Docker image includes the OpenAI Codex CLI (`@openai/codex`) so `agent.kind: codex` works inside containers. Codex has independent provider configuration via `CODEX_API_KEY` (fallback to `OPENAI_API_KEY`), `CODEX_BASE_URL`, and `CODEX_MODEL`. If `CODEX_BASE_URL` is set, the entrypoint generates `~/.codex/config.toml` with a custom provider; if not, it exports `OPENAI_API_KEY` so Codex uses OpenAI natively. All three `CODEX_*` vars plus `OPENAI_API_KEY` are in `_PASSTHROUGH_ENV_VARS`.
 
-- **Tests:** test_launch.py (TestCodexDockerSupport), test_overflow.py (test_codex_env_passthrough), test_codex_agent.py (TestCodexAgentStart, TestCodexAgentParse, TestInDocker)
+- **Tests:** test_launch.py (TestCodexDockerSupport), test_overflow.py (test_codex_env_passthrough), test_entrypoint_codex_config.py, test_codex_agent.py (TestCodexAgentStart, TestCodexAgentParse, TestInDocker)
 - **Status:** covered
 
 ### REQ-034: Session history preservation

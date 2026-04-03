@@ -740,6 +740,10 @@ def test_codex_env_passthrough():
     assert "CODEX_BASE_URL" in _PASSTHROUGH_ENV_VARS
     assert "CODEX_MODEL" in _PASSTHROUGH_ENV_VARS
     assert "OPENAI_API_KEY" in _PASSTHROUGH_ENV_VARS
+    # OVERFLOW_* vars still needed for litellm overflow feature
+    assert "OVERFLOW_API_KEY" in _PASSTHROUGH_ENV_VARS
+    assert "OVERFLOW_BASE_URL" in _PASSTHROUGH_ENV_VARS
+    assert "OVERFLOW_MODEL" in _PASSTHROUGH_ENV_VARS
 
 
 def test_litellm_constants():
