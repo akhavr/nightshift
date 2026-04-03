@@ -29,13 +29,15 @@ _PASSTHROUGH_ENV_VARS = (
 
 
 def _auth_mounts() -> list[str]:
-    """Build -v flags for Claude auth credentials."""
+    """Build -v flags for auth credentials (Claude + Codex)."""
     home = Path.home()
     mounts: list[str] = []
     if (home / ".claude").is_dir():
         mounts += ["-v", f"{home / '.claude'}:/claude-auth:ro"]
     if (home / ".claude.json").exists():
         mounts += ["-v", f"{home / '.claude.json'}:/home/agent/.claude.json:ro"]
+    if (home / ".codex").is_dir():
+        mounts += ["-v", f"{home / '.codex'}:/codex-auth:ro"]
     return mounts
 
 

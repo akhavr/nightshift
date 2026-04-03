@@ -182,3 +182,78 @@ class TestCodexConfigGeneration:
         content = config_path.read_text()
         assert "http://localhost:8080/v1" in content
         assert "local-model" in content
+
+
+# Script that tests the codex-auth copy block from docker-entrypoint.sh.
+_CODEX_AUTH_COPY_SCRIPT = """\
+#!/bin/sh
+if [ -d /codex-auth ]; then
+    mkdir -p "$HOME/.codex"
+    cp /codex-auth/auth.json "$HOME/.codex/" 2>/dev/null || true
+    cp /codex-auth/config.toml "$HOME/.codex/" 2>/dev/null || true
+fi
+"""
+
+
+class TestCodexAuthCopy:
+
+    def test_codex_auth_copied_from_mount(self, tmp_path):
+        """Entrypoint copies auth.json from /codex-auth to ~/.codex/."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        (codex_auth / "auth.json").write_text('{"auth_mode": "apikey", "OPENAI_API_KEY": "sk-test"}')
+        (codex_auth / "config.toml").write_text('model = "o3"')
+
+        # Rewrite script to use tmp_path as the mount point
+        script_text = _CODEX_AUTH_COPY_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "copy_auth.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {"HOME": str(fake_home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        subprocess.run(["/bin/sh", str(script)], env=env, check=True, timeout=10)
+
+        dest = fake_home / ".codex"
+        assert (dest / "auth.json").exists()
+        assert "apikey" in (dest / "auth.json").read_text()
+        assert (dest / "config.toml").exists()
+        assert "o3" in (dest / "config.toml").read_text()
+
+    def test_codex_auth_no_mount_no_copy(self, tmp_path):
+        """When /codex-auth doesn't exist, nothing is copied."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+
+        # Point to a non-existent dir
+        nonexistent = tmp_path / "no-such-dir"
+        script_text = _CODEX_AUTH_COPY_SCRIPT.replace("/codex-auth", str(nonexistent))
+        script = tmp_path / "copy_auth.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {"HOME": str(fake_home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        subprocess.run(["/bin/sh", str(script)], env=env, check=True, timeout=10)
+
+        assert not (fake_home / ".codex" / "auth.json").exists()
+
+    def test_codex_auth_partial_files(self, tmp_path):
+        """Only auth.json present (no config.toml) — copies what exists, no error."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        (codex_auth / "auth.json").write_text('{"auth_mode": "apikey"}')
+
+        script_text = _CODEX_AUTH_COPY_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "copy_auth.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {"HOME": str(fake_home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        result = subprocess.run(["/bin/sh", str(script)], env=env, capture_output=True, text=True, timeout=10)
+
+        assert result.returncode == 0
+        assert (fake_home / ".codex" / "auth.json").exists()
+        assert not (fake_home / ".codex" / "config.toml").exists()
