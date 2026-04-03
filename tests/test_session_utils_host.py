@@ -11,6 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.session_utils import (
+    ARCHIVE_FILES,
+    archive_session,
     force_remove_dir,
     get_repo_root,
     read_state,
@@ -352,3 +354,94 @@ class TestRemoveWorktree:
 
         for c in mock_run.call_args_list:
             assert c.kwargs.get("cwd") == str(repo)
+
+
+# ── archive_session ──────────────────────────────────────────────────────────
+
+class TestArchiveSession:
+    def _make_session(self, tmp_path, session_id="test-session-123"):
+        """Create a fake repo with a session directory containing archivable files."""
+        repo = tmp_path / "repo"
+        session_dir = repo / ".nightshift" / "sessions" / session_id
+        session_dir.mkdir(parents=True)
+        (session_dir / "conversation.jsonl").write_text('{"role":"user"}\n')
+        (session_dir / "state.json").write_text('{"status":"done"}')
+        (session_dir / "raw-output.log").write_text("some output\n")
+        return repo, session_dir
+
+    def test_cleanup_archives_conversation(self, tmp_path):
+        """After cleanup, conversation.jsonl exists in archive."""
+        repo, session_dir = self._make_session(tmp_path)
+        archive_dir = archive_session(session_dir, repo)
+        assert archive_dir is not None
+        assert (archive_dir / "conversation.jsonl").exists()
+        assert (archive_dir / "conversation.jsonl").read_text() == '{"role":"user"}\n'
+
+    def test_cleanup_archives_state(self, tmp_path):
+        """After cleanup, state.json exists in archive."""
+        repo, session_dir = self._make_session(tmp_path)
+        archive_dir = archive_session(session_dir, repo)
+        assert archive_dir is not None
+        assert (archive_dir / "state.json").exists()
+        assert json.loads((archive_dir / "state.json").read_text()) == {"status": "done"}
+
+    def test_archives_raw_output_log(self, tmp_path):
+        repo, session_dir = self._make_session(tmp_path)
+        archive_dir = archive_session(session_dir, repo)
+        assert (archive_dir / "raw-output.log").exists()
+
+    def test_returns_none_for_missing_session(self, tmp_path):
+        repo = tmp_path / "repo"
+        missing = repo / ".nightshift" / "sessions" / "no-such-session"
+        result = archive_session(missing, repo)
+        assert result is None
+
+    def test_skips_missing_files_gracefully(self, tmp_path):
+        """If only some archivable files exist, archive those without error."""
+        repo = tmp_path / "repo"
+        session_dir = repo / ".nightshift" / "sessions" / "partial"
+        session_dir.mkdir(parents=True)
+        (session_dir / "state.json").write_text('{"status":"done"}')
+        # conversation.jsonl and raw-output.log are missing
+
+        archive_dir = archive_session(session_dir, repo)
+        assert (archive_dir / "state.json").exists()
+        assert not (archive_dir / "conversation.jsonl").exists()
+        assert not (archive_dir / "raw-output.log").exists()
+
+    def test_archive_path_uses_session_id(self, tmp_path):
+        repo, session_dir = self._make_session(tmp_path, session_id="abc123")
+        archive_dir = archive_session(session_dir, repo)
+        assert archive_dir == repo / ".nightshift" / "archive" / "abc123"
+
+    def test_accept_archives_before_cleanup(self, tmp_path):
+        """Simulate accept flow: archive then delete session dir."""
+        repo, session_dir = self._make_session(tmp_path)
+        archive_dir = archive_session(session_dir, repo)
+
+        # Simulate cleanup deleting the session dir
+        import shutil
+        shutil.rmtree(session_dir)
+
+        assert not session_dir.exists()
+        assert archive_dir.exists()
+        assert (archive_dir / "conversation.jsonl").exists()
+        assert (archive_dir / "state.json").exists()
+        assert (archive_dir / "raw-output.log").exists()
+
+    def test_does_not_archive_non_listed_files(self, tmp_path):
+        """Files not in ARCHIVE_FILES should not be copied."""
+        repo, session_dir = self._make_session(tmp_path)
+        (session_dir / "some-other-file.txt").write_text("extra")
+
+        archive_dir = archive_session(session_dir, repo)
+        assert not (archive_dir / "some-other-file.txt").exists()
+
+    def test_idempotent_overwrites_existing_archive(self, tmp_path):
+        """Archiving twice overwrites without error."""
+        repo, session_dir = self._make_session(tmp_path)
+        archive_session(session_dir, repo)
+        # Modify a file and re-archive
+        (session_dir / "state.json").write_text('{"status":"updated"}')
+        archive_dir = archive_session(session_dir, repo)
+        assert json.loads((archive_dir / "state.json").read_text()) == {"status": "updated"}

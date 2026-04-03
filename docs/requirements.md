@@ -208,6 +208,12 @@ The Docker image includes the OpenAI Codex CLI (`@openai/codex`) so `agent.kind:
 - **Tests:** test_launch.py (TestCodexDockerSupport), test_overflow.py (test_codex_env_passthrough), test_codex_agent.py (TestCodexAgentStart, TestCodexAgentParse, TestInDocker)
 - **Status:** covered
 
+### REQ-034: Session history preservation
+Session files (conversation.jsonl, state.json, raw-output.log) are archived to `.nightshift/archive/<session-id>/` before the session directory is deleted during accept, reject, or cleanup. This preserves provenance data for post-hoc analysis. The `archive_session()` function in `host/session_utils.py` copies only the files listed in `ARCHIVE_FILES`. Missing files are skipped gracefully. Archiving is idempotent (re-archiving overwrites).
+
+- **Tests:** test_session_utils_host.py (TestArchiveSession: test_cleanup_archives_conversation, test_cleanup_archives_state, test_accept_archives_before_cleanup, test_archives_raw_output_log, test_returns_none_for_missing_session, test_skips_missing_files_gracefully, test_archive_path_uses_session_id, test_does_not_archive_non_listed_files, test_idempotent_overwrites_existing_archive)
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -239,7 +245,7 @@ The Docker image includes the OpenAI Codex CLI (`@openai/codex`) so `agent.kind:
 | test_review_step.py | REQ-005, REQ-008, REQ-009, REQ-011 |
 | test_search.py | REQ-011 |
 | test_session_runner.py | REQ-002, REQ-003, REQ-004, REQ-015, REQ-016b, REQ-021, REQ-032 |
-| test_session_utils_host.py | REQ-001, REQ-002, REQ-007, REQ-012 |
+| test_session_utils_host.py | REQ-001, REQ-002, REQ-007, REQ-012, REQ-034 |
 | test_static_tracker.py | REQ-016, REQ-016b |
 | test_issue_redump.py | REQ-016b |
 | watcher/test_issue_sync.py | REQ-016b |

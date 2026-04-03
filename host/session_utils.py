@@ -10,7 +10,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from host.constants import ARCHIVE_DIR
+
 log = logging.getLogger(__name__)
+
+# Files to preserve when archiving a session
+ARCHIVE_FILES = ("conversation.jsonl", "state.json", "raw-output.log")
 
 
 # ── Path helpers ─────────────────────────────────────────
@@ -50,6 +55,32 @@ def update_status(session_dir: Path, status: str) -> None:
     state = read_state(session_dir)
     state["status"] = status
     write_state(session_dir, state)
+
+
+# ── Session archival ────────────────────────────────────
+
+def archive_session(session_dir: Path, repo: Path | None = None) -> Path | None:
+    """Copy key session files to .nightshift/archive/<session-id>/ before cleanup.
+
+    Returns the archive directory path, or None if session_dir doesn't exist.
+    """
+    if not session_dir.exists():
+        return None
+
+    if repo is None:
+        repo = get_repo_root()
+
+    session_id = session_dir.name
+    archive_dir = repo / ".nightshift" / ARCHIVE_DIR / session_id
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    for filename in ARCHIVE_FILES:
+        src = session_dir / filename
+        if src.exists():
+            shutil.copy2(src, archive_dir / filename)
+
+    log.info("Archived session %s to %s", session_id, archive_dir)
+    return archive_dir
 
 
 # ── Worktree cleanup ────────────────────────────────────
