@@ -19,36 +19,29 @@ fi
 mkdir -p "$HOME/.openhands" 2>/dev/null || true
 
 # Generate Codex config from env vars.
-# Overflow mode: use OVERFLOW_API_KEY with openrouter provider.
-# Non-overflow codex mode: use CODEX_API_KEY or ANTHROPIC_API_KEY with anthropic provider.
+# CODEX_API_KEY → OPENAI_API_KEY fallback chain.
+# If CODEX_BASE_URL is set → generate config.toml with custom provider.
+# If CODEX_BASE_URL not set → export OPENAI_API_KEY, Codex uses OpenAI natively.
 mkdir -p "$HOME/.codex" 2>/dev/null || true
-if [ -n "$OVERFLOW_API_KEY" ]; then
-    cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${OVERFLOW_MODEL:-qwen/qwen3-coder}"
-model_provider = "${CODEX_MODEL_PROVIDER:-openrouter}"
-
-[model_providers.openrouter]
-name = "OpenRouter"
-base_url = "${OVERFLOW_BASE_URL:-https://openrouter.ai/api/v1}"
-env_key = "OVERFLOW_API_KEY"
-CODEXCFG
-elif [ "$AGENT_KIND" = "codex" ]; then
-    # Non-overflow codex: pick the best available API key
-    CODEX_KEY="${CODEX_API_KEY:-$ANTHROPIC_API_KEY}"
+if [ "$AGENT_KIND" = "codex" ]; then
+    CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
     if [ -z "$CODEX_KEY" ]; then
-        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or ANTHROPIC_API_KEY set — Codex CLI will fail" >&2
-    elif [ -n "$CODEX_KEY" ]; then
-        # Export so Codex CLI can read it via env_key reference
+        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
+    elif [ -n "$CODEX_BASE_URL" ]; then
+        # Custom provider: generate config.toml
         export CODEX_API_KEY="$CODEX_KEY"
         cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250514}"
-model_provider = "${CODEX_MODEL_PROVIDER:-anthropic}"
+model = "${CODEX_MODEL:-o3}"
+model_provider = "custom"
 
-[model_providers.anthropic]
-name = "Anthropic"
-base_url = "${ANTHROPIC_BASE_URL:-https://api.anthropic.com/v1}"
+[model_providers.custom]
+name = "Custom"
+base_url = "${CODEX_BASE_URL}"
 env_key = "CODEX_API_KEY"
 CODEXCFG
+    else
+        # OpenAI native: just export the key, no config.toml needed
+        export OPENAI_API_KEY="$CODEX_KEY"
     fi
 fi
 
