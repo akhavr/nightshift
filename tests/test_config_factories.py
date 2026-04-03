@@ -107,6 +107,25 @@ class TestCreateAgent:
         )
         assert result == mock_cls.return_value
 
+    def test_creates_openhands_agent(self):
+        cfg = WorkflowConfig(
+            agent=AgentConfig(
+                kind="openhands",
+                stall_timeout_s=60,
+                extra_args=["--debug"],
+            )
+        )
+        mod, mock_cls = _make_mock_module("OpenHandsAgent")
+
+        with patch("core.config.factories.importlib.import_module", return_value=mod):
+            result = create_agent(cfg)
+
+        mock_cls.assert_called_once_with(
+            stall_timeout_s=60,
+            extra_args=["--debug"],
+        )
+        assert result == mock_cls.return_value
+
     def test_unknown_agent_kind_raises(self):
         cfg = WorkflowConfig(agent=AgentConfig(kind="unknown-agent"))
         with pytest.raises(ValueError, match="Unknown adapter kind 'unknown-agent'"):

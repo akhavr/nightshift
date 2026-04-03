@@ -1,56 +1,46 @@
 """OpenHands agent adapter.
 
-Runs OpenHands via openhands-cli, translates JSON events to nightshift markers.
-Uses litellm under the hood for multi-provider LLM support. Configured via
-LLM_API_KEY, LLM_MODEL, LLM_BASE_URL environment variables.
+Headless JSON mode: fire-and-forget with --json output.
+Events separated by "--JSON Event--" lines. Multi-turn Q&A
+uses --resume <conversation_id> to restart with context preserved.
 """
 
 import json
 import logging
-import select
+import re
 import subprocess
-import threading
 import time
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
+from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
 from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
 
-READ_TIMEOUT_S = 10.0
-STALL_TIMEOUT_S = 300.0
-PROCESS_TERMINATE_TIMEOUT_S = 10
-DEFAULT_MAX_TURNS = 50
-STDERR_JOIN_TIMEOUT_S = 5
-LOG_TRUNCATE_CHARS = 200
-OBSERVATION_TRUNCATE_CHARS = 500
+EVENT_SEPARATOR = "--JSON Event--"
+CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
 
 
-class OpenHandsAgent:
+class OpenHandsAgent(HeadlessAgentBase):
     def __init__(
         self,
-        command: str = "openhands-cli",
-        stall_timeout_s: float = STALL_TIMEOUT_S,
+        command: str = "openhands",
+        stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
     ):
-        self.command = command
-        self.stall_timeout_s = stall_timeout_s
-        self.extra_args = extra_args or []
-        self._pid: int | None = None
-        self._process: subprocess.Popen | None = None
-        self._last_event: float = 0
-        self._stderr_thread: threading.Thread | None = None
+        super().__init__(command, stall_timeout_s, extra_args)
 
-    def start(self, prompt: str, workspace: Path, max_turns: int = DEFAULT_MAX_TURNS) -> None:
+    def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         cmd = [
-            self.command, "run",
-            "--prompt", prompt,
-            "--workspace", str(workspace),
-            "--max-turns", str(max_turns),
-            "--output-format", "json",
+            self.command, "--headless", "--json", "--always-approve",
+            "--override-with-envs",
             *self.extra_args,
+            "-t", prompt,
         ]
+        if self._session_id:
+            cmd += ["--resume", self._session_id]
+
         self._process = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True,
@@ -58,158 +48,112 @@ class OpenHandsAgent:
         )
         self._pid = self._process.pid
         self._last_event = time.monotonic()
-        self._stderr_thread = threading.Thread(
-            target=self._drain_stderr, daemon=True,
-        )
-        self._stderr_thread.start()
 
-    def stream_events(self) -> Iterator[AgentEvent]:
-        if not self._process:
+    def _on_process_exit(self) -> None:
+        """Extract conversation ID from stderr for resume support."""
+        self._extract_session_id()
+
+    def _extract_session_id(self) -> None:
+        """Read stderr and extract conversation ID if present."""
+        if not self._process or not self._process.stderr:
             return
-        stdout = self._process.stdout
-        while True:
-            if self._process.poll() is not None:
-                for line in stdout:
-                    ev = self._parse(line.rstrip("\n"))
-                    if ev:
-                        yield ev
-                yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
-                return
-
-            ready, _, _ = select.select([stdout], [], [], READ_TIMEOUT_S)
-            if ready:
-                line = stdout.readline()
-                if not line:
-                    yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
-                    return
-                self._last_event = time.monotonic()
-                ev = self._parse(line.rstrip("\n"))
-                if ev:
-                    yield ev
-            else:
-                elapsed = time.monotonic() - self._last_event
-                if self.stall_timeout_s > 0 and elapsed > self.stall_timeout_s:
-                    yield AgentEvent(
-                        type=AgentEventType.STALL,
-                        content=f"No output for {elapsed:.0f}s",
-                    )
-                    return
-
-    def send_input(self, text: str) -> None:
-        raise RuntimeError(
-            "send_input() not supported for OpenHands. "
-            "Use terminate() + start() with the answer as prompt."
-        )
-
-    def is_alive(self) -> bool:
-        return self._process is not None and self._process.poll() is None
-
-    def terminate(self) -> None:
-        if self._process and self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=PROCESS_TERMINATE_TIMEOUT_S)
-            except Exception as e:
-                log.warning(f"Terminate wait failed, killing: {e}")
-                self._process.kill()
-                self._process.wait()
-        if self._stderr_thread:
-            self._stderr_thread.join(timeout=STDERR_JOIN_TIMEOUT_S)
-            self._stderr_thread = None
-        self._process = None
-        self._pid = None
-
-    def _drain_stderr(self) -> None:
-        """Read stderr in a background thread and log each line."""
-        proc = self._process
-        if not proc or not proc.stderr:
-            return
-        for line in proc.stderr:
-            stripped = line.rstrip("\n")
-            if stripped:
-                log.warning("openhands stderr: %s", stripped)
-
-    @property
-    def pid(self) -> int | None:
-        return self._pid
+        try:
+            stderr_text = self._process.stderr.read()
+            if stderr_text:
+                match = CONVERSATION_ID_RE.search(stderr_text)
+                if match:
+                    self._session_id = match.group(1)
+                    log.info(f"Session ID: {self._session_id}")
+        except Exception as e:
+            log.warning(f"Failed to read stderr for session ID: {e}")
 
     def _parse(self, raw: str) -> Optional[AgentEvent]:
-        """Parse a JSON event line from openhands-cli into an AgentEvent."""
-        if not raw.strip():
+        """Parse a JSON event line into an AgentEvent."""
+        stripped = raw.strip()
+        if not stripped or stripped == EVENT_SEPARATOR:
             return None
+
         try:
-            ev = json.loads(raw)
+            ev = json.loads(stripped)
         except json.JSONDecodeError:
-            log.warning(f"Failed to parse openhands output: {raw[:LOG_TRUNCATE_CHARS]}")
-            return None
+            return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
 
-        event_type = ev.get("type", "")
+        kind = ev.get("kind", "")
 
-        if event_type == "action":
+        if kind == "ActionEvent":
             return self._parse_action(ev, raw)
 
-        if event_type == "observation":
-            return self._parse_observation(ev, raw)
-
-        if event_type == "status":
-            return self._parse_status(ev, raw)
-
-        if event_type == "error":
-            error_msg = ev.get("message", str(ev))
+        if kind == "ObservationEvent":
+            content = str(ev.get("content", ""))[:TOOL_RESULT_PREVIEW_LEN]
             return AgentEvent(
-                type=AgentEventType.SYSTEM,
-                content=f"error: {error_msg}",
+                type=AgentEventType.TOOL_RESULT,
+                content=content,
                 raw=raw,
             )
 
-        return AgentEvent(type=AgentEventType.UNKNOWN, raw=raw)
-
-    def _parse_action(self, ev: dict, raw: str) -> Optional[AgentEvent]:
-        """Parse an OpenHands action event."""
-        action = ev.get("action", "")
-        message = ev.get("message", "")
-
-        if action == "message":
+        if kind == "MessageEvent":
+            content = ev.get("content", "")
             return AgentEvent(
-                type=AgentEventType.TEXT, content=message, raw=raw,
+                type=AgentEventType.TEXT,
+                content=str(content),
+                raw=raw,
             )
 
-        if action in ("run", "write", "read", "browse"):
-            content = f"{action}: {message}" if message else action
+        # reasoning_content on unknown event kinds
+        reasoning = ev.get("reasoning_content", "")
+        if reasoning:
             return AgentEvent(
-                type=AgentEventType.TOOL_CALL, content=content, raw=raw,
+                type=AgentEventType.TEXT,
+                content=f"@@LOG@@ {reasoning}",
+                raw=raw,
             )
 
-        if action == "finish":
+        # Unknown kind
+        return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
+
+    def _parse_action(self, ev: dict, raw: str) -> AgentEvent:
+        """Parse an ActionEvent into the appropriate AgentEvent.
+
+        Marker actions (FinishAction, FileEditorAction, TerminalAction) are
+        checked before reasoning_content so they are never shadowed by @@LOG@@.
+        """
+        action_type = ev.get("action_type", "")
+
+        if action_type == "FinishAction":
             return AgentEvent(
-                type=AgentEventType.TEXT, content="@@DONE@@", raw=raw,
+                type=AgentEventType.TEXT,
+                content="@@DONE@@",
+                raw=raw,
             )
 
+        if action_type == "FileEditorAction":
+            summary = ev.get("summary", "file edit")
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@CHECKPOINT@@ {summary}",
+                raw=raw,
+            )
+
+        if action_type == "TerminalAction":
+            command = ev.get("command", "")
+            return AgentEvent(
+                type=AgentEventType.TOOL_CALL,
+                content=f"TerminalAction: {command}",
+                raw=raw,
+            )
+
+        # reasoning_content on non-marker action types
+        reasoning = ev.get("reasoning_content", "")
+        if reasoning:
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@LOG@@ {reasoning}",
+                raw=raw,
+            )
+
+        # Unknown action type
         return AgentEvent(
-            type=AgentEventType.SYSTEM, content=f"action:{action}", raw=raw,
-        )
-
-    def _parse_observation(self, ev: dict, raw: str) -> Optional[AgentEvent]:
-        """Parse an OpenHands observation event."""
-        content = ev.get("content", "")
-        return AgentEvent(
-            type=AgentEventType.TOOL_RESULT,
-            content=content[:OBSERVATION_TRUNCATE_CHARS],
-            raw=raw,
-        )
-
-    def _parse_status(self, ev: dict, raw: str) -> Optional[AgentEvent]:
-        """Parse an OpenHands status event."""
-        status = ev.get("status", "")
-        message = ev.get("message", "")
-
-        if status == "complete":
-            return AgentEvent(
-                type=AgentEventType.TEXT, content="@@DONE@@", raw=raw,
-            )
-
-        return AgentEvent(
-            type=AgentEventType.SYSTEM,
-            content=f"status:{status} {message}".strip(),
+            type=AgentEventType.TEXT,
+            content=f"{action_type}: {json.dumps(ev)[:200]}",
             raw=raw,
         )

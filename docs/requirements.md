@@ -178,11 +178,8 @@ Users can manually switch new container launches to an alternate Anthropic-compa
 - **Tests:** test_overflow.py
 - **Status:** covered
 
-### REQ-029
-*Reserved — removed.*
-
 ### REQ-030: OpenHands agent adapter
-The system supports OpenHands as an alternative coding agent via `agent.kind: openhands`. Uses litellm under the hood for multi-provider LLM support. Configured via `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` env vars in WORKFLOW.md's agent section. The adapter implements the `CodingAgent` protocol, translating OpenHands JSON events (actions, observations, status) to `AgentEvent` types, with `finish` and `complete` status mapped to `@@DONE@@`.
+The system supports OpenHands as an alternative coding agent. The adapter translates OpenHands JSON events (separated by "--JSON Event--" lines) into nightshift markers: FileEditorAction→@@CHECKPOINT@@, FinishAction→@@DONE@@, reasoning_content→@@LOG@@, TerminalAction→tool_call, ObservationEvent→tool_result. Session IDs are extracted from stderr for resume support.
 
 - **Tests:** test_openhands_agent.py, test_config_factories.py
 - **Status:** covered
@@ -237,8 +234,8 @@ The system supports OpenHands as an alternative coding agent via `agent.kind: op
 | test_socket_tracker_client.py | REQ-026 |
 | test_tracker_fallback.py | REQ-026 |
 | watcher/test_tracker_writer.py | REQ-026 |
-| test_overflow.py | REQ-028 |
 | test_openhands_agent.py | REQ-030 |
+| test_overflow.py | REQ-028 |
 
 ---
 

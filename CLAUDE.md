@@ -71,7 +71,7 @@ Key core modules:
 - `tracker_ipc.py` — IPC protocol for single-writer tracker architecture: `TrackerRequest`/`TrackerResponse` dataclasses (JSON-lines encoding), serialization helpers, `execute_tracker_method()` dispatcher, `recv_json_line()` shared socket utility, and `TrackerIPCBase` (base class providing all IssueTracker method implementations for IPC-backed clients — subclasses only override `_call()`).
 
 **`adapters/`** — Concrete implementations organized by concern:
-- `agents/` — `ClaudeCodeAgent` (fire-and-forget `-p` mode, `--resume` for multi-turn, parses `--output-format stream-json`), `OpenHandsAgent` (runs OpenHands via `openhands-cli`, translates JSON events to nightshift markers, uses litellm for multi-provider LLM support — configured via `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`), `CodexAgent` (stub)
+- `agents/` — `HeadlessAgentBase` in `base.py` (shared process lifecycle: stream with select, stall detection, terminate). `ClaudeCodeAgent` (fire-and-forget `-p` mode, `--resume` for multi-turn, parses `--output-format stream-json`), `OpenHandsAgent` (headless `--json` mode, `--resume` for multi-turn, parses `--JSON Event--`-separated JSON events), `CodexAgent` (stub)
 - `trackers/` — `GitBugTracker` (shells out to `git-bug` CLI, v0.10.1 syntax), `StaticTracker` (file-backed tracker for containers — reads pre-dumped JSON, supports `reload()` for mtime-based re-read, appends write operations to `tracker-outbox.jsonl` for host processing), `SocketTrackerClient` (connects to watcher's Unix socket for zero-contention tracker access; extends `TrackerIPCBase` from `core/tracker_ipc`)
 - `notifiers/` — `TelegramNotifier` (force_reply Q&A with polling thread), `WebhookNotifier`, `CompositeNotifier` (broadcasts to all, Q&A through primary)
 - `workspaces/` — `GitWorktreeManager` (creates git worktrees per issue, host-side)
@@ -137,7 +137,7 @@ Key core modules:
 
 Tests use mock implementations from `tests/conftest.py` (`MockAgent`, `MockTracker`, `MockNotifier`, `MockWorkspaceManager`). 675 tests across `tests/` and `tests/watcher/`.
 
-Key test files: `test_openhands_agent.py`, `test_upstream.py`, `test_template_lint.py`, `test_upgrade.py`, `test_stream_parser.py`, `test_marker_reliability.py`, `oq1_stdin_test.py`, `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_cli_commands.py`, `test_cli_helpers.py`, `test_cli_issue.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py`, `test_review.py`, `test_auto_start.py`, `test_session_runner.py`, `test_hooks.py`, `test_post_run.py`, `test_qa_flow.py`, `test_prompts.py`, `test_config_factories.py`, `test_config_discovery.py`, `test_docker_utils.py`, `test_git_utils.py`, `test_composite_notifier.py`, `test_notifier_prefix.py`, `test_notification_level.py`, `test_rebase.py`, `test_search.py`, `test_session_utils_host.py`, `test_launch.py`, `test_post_container.py`, `test_assistant_text_logging.py`, `test_workspace_setup.py`, `test_entrypoint_merge.py`, `test_issue_redump.py`, `watcher/test_qa_handler.py`, `watcher/test_host_watcher.py`, `watcher/test_review_orchestrator.py`, `watcher/test_telegram_relay.py`, `watcher/test_session_monitor.py`, `watcher/test_graceful_shutdown.py`, `watcher/test_lifecycle_comments.py`, `watcher/test_issue_sync.py`.
+Key test files: `test_upstream.py`, `test_template_lint.py`, `test_upgrade.py`, `test_stream_parser.py`, `test_marker_reliability.py`, `oq1_stdin_test.py`, `test_static_tracker.py`, `test_dotenv.py`, `test_cli_env.py`, `test_cli_commands.py`, `test_cli_helpers.py`, `test_cli_issue.py`, `test_accept_reject.py`, `test_worktree_git_fix.py`, `test_review_step.py`, `test_review.py`, `test_auto_start.py`, `test_session_runner.py`, `test_hooks.py`, `test_post_run.py`, `test_qa_flow.py`, `test_prompts.py`, `test_config_factories.py`, `test_config_discovery.py`, `test_docker_utils.py`, `test_git_utils.py`, `test_composite_notifier.py`, `test_notifier_prefix.py`, `test_notification_level.py`, `test_rebase.py`, `test_search.py`, `test_session_utils_host.py`, `test_launch.py`, `test_post_container.py`, `test_assistant_text_logging.py`, `test_workspace_setup.py`, `test_entrypoint_merge.py`, `test_issue_redump.py`, `watcher/test_qa_handler.py`, `watcher/test_host_watcher.py`, `watcher/test_review_orchestrator.py`, `watcher/test_telegram_relay.py`, `watcher/test_session_monitor.py`, `watcher/test_graceful_shutdown.py`, `watcher/test_lifecycle_comments.py`, `watcher/test_issue_sync.py`.
 
 Remaining coverage gaps:
 - `adapters/trackers/git_bug.py` — git-bug CLI interaction (hard to test without git-bug binary)
@@ -156,15 +156,12 @@ docker run --rm --user $(id -u):$(id -g) \
   -v ~/.claude:/claude-auth:ro \
   -v <repo>/WORKFLOW.md:/workspace/WORKFLOW.md:ro \
   -e ISSUE_ID=<id> -e SHORT_ID=<short-id> \
-  -e LLM_API_KEY -e LLM_MODEL -e LLM_BASE_URL \
   nightshift:latest
 ```
 
 Container naming: coder containers are `nightshift-<short-id>`, review containers are `nightshift-review-<short-id>`. The watcher detects review sessions by the `review-` prefix in session IDs and passes `--step review --workflow REVIEW.md` when auto-resuming them.
 
 `docker-entrypoint.sh` rewrites the worktree `.git` pointer to use container paths (`/repo-git/worktrees/agent-<short-id>`), enabling git operations inside the container.
-
-When using `agent.kind: openhands`, the container additionally needs `LLM_API_KEY`, `LLM_MODEL`, and optionally `LLM_BASE_URL` environment variables passed through for litellm-based LLM access. These are configured in WORKFLOW.md's agent section and resolved from `.env`.
 
 When launching the watcher from a different repo (e.g. `nightshift watcher` from `jessica-ng/`), `cli.py` injects `PYTHONPATH` pointing to the agent-worker root so `python -m host.watcher` resolves correctly.
 
