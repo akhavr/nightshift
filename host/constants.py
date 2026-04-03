@@ -28,7 +28,7 @@ BACKGROUND_LAUNCH_CHECK_S = 10        # How long to wait before checking backgro
 
 # ── Telegram ─────────────────────────────────────────────
 TG_LONG_POLL_TIMEOUT_S = 1
-TG_HTTP_TIMEOUT_S = 5
+TG_HTTP_TIMEOUT_S = 3
 TG_POST_TIMEOUT_S = 10
 TG_MESSAGE_HARD_LIMIT = 4096
 TG_MESSAGE_SOFT_LIMIT = 4000

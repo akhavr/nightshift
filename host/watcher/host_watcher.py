@@ -199,6 +199,14 @@ class HostWatcher:
         self._shutdown = shutdown_event or threading.Event()
         self._reload = reload_event or threading.Event()
 
+        # Propagate shutdown event to QAHandler so pre-pause sleep
+        # can be interrupted immediately on Ctrl-C
+        self.qa._shutdown = self._shutdown
+
+        # Propagate shutdown event to TelegramRelay so long-poll HTTP
+        # requests can be interrupted on shutdown
+        self.telegram._shutdown = self._shutdown
+
         # Propagate shutdown event to tracker so interruptible subprocess
         # polls can be interrupted when stuck in git-bug calls
         tracker = self._get_tracker()

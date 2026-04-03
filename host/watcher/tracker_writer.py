@@ -75,11 +75,12 @@ class TrackerWriter:
 
     def stop(self) -> None:
         """Signal the writer thread to stop and wait for it to drain."""
+        # Drain pending requests so the _STOP sentinel can be enqueued
+        # even when the queue is full
         try:
             self._queue.put_nowait(_STOP)
         except queue.Full:
-            log.warning("Writer queue full during stop, forcing stop")
-            # Clear queue, resolving pending requests with errors
+            log.warning("Writer queue full during stop, draining first")
             while not self._queue.empty():
                 try:
                     item = self._queue.get_nowait()
@@ -91,7 +92,7 @@ class TrackerWriter:
                 except queue.Empty:
                     break
             self._queue.put_nowait(_STOP)
-        self._thread.join(timeout=10)
+        self._thread.join(timeout=15)
 
     def submit(self, request: TrackerRequest, timeout: float | None = None
                ) -> TrackerResponse:
@@ -193,7 +194,9 @@ class TrackerSocketServer:
         if self._server_sock:
             self._server_sock.close()
         self._thread.join(timeout=5)
-        self._pool.shutdown(wait=False)
+        # wait=True with cancel_futures ensures pending futures are cancelled
+        # and running threads (with 2s socket timeout) finish quickly
+        self._pool.shutdown(wait=True, cancel_futures=True)
         if self._socket_path.exists():
             self._socket_path.unlink(missing_ok=True)
         log.info("Tracker socket server stopped")
@@ -228,7 +231,7 @@ class TrackerSocketServer:
     def _handle_connection(self, conn: socket.socket) -> None:
         """Handle a single client connection: read request, submit, respond."""
         try:
-            conn.settimeout(30)
+            conn.settimeout(2)
             data = recv_json_line(conn)
             if not data:
                 return

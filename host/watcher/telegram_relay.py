@@ -1,6 +1,7 @@
 """Telegram communication: polling, sending notifications, Q&A questions, acks."""
 
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +35,7 @@ class TelegramRelay:
         self.enabled = _pkg().HAS_REQUESTS and bool(token and chat_id)
         self._offset = 0
         self._level = NotificationLevel[level.upper()]
+        self._shutdown = threading.Event()
 
     def set_level(self, level: str):
         """Update the notification level (e.g. after config reload)."""
@@ -43,6 +45,8 @@ class TelegramRelay:
         """Single Telegram poll -- routes messages to Q&A answers or review commands."""
         qa: dict[str, str] = {}
         reviews: dict[str, tuple[str, str]] = {}
+        if self._shutdown.is_set():
+            return qa, reviews
         try:
             resp = _pkg().requests.get(
                 f"https://api.telegram.org/bot{self.token}/getUpdates",
