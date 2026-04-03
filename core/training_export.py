@@ -7,11 +7,11 @@ supervised finetuning of cheaper coding agents.
 
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
 
-from host.constants import REVIEW_SESSION_PREFIX
+from core.constants import REVIEW_SESSION_PREFIX
 
 log = logging.getLogger(__name__)
 
@@ -81,16 +81,6 @@ def _extract_review_verdict(entries: list[dict]) -> Optional[str]:
             if "revise" in content:
                 return "revise"
     return None
-
-
-def _extract_review_feedback(entries: list[dict]) -> str:
-    """Extract reviewer feedback text from review conversation."""
-    parts = []
-    for entry in entries:
-        role = entry.get("role", "")
-        if role in _AGENT_ROLES:
-            parts.append(entry.get("content", ""))
-    return "\n".join(parts).strip()
 
 
 def _read_state(session_dir: Path) -> Optional[dict]:
@@ -164,8 +154,7 @@ def extract_training_data(sessions_dir: Path,
             log.debug("No review session for %s, skipping", sid)
             continue
 
-        review_state = _read_state(review_dir)
-        if review_state is None:
+        if _read_state(review_dir) is None:
             continue
 
         # Read conversation logs
@@ -202,7 +191,7 @@ def extract_training_data(sessions_dir: Path,
             prompt=_extract_prompt(coder_entries),
             agent_output=_extract_agent_output(coder_entries),
             review_verdict=verdict,
-            review_feedback=_extract_review_feedback(review_entries),
+            review_feedback=_extract_agent_output(review_entries),
             coder_agent_kind=_read_agent_kind(session_dir),
             reviewer_agent_kind=_read_agent_kind(review_dir),
             timestamp=state.get("started_at", ""),
