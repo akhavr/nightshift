@@ -922,7 +922,7 @@ def cmd_usage(a):
 
     # Print totals
     print(f"\n  {'TOTAL':<14} {'':8} "
-          f"{total_input / 1000:.0f}K in / {total_output / 1000:.0f}K out  "
+          f"{format_token_count(total_input):>6} in / {format_token_count(total_output):>6} out  "
           f"${total_cost:.2f}")
     print(f"  {len(entries)} session(s)")
 

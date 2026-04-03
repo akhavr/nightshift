@@ -190,6 +190,12 @@ The system supports using different agent kinds for development (coder) and revi
 - **Tests:** test_training_export.py
 - **Status:** covered
 
+### REQ-032: Token usage tracking
+Token usage and cost are tracked per session and persisted to `.nightshift/usage.jsonl` (outside session dirs, survives cleanup). `ClaudeCodeAgent._parse()` extracts `cost_usd`, `input_tokens`, `output_tokens` from `result` events. `SessionRunner` accumulates usage via `StateManager.update_usage()` (additive across resumes). On session completion, `host/launch.py:_post_container()` appends a JSON-line entry to `usage.jsonl` and includes a cost summary in the proof-of-work comment. `nightshift usage [issue-id]` queries and aggregates the log.
+
+- **Tests:** test_session_runner.py (TestUsageTracking), test_post_run.py (TestUsageInNotifyDone), test_launch.py (test_post_container_includes_cost_in_comment, test_usage_appended_to_jsonl_on_done, test_usage_jsonl_survives_cleanup), test_stream_parser.py (test_result_event_extracts_usage, test_result_event_no_usage_when_absent), test_cli_commands.py (test_cmd_usage_*)
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -199,7 +205,7 @@ The system supports using different agent kinds for development (coder) and revi
 | test_accept_reject.py | REQ-006, REQ-007, REQ-012 |
 | test_assistant_text_logging.py | REQ-008, REQ-009 |
 | test_auto_start.py | REQ-011, REQ-017 |
-| test_cli_commands.py | REQ-002, REQ-012 |
+| test_cli_commands.py | REQ-002, REQ-012, REQ-032 |
 | test_cli_env.py | REQ-012, REQ-013 |
 | test_cli_helpers.py | REQ-001, REQ-005, REQ-006, REQ-012 |
 | test_composite_notifier.py | REQ-010 |
@@ -208,23 +214,23 @@ The system supports using different agent kinds for development (coder) and revi
 | test_dotenv.py | REQ-013 |
 | test_git_bug_lock_retry.py | REQ-025 |
 | test_git_utils.py | REQ-001, REQ-006 |
-| test_launch.py | REQ-001, REQ-018 |
+| test_launch.py | REQ-001, REQ-018, REQ-032 |
 | test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015 |
 | test_notification_level.py | REQ-010 |
 | test_notifier_prefix.py | REQ-010 |
 | test_post_container.py | REQ-005, REQ-018 |
-| test_post_run.py | REQ-004, REQ-005, REQ-006 |
+| test_post_run.py | REQ-004, REQ-005, REQ-006, REQ-032 |
 | test_prompts.py | REQ-004, REQ-011 |
 | test_rebase.py | REQ-006 |
 | test_review.py | REQ-005, REQ-008 |
 | test_review_step.py | REQ-005, REQ-008, REQ-009, REQ-011 |
 | test_search.py | REQ-011 |
-| test_session_runner.py | REQ-002, REQ-003, REQ-004, REQ-015, REQ-016b, REQ-021 |
+| test_session_runner.py | REQ-002, REQ-003, REQ-004, REQ-015, REQ-016b, REQ-021, REQ-032 |
 | test_session_utils_host.py | REQ-001, REQ-002, REQ-007, REQ-012 |
 | test_static_tracker.py | REQ-016, REQ-016b |
 | test_issue_redump.py | REQ-016b |
 | watcher/test_issue_sync.py | REQ-016b |
-| test_stream_parser.py | REQ-004, REQ-014 |
+| test_stream_parser.py | REQ-004, REQ-014, REQ-032 |
 | test_upstream.py | REQ-027 |
 | test_template_lint.py | REQ-027 |
 | test_upgrade.py | REQ-024 |
