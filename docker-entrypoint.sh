@@ -8,6 +8,15 @@ if [ -d /claude-auth ]; then
     cp /claude-auth/.credentials.json "$HOME/.claude/" 2>/dev/null || true
 fi
 
+# Copy Codex login credentials from read-only mount to writable HOME.
+# When both auth.json and CODEX_API_KEY env var are present, env var wins
+# (the config.toml generation below overrides auth.json settings).
+if [ -d /codex-auth ]; then
+    mkdir -p "$HOME/.codex"
+    cp /codex-auth/auth.json "$HOME/.codex/" 2>/dev/null || true
+    cp /codex-auth/config.toml "$HOME/.codex/" 2>/dev/null || true
+fi
+
 # Fix worktree .git pointer: the host path doesn't exist inside the container.
 # Rewrite to use the mounted /repo-git path so commits land on the correct branch.
 # WORKTREE_NAME is set by launch.py (e.g. "agent-abc123" or "review-abc123").

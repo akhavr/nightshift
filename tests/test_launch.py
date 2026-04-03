@@ -389,6 +389,29 @@ class TestBuildDockerCmd:
         cmd_str = " ".join(cmd)
         assert "/claude-auth:ro" not in cmd_str
 
+    def test_codex_auth_mounted(self, tmp_path):
+        """When ~/.codex exists, docker command includes -v mount for /codex-auth."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        (fake_home / ".codex").mkdir()
+
+        with patch("host.docker_cmd.Path.home", return_value=fake_home):
+            cmd = self._call()
+
+        cmd_str = " ".join(cmd)
+        assert "/codex-auth:ro" in cmd_str
+
+    def test_codex_auth_not_mounted_when_missing(self, tmp_path):
+        """When ~/.codex doesn't exist, no /codex-auth mount."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()  # No .codex
+
+        with patch("host.docker_cmd.Path.home", return_value=fake_home):
+            cmd = self._call()
+
+        cmd_str = " ".join(cmd)
+        assert "/codex-auth:ro" not in cmd_str
+
     def test_notify_env_vars_forwarded(self):
         cmd = self._call(TELEGRAM_BOT_TOKEN="tok123", ANTHROPIC_API_KEY="sk-xxx")
 
