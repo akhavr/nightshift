@@ -15,6 +15,9 @@ if [ -f /workspace/.git ] && [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
     echo "gitdir: /repo-git/worktrees/${WORKTREE_NAME}" > /workspace/.git
 fi
 
+# Create OpenHands conversation persistence directory
+mkdir -p "$HOME/.openhands" 2>/dev/null || true
+
 # Note: litellm proxy removed - agents use LLM_*/ANTHROPIC_* env vars directly
 # OpenHands uses LLM_* (litellm built-in), Claude Code uses ANTHROPIC_*
 
