@@ -106,6 +106,59 @@ Key core modules:
 - **DRY.** If the same pattern appears in 2+ places, extract a shared helper. Duplicated session-state I/O, subprocess calls, and path construction are the most common violations.
 - **Requirements traceability.** Every code change and git-bug issue must map to a requirement in `docs/requirements.md`. Before starting work, identify which REQ-xxx it falls under. If no existing requirement covers the change, ask the human whether to add a new REQ-xxx. New tests must be referenced in the traceability matrix. When a change modifies behavior covered by an existing requirement, update the requirement's test list and status if needed. Do not add, remove, or modify requirements without human approval.
 
+## Issue Filing Guidelines
+
+When filing git-bug issues for nightshift to work on, follow TDD: every issue must specify tests first, implementation second.
+
+### Issue body structure
+
+All issues must include these sections in order:
+
+1. **Tests** — list test file, test names, and what each test asserts. These are written first and must fail before implementation.
+2. **Files** — which files to create or modify.
+3. **Implementation** — step-by-step instructions with exact file paths, function signatures, and behavior.
+4. **Patterns to follow** — reference existing code the agent should imitate.
+5. **REQ** — which REQ-xxx this maps to.
+
+### Granularity by agent kind
+
+**For `agent.kind: openhands` or `overflow.agent_kind: openhands`** — decompose into micro-issues:
+- Each issue touches at most 2-3 files.
+- One clear deliverable per issue (not "add feature X" but "add X to file Y with Z behavior").
+- Include exact file paths, function signatures, and expected test names.
+- Spell out implementation steps, not just the goal.
+- Include code snippets for patterns to follow (copy from existing code).
+- State dependencies explicitly: `Depends on: <issue-id-prefix>`. Don't label dependent issues with `nightshift` until the parent is accepted.
+
+**For `agent.kind: claude-code`** — high-level issues are fine. Claude Code can read the codebase and infer details. Still include the test section with expected test names.
+
+### Example issue body (OpenHands-level detail)
+
+```
+## Tests (write first, must fail before implementation)
+- tests/test_foo.py::test_foo_returns_true_for_valid_input
+  Assert: `foo("hello")` returns `True`
+- tests/test_foo.py::test_foo_raises_on_empty
+  Assert: `foo("")` raises `ValueError`
+- tests/test_config_factories.py::test_foo_registered
+  Assert: `"foo"` in `FOO_REGISTRY`
+
+## Files
+- adapters/foo.py (create)
+- core/config/factories.py (modify — add to FOO_REGISTRY)
+
+## Implementation
+1. Create `adapters/foo.py` with class `Foo` implementing `FooProtocol`
+2. Constructor accepts `bar: str`, `timeout_s: float = 30.0`
+3. Method `process()` does X, returns Y
+4. In `core/config/factories.py`, add `"foo": ("adapters.foo", "Foo")` to `FOO_REGISTRY`
+
+## Patterns to follow
+See `adapters/agents/claude_code.py` for the existing adapter pattern.
+
+REQ: REQ-031
+```
+
 ## Key Design Patterns
 
 - **Adapter registration**: `core/config/factories.py` has `AGENT_REGISTRY`, `TRACKER_REGISTRY`, etc. mapping `kind` strings to `(module_path, class_name)` tuples. New adapters: add entry to registry + implement the Protocol.

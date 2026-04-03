@@ -37,6 +37,9 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
     else:
         raw = {}
 
+    # Resolve env vars for everything except overflow (deferred to avoid
+    # noisy warnings when overflow env vars are not set in the shell).
+    overflow_raw = raw.pop("overflow", None)
     raw = _resolve_env_vars(raw)
     config = WorkflowConfig(prompt_template=prompt_body.strip())
 
@@ -48,6 +51,9 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
     _parse_hooks(raw, config)
     _parse_review(raw, config)
     _parse_auto_start(raw, config)
+
+    if overflow_raw is not None:
+        raw["overflow"] = _resolve_env_vars(overflow_raw, quiet=True)
     _parse_overflow(raw, config)
 
     if "terminal_statuses" in raw:
@@ -170,18 +176,23 @@ def split_front_matter(text: str) -> tuple[str, str]:
     return parts[1], parts[2]
 
 
-def _resolve_env_vars(obj: Any) -> Any:
-    """Recursively resolve $VAR references in string values."""
+def _resolve_env_vars(obj: Any, quiet: bool = False) -> Any:
+    """Recursively resolve $VAR references in string values.
+
+    Args:
+        quiet: If True, suppress warnings for missing env vars (used for
+               overflow section which is only relevant when overflow is active).
+    """
     if isinstance(obj, str):
         if obj.startswith("$"):
             var_name = obj[1:]
             val = os.environ.get(var_name, "")
-            if not val:
+            if not val and not quiet:
                 log.warning(f"Environment variable ${var_name} is empty/missing")
             return val
         return obj
     elif isinstance(obj, dict):
-        return {k: _resolve_env_vars(v) for k, v in obj.items()}
+        return {k: _resolve_env_vars(v, quiet) for k, v in obj.items()}
     elif isinstance(obj, list):
-        return [_resolve_env_vars(v) for v in obj]
+        return [_resolve_env_vars(v, quiet) for v in obj]
     return obj
