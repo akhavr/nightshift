@@ -37,14 +37,8 @@ terminal_statuses:
   - closed
 
 overflow:
-  agent_kind: openhands
   extra_args: []
   env:
-    # OpenHands uses LLM_* env vars (litellm under the hood)
-    LLM_API_KEY: $OVERFLOW_API_KEY
-    LLM_MODEL: $OVERFLOW_MODEL
-    LLM_BASE_URL: $OVERFLOW_BASE_URL
-    # Claude Code uses ANTHROPIC_* env vars
     ANTHROPIC_BASE_URL: $OVERFLOW_BASE_URL
     ANTHROPIC_AUTH_TOKEN: $OVERFLOW_API_KEY
     ANTHROPIC_API_KEY: $OVERFLOW_API_KEY
