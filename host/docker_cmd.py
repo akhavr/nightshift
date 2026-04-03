@@ -22,9 +22,9 @@ _PASSTHROUGH_ENV_VARS = (
     "OVERFLOW_API_KEY", "OVERFLOW_BASE_URL", "OVERFLOW_MODEL",
     # OpenHands uses LLM_* env vars (litellm under the hood)
     "LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL",
-    # Codex uses OpenAI API protocol natively
-    "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL",
-    "CODEX_MODEL_PROVIDER",
+    # Codex uses CODEX_* env vars for independent provider configuration
+    # OPENAI_API_KEY needed for Codex fallback chain (CODEX_API_KEY → OPENAI_API_KEY)
+    "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL", "OPENAI_API_KEY",
 )
 
 

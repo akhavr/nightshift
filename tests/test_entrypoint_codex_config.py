@@ -12,31 +12,25 @@ import pytest
 _CODEX_CONFIG_SCRIPT = """\
 #!/bin/sh
 mkdir -p "$HOME/.codex" 2>/dev/null || true
-if [ -n "$OVERFLOW_API_KEY" ]; then
-    cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${OVERFLOW_MODEL:-qwen/qwen3-coder}"
-model_provider = "${CODEX_MODEL_PROVIDER:-openrouter}"
-
-[model_providers.openrouter]
-name = "OpenRouter"
-base_url = "${OVERFLOW_BASE_URL:-https://openrouter.ai/api/v1}"
-env_key = "OVERFLOW_API_KEY"
-CODEXCFG
-elif [ "$AGENT_KIND" = "codex" ]; then
-    CODEX_KEY="${CODEX_API_KEY:-$ANTHROPIC_API_KEY}"
+if [ "$AGENT_KIND" = "codex" ]; then
+    CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
     if [ -z "$CODEX_KEY" ]; then
-        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or ANTHROPIC_API_KEY set — Codex CLI will fail" >&2
-    elif [ -n "$CODEX_KEY" ]; then
+        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
+    elif [ -n "$CODEX_BASE_URL" ]; then
         export CODEX_API_KEY="$CODEX_KEY"
         cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250514}"
-model_provider = "${CODEX_MODEL_PROVIDER:-anthropic}"
+model = "${CODEX_MODEL:-o3}"
+model_provider = "custom"
 
-[model_providers.anthropic]
-name = "Anthropic"
-base_url = "${ANTHROPIC_BASE_URL:-https://api.anthropic.com/v1}"
+[model_providers.custom]
+name = "Custom"
+base_url = "${CODEX_BASE_URL}"
 env_key = "CODEX_API_KEY"
 CODEXCFG
+    else
+        export OPENAI_API_KEY="$CODEX_KEY"
+        # Echo exported var so tests can verify
+        echo "OPENAI_API_KEY=$OPENAI_API_KEY"
     fi
 fi
 """
@@ -66,56 +60,79 @@ def _run_config_script(tmp_path: Path, env_overrides: dict) -> tuple[Path, str, 
 
 class TestCodexConfigGeneration:
 
-    def test_overflow_mode_generates_openrouter_config(self, tmp_path):
-        """When OVERFLOW_API_KEY is set, config.toml uses openrouter provider."""
+    def test_codex_api_key_only_no_config_toml(self, tmp_path):
+        """With CODEX_API_KEY but no CODEX_BASE_URL, no config.toml generated, OPENAI_API_KEY exported."""
+        config_path, stdout, _ = _run_config_script(tmp_path, {
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-openai-test",
+        })
+
+        assert not config_path.exists()
+        assert "OPENAI_API_KEY=sk-openai-test" in stdout
+
+    def test_codex_base_url_generates_config(self, tmp_path):
+        """With CODEX_BASE_URL set, config.toml generated with custom provider."""
         config_path, _, _ = _run_config_script(tmp_path, {
-            "OVERFLOW_API_KEY": "sk-or-test-key",
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-or-test",
+            "CODEX_BASE_URL": "https://openrouter.ai/api/v1",
         })
 
         assert config_path.exists()
         content = config_path.read_text()
-        assert "openrouter" in content
-        assert 'env_key = "OVERFLOW_API_KEY"' in content
+        assert 'model_provider = "custom"' in content
+        assert "https://openrouter.ai/api/v1" in content
+        assert 'env_key = "CODEX_API_KEY"' in content
+
+    def test_codex_model_in_config(self, tmp_path):
+        """CODEX_MODEL appears in generated config.toml."""
+        config_path, _, _ = _run_config_script(tmp_path, {
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-test",
+            "CODEX_BASE_URL": "https://example.com/v1",
+            "CODEX_MODEL": "qwen/qwen3-coder",
+        })
+
+        assert config_path.exists()
+        content = config_path.read_text()
         assert "qwen/qwen3-coder" in content
 
-    def test_overflow_mode_custom_model(self, tmp_path):
-        """OVERFLOW_MODEL overrides the default model in overflow mode."""
+    def test_codex_model_default(self, tmp_path):
+        """Without CODEX_MODEL, default model is o3."""
         config_path, _, _ = _run_config_script(tmp_path, {
-            "OVERFLOW_API_KEY": "sk-or-test-key",
-            "OVERFLOW_MODEL": "anthropic/claude-3-haiku",
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-test",
+            "CODEX_BASE_URL": "https://example.com/v1",
         })
 
         content = config_path.read_text()
-        assert "anthropic/claude-3-haiku" in content
+        assert 'model = "o3"' in content
 
-    def test_non_overflow_codex_with_anthropic_key(self, tmp_path):
-        """AGENT_KIND=codex with ANTHROPIC_API_KEY generates anthropic provider config."""
+    def test_codex_api_key_fallback_to_openai(self, tmp_path):
+        """Without CODEX_API_KEY, OPENAI_API_KEY is used."""
+        config_path, stdout, _ = _run_config_script(tmp_path, {
+            "AGENT_KIND": "codex",
+            "OPENAI_API_KEY": "sk-openai-fallback",
+        })
+
+        # No CODEX_BASE_URL → no config.toml, but OPENAI_API_KEY exported
+        assert not config_path.exists()
+        assert "OPENAI_API_KEY=sk-openai-fallback" in stdout
+
+    def test_codex_api_key_fallback_with_base_url(self, tmp_path):
+        """Without CODEX_API_KEY but with OPENAI_API_KEY and CODEX_BASE_URL, config.toml uses fallback key."""
         config_path, _, _ = _run_config_script(tmp_path, {
             "AGENT_KIND": "codex",
-            "ANTHROPIC_API_KEY": "sk-ant-test-key",
+            "OPENAI_API_KEY": "sk-openai-fallback",
+            "CODEX_BASE_URL": "http://localhost:8080/v1",
         })
 
         assert config_path.exists()
         content = config_path.read_text()
-        assert "anthropic" in content
-        assert 'env_key = "CODEX_API_KEY"' in content
-        assert "claude-sonnet-4-5-20250514" in content
-        assert "api.anthropic.com" in content
-
-    def test_non_overflow_codex_prefers_codex_api_key(self, tmp_path):
-        """CODEX_API_KEY is preferred over ANTHROPIC_API_KEY when both set."""
-        config_path, _, _ = _run_config_script(tmp_path, {
-            "AGENT_KIND": "codex",
-            "CODEX_API_KEY": "sk-codex-key",
-            "ANTHROPIC_API_KEY": "sk-ant-key",
-        })
-
-        assert config_path.exists()
-        content = config_path.read_text()
-        # Config should exist (CODEX_API_KEY takes priority)
+        assert "http://localhost:8080/v1" in content
         assert 'env_key = "CODEX_API_KEY"' in content
 
-    def test_non_overflow_codex_no_key_warns(self, tmp_path):
+    def test_codex_no_key_warns(self, tmp_path):
         """AGENT_KIND=codex without any API key warns on stderr and skips config."""
         config_path, _, stderr = _run_config_script(tmp_path, {
             "AGENT_KIND": "codex",
@@ -124,7 +141,7 @@ class TestCodexConfigGeneration:
         assert not config_path.exists()
         assert "WARNING" in stderr
         assert "CODEX_API_KEY" in stderr
-        assert "ANTHROPIC_API_KEY" in stderr
+        assert "OPENAI_API_KEY" in stderr
 
     def test_non_codex_agent_no_config(self, tmp_path):
         """AGENT_KIND=claude-code does not generate codex config."""
@@ -134,44 +151,34 @@ class TestCodexConfigGeneration:
 
         assert not config_path.exists()
 
-    def test_no_agent_kind_no_overflow_no_config(self, tmp_path):
-        """Without AGENT_KIND or OVERFLOW_API_KEY, no config is generated."""
+    def test_no_agent_kind_no_config(self, tmp_path):
+        """Without AGENT_KIND, no config is generated."""
         config_path, _, _ = _run_config_script(tmp_path, {})
 
         assert not config_path.exists()
 
-    def test_overflow_takes_priority_over_agent_kind(self, tmp_path):
-        """When both OVERFLOW_API_KEY and AGENT_KIND=codex are set, overflow wins."""
-        config_path, _, _ = _run_config_script(tmp_path, {
-            "OVERFLOW_API_KEY": "sk-or-key",
+    def test_codex_api_key_preferred_over_openai(self, tmp_path):
+        """CODEX_API_KEY is preferred over OPENAI_API_KEY when both set."""
+        config_path, stdout, _ = _run_config_script(tmp_path, {
             "AGENT_KIND": "codex",
-            "ANTHROPIC_API_KEY": "sk-ant-key",
+            "CODEX_API_KEY": "sk-codex-key",
+            "OPENAI_API_KEY": "sk-openai-key",
+        })
+
+        # No base URL → OPENAI_API_KEY exported with CODEX_API_KEY value
+        assert not config_path.exists()
+        assert "OPENAI_API_KEY=sk-codex-key" in stdout
+
+    def test_local_inference_config(self, tmp_path):
+        """Local inference setup: CODEX_BASE_URL pointing to localhost."""
+        config_path, _, _ = _run_config_script(tmp_path, {
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "not-needed",
+            "CODEX_BASE_URL": "http://localhost:8080/v1",
+            "CODEX_MODEL": "local-model",
         })
 
         assert config_path.exists()
         content = config_path.read_text()
-        # Should be openrouter (overflow), not anthropic
-        assert "openrouter" in content
-        assert 'env_key = "OVERFLOW_API_KEY"' in content
-
-    def test_custom_anthropic_model(self, tmp_path):
-        """ANTHROPIC_MODEL overrides default model in non-overflow codex mode."""
-        config_path, _, _ = _run_config_script(tmp_path, {
-            "AGENT_KIND": "codex",
-            "ANTHROPIC_API_KEY": "sk-ant-key",
-            "ANTHROPIC_MODEL": "claude-opus-4-6-20250620",
-        })
-
-        content = config_path.read_text()
-        assert "claude-opus-4-6-20250620" in content
-
-    def test_custom_base_url(self, tmp_path):
-        """ANTHROPIC_BASE_URL overrides default base URL in non-overflow codex mode."""
-        config_path, _, _ = _run_config_script(tmp_path, {
-            "AGENT_KIND": "codex",
-            "ANTHROPIC_API_KEY": "sk-ant-key",
-            "ANTHROPIC_BASE_URL": "https://custom.api.example.com/v1",
-        })
-
-        content = config_path.read_text()
-        assert "https://custom.api.example.com/v1" in content
+        assert "http://localhost:8080/v1" in content
+        assert "local-model" in content

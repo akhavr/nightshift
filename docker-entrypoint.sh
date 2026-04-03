@@ -18,35 +18,31 @@ fi
 # Create OpenHands conversation persistence directory
 mkdir -p "$HOME/.openhands" 2>/dev/null || true
 
-# Codex config: generate ~/.codex/config.toml when using a non-default provider.
-# Regular mode (OPENAI_API_KEY set): no config needed, Codex uses OpenAI natively.
-# Overflow / OpenRouter: generate config.toml pointing to the alternate provider.
-# Fallback: if AGENT_KIND=codex but no OPENAI_API_KEY, fill from OVERFLOW_* vars.
+# Generate Codex config from env vars.
+# CODEX_API_KEY → OPENAI_API_KEY fallback chain.
+# If CODEX_BASE_URL is set → generate config.toml with custom provider.
+# If CODEX_BASE_URL not set → export OPENAI_API_KEY, Codex uses OpenAI natively.
 mkdir -p "$HOME/.codex" 2>/dev/null || true
-if [ "$AGENT_KIND" = "codex" ] && [ -z "$OPENAI_API_KEY" ] && [ -n "$OVERFLOW_API_KEY" ]; then
-    export OPENAI_API_KEY="$OVERFLOW_API_KEY"
-    # Note: do NOT set OPENAI_BASE_URL — it's deprecated by Codex CLI
-    # and causes routing issues. base_url in config.toml is sufficient.
-    cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${OVERFLOW_MODEL:-qwen/qwen3-coder}"
-model_provider = "${CODEX_MODEL_PROVIDER:-openrouter}"
-
-[model_providers.openrouter]
-name = "OpenRouter"
-base_url = "${OVERFLOW_BASE_URL:-https://openrouter.ai/api/v1}"
-env_key = "OPENAI_API_KEY"
-CODEXCFG
-elif [ -n "$OPENAI_API_KEY" ] && [ -n "$OPENAI_BASE_URL" ]; then
-    # Custom OpenAI-compatible provider (e.g. local inference)
-    cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${OPENAI_MODEL:-o3}"
+if [ "$AGENT_KIND" = "codex" ]; then
+    CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
+    if [ -z "$CODEX_KEY" ]; then
+        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
+    elif [ -n "$CODEX_BASE_URL" ]; then
+        # Custom provider: generate config.toml
+        export CODEX_API_KEY="$CODEX_KEY"
+        cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL:-o3}"
 model_provider = "custom"
 
 [model_providers.custom]
 name = "Custom"
-base_url = "${OPENAI_BASE_URL}"
-env_key = "OPENAI_API_KEY"
+base_url = "${CODEX_BASE_URL}"
+env_key = "CODEX_API_KEY"
 CODEXCFG
+    else
+        # OpenAI native: just export the key, no config.toml needed
+        export OPENAI_API_KEY="$CODEX_KEY"
+    fi
 fi
 
 # Note: litellm proxy removed - agents use LLM_*/ANTHROPIC_* env vars directly
