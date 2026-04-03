@@ -18,7 +18,9 @@ fi
 # Create OpenHands conversation persistence directory
 mkdir -p "$HOME/.openhands" 2>/dev/null || true
 
-# Generate Codex config from env vars if OVERFLOW_API_KEY is set
+# Generate Codex config from env vars.
+# Overflow mode: use OVERFLOW_API_KEY with openrouter provider.
+# Non-overflow codex mode: use CODEX_API_KEY or ANTHROPIC_API_KEY with anthropic provider.
 mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ -n "$OVERFLOW_API_KEY" ]; then
     cat > "$HOME/.codex/config.toml" << CODEXCFG
@@ -30,6 +32,24 @@ name = "OpenRouter"
 base_url = "${OVERFLOW_BASE_URL:-https://openrouter.ai/api/v1}"
 env_key = "OVERFLOW_API_KEY"
 CODEXCFG
+elif [ "$AGENT_KIND" = "codex" ]; then
+    # Non-overflow codex: pick the best available API key
+    CODEX_KEY="${CODEX_API_KEY:-$ANTHROPIC_API_KEY}"
+    if [ -z "$CODEX_KEY" ]; then
+        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or ANTHROPIC_API_KEY set — Codex CLI will fail" >&2
+    elif [ -n "$CODEX_KEY" ]; then
+        # Export so Codex CLI can read it via env_key reference
+        export CODEX_API_KEY="$CODEX_KEY"
+        cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${ANTHROPIC_MODEL:-claude-sonnet-4-5-20250514}"
+model_provider = "${CODEX_MODEL_PROVIDER:-anthropic}"
+
+[model_providers.anthropic]
+name = "Anthropic"
+base_url = "${ANTHROPIC_BASE_URL:-https://api.anthropic.com/v1}"
+env_key = "CODEX_API_KEY"
+CODEXCFG
+    fi
 fi
 
 # Note: litellm proxy removed - agents use LLM_*/ANTHROPIC_* env vars directly

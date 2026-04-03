@@ -24,6 +24,8 @@ _PASSTHROUGH_ENV_VARS = (
     "LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL",
     # Codex uses CODEX_* env vars for model provider configuration
     "CODEX_MODEL_PROVIDER",
+    # Codex API key (non-overflow mode)
+    "CODEX_API_KEY",
 )
 
 
@@ -43,12 +45,16 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
                      issue_id: str, short_id: str, max_turns: int,
                      step: str, is_resume: bool, workflow_path: str,
                      image: str,
-                     overflow: OverflowConfig | None = None) -> list[str]:
+                     overflow: OverflowConfig | None = None,
+                     agent_kind: str = "claude-code") -> list[str]:
     """Build the docker run command with all mounts and env vars.
 
     Args:
         overflow: If provided, inject overflow env vars and extra_args
             into the container (alternate LLM provider).
+        agent_kind: The agent kind from config (e.g. "codex", "claude-code").
+            Passed as AGENT_KIND env var so docker-entrypoint.sh can
+            configure agent-specific settings.
     """
     notify_env = []
     for var in _PASSTHROUGH_ENV_VARS:
@@ -90,6 +96,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "-e", f"MAX_TURNS={max_turns}",
         "-e", f"STEP={step}",
         "-e", f"PROJECT_NAME={repo.name}",
+        "-e", f"AGENT_KIND={agent_kind}",
         # Disable Rich terminal UI codes for JSON parsing
         # Set to 1 to force interactive mode (plain JSON output)
         "-e", "TTY_INTERACTIVE=1",
@@ -115,12 +122,14 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
                   names: dict, issue_id: str, max_turns: int,
                   step: str, is_resume: bool, workflow_path: str,
                   image: str,
-                  overflow: OverflowConfig | None = None) -> int:
+                  overflow: OverflowConfig | None = None,
+                  agent_kind: str = "claude-code") -> int:
     """Build docker command, run the container, return its exit code."""
     docker_cmd = build_docker_cmd(
         repo, workspace_mount, session_dir, names["container_name"],
         names["worktree_name"], issue_id, names["short_id"], max_turns,
         step, is_resume, workflow_path, image, overflow=overflow,
+        agent_kind=agent_kind,
     )
 
     # Remove any stale container with the same name (e.g. leftover from a
