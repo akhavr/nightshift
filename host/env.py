@@ -7,9 +7,8 @@ from pathlib import Path
 GLOBAL_ENV = Path.home() / ".config" / "nightshift" / "env"
 
 
-def load_all_dotenv(project_dir: Path) -> None:
+def load_all_dotenv(project_env: Path) -> None:
     """Load global env first, then project .env (neither overrides existing)."""
-    project_env = project_dir / ".env"
     load_dotenv(GLOBAL_ENV)
     load_dotenv(project_env)
 

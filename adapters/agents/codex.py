@@ -17,6 +17,13 @@ from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
 
+DOCKERENV_PATH = Path("/.dockerenv")
+
+
+def _in_docker() -> bool:
+    """Detect if running inside a Docker container."""
+    return DOCKERENV_PATH.exists()
+
 
 class CodexAgent(HeadlessAgentBase):
     AUTH_FAILURE_PATTERNS = (
@@ -43,21 +50,23 @@ class CodexAgent(HeadlessAgentBase):
         if self._session_id:
             cmd = [
                 self.command, "exec", "resume",
-                "--json", "--full-auto",
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox" if _in_docker() else "--full-auto",
                 *self.extra_args,
                 self._session_id, prompt,
             ]
         else:
             cmd = [
                 self.command, "exec",
-                "--json", "--full-auto",
+                "--json",
+                "--dangerously-bypass-approvals-and-sandbox" if _in_docker() else "--full-auto",
                 *self.extra_args,
                 prompt,
             ]
 
         self._process = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True,
+            stderr=subprocess.DEVNULL, text=True,
             cwd=str(workspace), bufsize=1,
         )
         self._pid = self._process.pid

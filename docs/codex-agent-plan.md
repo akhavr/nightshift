@@ -179,6 +179,18 @@ The event mapping table above assumes Codex uses the same event `kind` names as 
 - Q6 (cost) — operational concern, not implementation blocker
 - Q7 (app-server) — future enhancement
 
+## Future Enhancements
+
+### Exponential backoff on provider overload
+
+**Problem observed:** When the LLM provider is overloaded (e.g., OpenRouter "high demand"), Codex CLI retries 5 times internally with no backoff, then the turn fails. Nightshift auto-resumes immediately, Codex hits the same overloaded provider, and the cycle repeats until `max_resumes` is exhausted. No backoff at either level.
+
+**Desired behavior:** When consecutive resumes fail with provider overload (not auth failure), nightshift should apply exponential backoff between resume attempts (e.g., 30s, 60s, 120s, 240s). This applies to all agent kinds, not just Codex.
+
+**Detection:** The adapter needs to distinguish overload from auth failure. For Codex: "high demand" and "Reconnecting..." errors are overload; "401 Unauthorized" is auth. A new `AgentEventType.PROVIDER_OVERLOAD` or a flag on the existing SYSTEM event could signal this to `SessionRunner`.
+
+**Scope:** Affects `core/session.py` (resume delay logic), adapter `_parse()` methods (overload detection), and potentially `host/constants.py` (backoff parameters). Cross-agent feature — Claude Code and OpenHands can also hit provider overload.
+
 ## Dependencies
 
 - OpenAI Codex CLI (`npm install -g @openai/codex`)
