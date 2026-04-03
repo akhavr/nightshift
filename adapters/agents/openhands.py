@@ -40,6 +40,7 @@ class OpenHandsAgent(HeadlessAgentBase):
         "connection error",
         "litellm.",
     )
+
     def __init__(
         self,
         command: str = "openhands",
