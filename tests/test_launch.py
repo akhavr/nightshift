@@ -801,8 +801,6 @@ class TestReviewOverflowIsolation:
             "short_id": "abc123",
         }
 
-        # launch.py sets overflow=None for review steps; verify no overflow
-        # env vars appear in the resulting docker command.
         with patch("host.docker_cmd.Path.home", return_value=tmp_path):
             run_container(
                 repo=tmp_path, workspace_mount=str(workspace),
@@ -816,6 +814,57 @@ class TestReviewOverflowIsolation:
 
         cmd = mock_run.call_args[0][0]
         cmd_str = " ".join(cmd)
-        # No overflow-specific env vars or args should be present
         assert "sk-overflow" not in cmd_str
         assert "ANTHROPIC_BASE_URL" not in cmd_str
+
+
+# ── OpenHands env var passthrough ──────────────────────────
+
+
+class TestOpenHandsEnvVars:
+
+    def test_openhands_env_vars_forwarded(self):
+        """When LLM_API_KEY, LLM_MODEL, LLM_BASE_URL are set, they appear in the docker command."""
+        env_to_clear = [
+            "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "NOTIFY_WEBHOOK_URL",
+            "SLACK_WEBHOOK", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "SSH_AUTH_SOCK",
+        ]
+        saved = {}
+        for var in env_to_clear:
+            if var in os.environ:
+                saved[var] = os.environ.pop(var)
+
+        os.environ["LLM_API_KEY"] = "sk-test-llm"
+        os.environ["LLM_MODEL"] = "gpt-4"
+        os.environ["LLM_BASE_URL"] = "https://api.example.com"
+
+        try:
+            cmd = build_docker_cmd(
+                repo=Path("/repo"),
+                workspace_mount="/workspace",
+                session_dir=Path("/session"),
+                container_name="nightshift-abc123",
+                worktree_name="agent-abc123",
+                issue_id="abc123",
+                short_id="abc123",
+                max_turns=50,
+                step="coder",
+                is_resume=False,
+                workflow_path="/repo/WORKFLOW.md",
+                image="nightshift:latest",
+            )
+
+            env_pairs = []
+            for i, arg in enumerate(cmd):
+                if arg == "-e" and i + 1 < len(cmd):
+                    env_pairs.append(cmd[i + 1])
+
+            assert "LLM_API_KEY=sk-test-llm" in env_pairs
+            assert "LLM_MODEL=gpt-4" in env_pairs
+            assert "LLM_BASE_URL=https://api.example.com" in env_pairs
+        finally:
+            os.environ.pop("LLM_API_KEY", None)
+            os.environ.pop("LLM_MODEL", None)
+            os.environ.pop("LLM_BASE_URL", None)
+            for k, v in saved.items():
+                os.environ[k] = v

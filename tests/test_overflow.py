@@ -723,6 +723,15 @@ def test_overflow_applied_for_coder_step(tmp_path, monkeypatch):
     assert captured["overflow"].extra_args == ["--model", "m2.7"]
 
 
+def test_docker_cmd_openhands_env_passthrough():
+    """LLM_* vars are in _PASSTHROUGH_ENV_VARS."""
+    from host.docker_cmd import _PASSTHROUGH_ENV_VARS
+
+    assert "LLM_API_KEY" in _PASSTHROUGH_ENV_VARS
+    assert "LLM_MODEL" in _PASSTHROUGH_ENV_VARS
+    assert "LLM_BASE_URL" in _PASSTHROUGH_ENV_VARS
+
+
 def test_litellm_constants():
     """Litellm proxy constants are defined and sensible."""
     from core.constants import (
