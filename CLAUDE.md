@@ -81,7 +81,7 @@ Key core modules:
 - `launch.py` — Orchestrates workspace setup, issue data dumping, and container launch. Delegates to `workspace_setup.py`, `issue_dump.py`, and `docker_cmd.py`.
 - `workspace_setup.py` — Worktree creation, branch management, review session preparation.
 - `issue_dump.py` — Dumps `issue.json` and `issues.json` to the session dir for the container's `StaticTracker`. Also provides `redump_issue()` for live sync (watcher re-dumps periodically so the container sees new comments).
-- `docker_cmd.py` — Builds the `docker run` command with all mounts, env vars, and auth credentials.
+- `docker_cmd.py` — Builds the `docker run` command with all mounts, env vars, and auth credentials. When `agent.kind` is `openhands`, passes through `LLM_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL` env vars (OpenHands uses litellm under the hood for multi-provider LLM support).
 - `tracker_client.py` — `get_tracker_with_fallback()`: probes the watcher's Unix socket; returns `SocketTrackerClient` when available, otherwise falls back to `create_tracker()` (direct GitBugTracker with lock retry). Used by CLI commands and launch.py instead of `create_tracker()` directly.
 - `watcher/` — Package split by concern: `host_watcher.py` (main loop), `telegram_relay.py` (Telegram polling), `qa_handler.py` (Q&A flow), `review_orchestrator.py` (auto-review launch/verdict), `session_monitor.py` (orphan detection, cleanup), `command_executor.py` (CLI command dispatch), `verdict_handler.py` (approve/revise handling), `issue_sync.py` (bidirectional file-based sync: outbox processing + issue.json re-dump), `tracker_writer.py` (single-writer thread, Unix socket server, queue proxy — see Single-writer pattern below), `main.py` (entry point). Run via `python -m host.watcher`.
 - `session_utils.py` — Shared session state I/O (read/write state.json), path helpers, worktree cleanup.
@@ -159,7 +159,7 @@ docker run --rm --user $(id -u):$(id -g) \
   nightshift:latest
 ```
 
-Container naming: coder containers are `nightshift-<short-id>`, review containers are `nightshift-review-<short-id>`. The watcher detects review sessions by the `review-` prefix in session IDs and passes `--step review --workflow REVIEW.md` when auto-resuming them.
+Container naming: coder containers are `nightshift-<short-id>`, review containers are `nightshift-review-<short-id>`. The watcher detects review sessions by the `review-` prefix in session IDs and passes `--step review --workflow REVIEW.md` when auto-resuming them. When `agent.kind` is `openhands`, the container runs OpenHands instead of Claude Code; `docker_cmd.py` injects the `LLM_*` env vars and any agent-specific extra_args.
 
 `docker-entrypoint.sh` rewrites the worktree `.git` pointer to use container paths (`/repo-git/worktrees/agent-<short-id>`), enabling git operations inside the container.
 
