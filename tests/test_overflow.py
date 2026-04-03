@@ -649,28 +649,32 @@ def test_docker_cmd_no_litellm_mount_without_config():
     assert len(litellm_mounts) == 0
 
 
-def test_launch_passes_overflow_with_litellm_config(tmp_path, monkeypatch):
-    """launch.py activates overflow when only litellm_config is set."""
+def _launch_with_overflow(tmp_path, monkeypatch, step="coder", workflow_content=None):
+    """Helper: launch main() with overflow config and given step, return captured kwargs."""
     ns_dir = tmp_path / ".nightshift"
-    ns_dir.mkdir()
+    ns_dir.mkdir(exist_ok=True)
     (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
 
-    wf = tmp_path / "WORKFLOW.md"
-    wf.write_text("""\
+    if workflow_content is None:
+        workflow_content = """\
 ---
 overflow:
-  litellm_config: litellm-config.yaml
+  extra_args: ["--model", "m2.7"]
   env:
-    OVERFLOW_API_KEY: sk-test
+    ANTHROPIC_API_KEY: sk-overflow
 ---
 Prompt.
-""")
+"""
+
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text(workflow_content)
 
     from host.launch import main
 
     monkeypatch.setattr("sys.argv", [
         "launch.py", "test-issue-id",
         "--workflow", str(wf),
+        "--step", step,
     ])
     monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
@@ -688,8 +692,35 @@ Prompt.
     with pytest.raises(SystemExit):
         main()
 
-    assert captured_kwargs.get("overflow") is not None
-    assert captured_kwargs["overflow"].litellm_config == "litellm-config.yaml"
+    return captured_kwargs
+
+
+def test_launch_passes_overflow_with_litellm_config(tmp_path, monkeypatch):
+    """launch.py activates overflow when only litellm_config is set."""
+    captured = _launch_with_overflow(tmp_path, monkeypatch, workflow_content="""\
+---
+overflow:
+  litellm_config: litellm-config.yaml
+  env:
+    OVERFLOW_API_KEY: sk-test
+---
+Prompt.
+""")
+    assert captured.get("overflow") is not None
+    assert captured["overflow"].litellm_config == "litellm-config.yaml"
+
+
+def test_overflow_skipped_for_review_step(tmp_path, monkeypatch):
+    """launch.py skips overflow when step='review', even when flag file exists."""
+    captured = _launch_with_overflow(tmp_path, monkeypatch, step="review")
+    assert captured.get("overflow") is None
+
+
+def test_overflow_applied_for_coder_step(tmp_path, monkeypatch):
+    """launch.py applies overflow when step='coder' and flag file exists."""
+    captured = _launch_with_overflow(tmp_path, monkeypatch, step="coder")
+    assert captured.get("overflow") is not None
+    assert captured["overflow"].extra_args == ["--model", "m2.7"]
 
 
 def test_litellm_constants():
