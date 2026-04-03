@@ -718,14 +718,16 @@ class TestPostContainer:
     @patch("host.launch.subprocess.run")
     def test_post_container_includes_cost_in_comment(self, mock_run, mock_create_tracker,
                                                       tmp_path, config):
-        """Proof-of-work comment should contain 'Cost:' line when usage data exists."""
+        """Proof-of-work comment should contain 'Cost:' line with resumes when usage data exists."""
         from host.launch import _post_container
         session_dir = tmp_path / "session"
         session_dir.mkdir()
         (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+        (session_dir / "issue.json").write_text(json.dumps({"title": "Fix the widget"}))
         (session_dir / "state.json").write_text(json.dumps({
             "status": "waiting:review",
             "branch": "agent/abc123",
+            "step": 3,
             "checkpoints": [{"description": "Fixed bug"}],
             "human_answers": [],
             "usage": {
@@ -747,6 +749,7 @@ class TestPostContainer:
         assert "45K input" in comment_body
         assert "$0.38" in comment_body
         assert "claude-sonnet-4-6" in comment_body
+        assert "3 resumes" in comment_body
 
     @patch("host.launch.get_tracker_with_fallback")
     @patch("host.launch.subprocess.run")
@@ -757,6 +760,7 @@ class TestPostContainer:
         session_dir = tmp_path / "session"
         session_dir.mkdir()
         (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+        (session_dir / "issue.json").write_text(json.dumps({"title": "Fix the widget"}))
         (session_dir / "state.json").write_text(json.dumps({
             "status": "waiting:review",
             "branch": "agent/abc123",
@@ -783,6 +787,8 @@ class TestPostContainer:
         assert usage_file.exists()
         entry = json.loads(usage_file.read_text().strip())
         assert entry["issue_id"] == "issue1"
+        assert entry["title"] == "Fix the widget"
+        assert entry["agent_kind"] == "claude-code"
         assert entry["input_tokens"] == 45000
         assert entry["output_tokens"] == 12000
         assert entry["cost_usd"] == 0.38
@@ -798,6 +804,7 @@ class TestPostContainer:
         session_dir = tmp_path / "session"
         session_dir.mkdir()
         (tmp_path / ".nightshift").mkdir(parents=True, exist_ok=True)
+        (session_dir / "issue.json").write_text(json.dumps({"title": "Test issue"}))
         (session_dir / "state.json").write_text(json.dumps({
             "status": "waiting:review",
             "branch": "agent/abc123",

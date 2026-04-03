@@ -17,6 +17,7 @@ from host.cli import (
     cmd_init,
     cmd_revise,
     cmd_cleanup,
+    cmd_usage,
     _read_issue_title,
     _truncate_title,
     _format_history_line,
@@ -787,3 +788,94 @@ def test_cmd_cleanup_keep_session(tmp_path, capsys):
     assert sd.exists()
     out = capsys.readouterr().out
     assert "keepses12345" in out
+
+
+# ── cmd_usage ───────────────────────────────────────────────────────────────
+
+
+def test_cmd_usage_no_file(tmp_path, capsys):
+    """When usage.jsonl does not exist, prints informative message."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None))
+    out = capsys.readouterr().out
+    assert "No usage data found" in out
+
+
+def test_cmd_usage_basic_output(tmp_path, capsys):
+    """Displays entries and totals from usage.jsonl."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    entries = [
+        {"session_id": "abc123", "issue_id": "issue1", "input_tokens": 10000,
+         "output_tokens": 3000, "cost_usd": 0.15, "model": "claude-sonnet-4-6",
+         "step": "coder"},
+        {"session_id": "def456", "issue_id": "issue2", "input_tokens": 20000,
+         "output_tokens": 5000, "cost_usd": 0.25, "model": "claude-sonnet-4-6",
+         "step": "coder"},
+    ]
+    (ns / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None))
+    out = capsys.readouterr().out
+    assert "abc123" in out
+    assert "def456" in out
+    assert "$0.15" in out
+    assert "$0.25" in out
+    assert "TOTAL" in out
+    assert "2 session(s)" in out
+
+
+def test_cmd_usage_filter_by_issue_id(tmp_path, capsys):
+    """Filters entries by issue_id prefix match."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    entries = [
+        {"session_id": "s1", "issue_id": "abc-123", "input_tokens": 10000,
+         "output_tokens": 3000, "cost_usd": 0.15, "model": "m", "step": "coder"},
+        {"session_id": "s2", "issue_id": "xyz-999", "input_tokens": 20000,
+         "output_tokens": 5000, "cost_usd": 0.25, "model": "m", "step": "coder"},
+    ]
+    (ns / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id="abc"))
+    out = capsys.readouterr().out
+    assert "s1" in out
+    assert "s2" not in out
+    assert "1 session(s)" in out
+
+
+def test_cmd_usage_malformed_lines(tmp_path, capsys):
+    """Skips malformed JSON lines with a warning."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    content = 'not valid json\n{"session_id": "s1", "issue_id": "i1", "input_tokens": 5000, "output_tokens": 1000, "cost_usd": 0.10, "model": "m", "step": "coder"}\n'
+    (ns / "usage.jsonl").write_text(content)
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None))
+    captured = capsys.readouterr()
+    assert "Warning: skipping malformed line" in captured.err
+    assert "s1" in captured.out
+    assert "1 session(s)" in captured.out
+
+
+def test_cmd_usage_empty_file(tmp_path, capsys):
+    """Empty usage.jsonl prints 'No usage entries found.'"""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    (ns / "usage.jsonl").write_text("")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None))
+    out = capsys.readouterr().out
+    assert "No usage entries found" in out

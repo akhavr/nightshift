@@ -14,6 +14,7 @@ from pathlib import Path
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
+from core.post_run import format_cost_line
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
@@ -40,23 +41,8 @@ def _resolve_names(issue_id: str, step: str, config):
     }
 
 
-def _format_cost_line(usage: dict) -> str:
-    """Format a one-line cost summary from a usage dict in state.json."""
-    input_t = usage.get("input_tokens", 0) or 0
-    output_t = usage.get("output_tokens", 0) or 0
-    cost = usage.get("cost_usd", 0.0) or 0.0
-    model = usage.get("model", "") or ""
-    if input_t == 0 and output_t == 0 and cost == 0.0:
-        return ""
-    in_k = f"{input_t / 1000:.0f}K" if input_t >= 1000 else str(input_t)
-    out_k = f"{output_t / 1000:.0f}K" if output_t >= 1000 else str(output_t)
-    parts = [f"{in_k} input / {out_k} output tokens, ${cost:.2f}"]
-    if model:
-        parts.append(f"({model})")
-    return "**Cost:** " + " ".join(parts)
-
-
-def _append_usage_log(repo, state, issue_id, step="coder"):
+def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
+                      step="coder"):
     """Append a usage entry to .nightshift/usage.jsonl (survives session cleanup)."""
     usage = state.get("usage", {})
     if not usage.get("input_tokens") and not usage.get("output_tokens"):
@@ -66,7 +52,8 @@ def _append_usage_log(repo, state, issue_id, step="coder"):
     entry = {
         "session_id": state.get("branch", "").split("/")[-1] if state.get("branch") else "",
         "issue_id": issue_id,
-        "agent_kind": "claude-code",
+        "title": title,
+        "agent_kind": agent_kind,
         "model": usage.get("model", ""),
         "input_tokens": usage.get("input_tokens", 0),
         "output_tokens": usage.get("output_tokens", 0),
@@ -93,8 +80,18 @@ def _post_container(session_dir, config, repo, issue_id):
     if state.get("status") != "waiting:review":
         return
 
+    # Read issue title from dumped issue.json for usage log
+    issue_title = ""
+    issue_file = session_dir / "issue.json"
+    if issue_file.exists():
+        try:
+            issue_title = json.loads(issue_file.read_text()).get("title", "")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: could not read issue title: {e}", file=sys.stderr)
+
     # Append usage log before posting (survives cleanup)
-    _append_usage_log(repo, state, issue_id)
+    _append_usage_log(repo, state, issue_id, title=issue_title,
+                      agent_kind=config.agent.kind)
 
     checkpoints = state.get("checkpoints", [])
     human_answers = state.get("human_answers", [])
@@ -111,7 +108,15 @@ def _post_container(session_dir, config, repo, issue_id):
     diff = diff_result.stdout.strip() if diff_result.returncode == 0 else "N/A"
 
     usage = state.get("usage", {})
-    cost_line = _format_cost_line(usage)
+    from core.protocols import UsageData
+    usage_data = UsageData(
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        cost_usd=usage.get("cost_usd", 0.0),
+        model=usage.get("model", ""),
+    )
+    resumes = state.get("step", 0)
+    cost_line = format_cost_line(usage_data, resumes=resumes)
     cost_section = f"\n{cost_line}\n" if cost_line else "\n"
 
     ticks = "```"

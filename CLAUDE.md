@@ -28,6 +28,7 @@ nightshift upgrade                       # show prompt updates from canonical te
 nightshift upstream                      # propose local prompt improvements to canonical (--dry-run to preview)
 nightshift issue <args...>               # pass args to tracker CLI with lock retry
 nightshift watcher                       # start host watcher (pause/unpause, Telegram)
+nightshift usage [issue-id]               # show token usage and cost per session
 nightshift export-training-data          # export finetuning data from session logs
 
 # Monitor sessions (Claude Code skill)
@@ -56,14 +57,15 @@ The system has a strict three-layer split:
 - `IssueTracker` — CRUD for issues, comments, labels, sync
 - `WorkspaceManager` — create/commit/finalize workspaces
 - `Notifier` — notify + round-trip Q&A (send_question/check_answer)
+- `UsageData` — dataclass for accumulated token usage and cost per session (input_tokens, output_tokens, cost_usd, model)
 
 Key core modules:
 - `config/` — Package: `models.py` (typed dataclasses), `loader.py` (YAML front matter parsing, env var resolution), `factories.py` (adapter registries and dynamic instantiation). `__init__.py` re-exports all public symbols for backward compatibility (`from core.config import load_workflow` still works).
 - `session.py` — `SessionRunner`: the main event loop. Streams agent events, handles markers (`@@LOG@@`, `@@CHECKPOINT@@`, `@@QUESTION@@`, `@@WAITING@@`, `@@DONE@@`), manages auto-resume on context limits/stalls. Delegates Q&A to `qa_flow.py`, post-run lifecycle to `post_run.py`, and hook execution to `hooks.py`.
 - `hooks.py` — Hook execution for workspace lifecycle events (after_create, before_run, after_run). Extracted from SessionRunner.
-- `post_run.py` — Post-run lifecycle: resume logic, done notification (proof-of-work summary), checkpoint summarization. Extracted from SessionRunner.
+- `post_run.py` — Post-run lifecycle: resume logic, done notification (proof-of-work summary with cost line), checkpoint summarization. Exports `format_cost_line()` used by both container and host proof-of-work comments. Extracted from SessionRunner.
 - `qa_flow.py` — Question/answer flow handling: question raised -> notifier/tracker updated -> answer collected -> delivered. Extracted from SessionRunner.
-- `state.py` — `StateManager`: atomic JSON state persistence in `/session/`. Files: `state.json`, `conversation.jsonl`, `raw-output.log`, `resume-prompt.md`, `waiting.json`, `answer.txt`. `SessionState.completed_at` is set by `mark_completed()` when a session finishes normally (@@DONE@@ → `notify_done()`), used by the orphan detector to distinguish successful exits from crashes.
+- `state.py` — `StateManager`: atomic JSON state persistence in `/session/`. Files: `state.json`, `conversation.jsonl`, `raw-output.log`, `resume-prompt.md`, `waiting.json`, `answer.txt`. `SessionState.completed_at` is set by `mark_completed()` when a session finishes normally (@@DONE@@ → `notify_done()`), used by the orphan detector to distinguish successful exits from crashes. `SessionState.usage` (`UsageData`) accumulates token counts/cost across resumes via `update_usage()`.
 - `prompts.py` — Jinja2 template rendering for WORKFLOW.md prompt body, plus fallback prompt builder.
 - `rebase.py` — Pre-review rebase: fetch latest base branch, rebase, run tests, resume agent on failure.
 - `search.py` — Keyword-based related issue search across any tracker.
@@ -78,7 +80,7 @@ Key core modules:
 - `workspaces/` — `GitWorktreeManager` (creates git worktrees per issue, host-side)
 
 **`host/`** — Host-side scripts (run outside Docker):
-- `cli.py` — User-facing CLI: init, start, resume, answer, status, logs, history, accept, reject, cleanup, upgrade, watcher, issue.
+- `cli.py` — User-facing CLI: init, start, resume, answer, status, logs, history, accept, reject, cleanup, upgrade, usage, watcher, issue.
 - `launch.py` — Orchestrates workspace setup, issue data dumping, and container launch. Delegates to `workspace_setup.py`, `issue_dump.py`, and `docker_cmd.py`.
 - `workspace_setup.py` — Worktree creation, branch management, review session preparation.
 - `issue_dump.py` — Dumps `issue.json` and `issues.json` to the session dir for the container's `StaticTracker`. Also provides `redump_issue()` for live sync (watcher re-dumps periodically so the container sees new comments).
@@ -185,6 +187,7 @@ REQ: REQ-031
 - **Lifecycle comments**: `host/watcher/lifecycle_comments.py` posts brief summary comments to the issue tracker at key session transitions (start, resume, question, done, revise). Only the watcher posts — the container's StaticTracker stays read-only. Each calling module tracks which events have been posted via `_posted_*` sets to avoid duplicates. Comments are posted via `_safe_post()` which logs failures without raising — `_safe_post()` does NOT call `tracker.sync()` (the watcher syncs periodically via `_maybe_sync_tracker()`). Integrated into `qa_handler.py` (question), `review_orchestrator.py` (done), `session_monitor.py` (start, resume), and `verdict_handler.py` (revise).
 - **Litellm proxy (overflow)**: When `overflow.litellm_config` is set in WORKFLOW.md, the container runs a litellm proxy on localhost:4000 for model name remapping. `docker-entrypoint.sh` starts `litellm --config /session/litellm-config.yaml --port 4000` before the agent and waits for a health check. `host/docker_cmd.py` mounts the config file read-only at `LITELLM_CONFIG_CONTAINER_PATH` and sets `ANTHROPIC_BASE_URL=http://localhost:4000`. Claude Code sends standard Anthropic model names; litellm rewrites them and routes to the configured provider. Config example: `overflow: { litellm_config: litellm-config.yaml, env: { OVERFLOW_API_KEY: $OVERFLOW_API_KEY } }`. Constants: `LITELLM_PROXY_PORT`, `LITELLM_CONFIG_CONTAINER_PATH`, `LITELLM_HEALTH_TIMEOUT_S` (in `core/constants`).
 - **Dual-agent workflow (REQ-031)**: WORKFLOW.md and REVIEW.md each have independent `agent` sections in their YAML front matter. `agent.kind`, `max_turns`, `stall_timeout_s`, and `extra_args` are configured per-step. Example: `agent.kind: openhands` in WORKFLOW.md (cheap coder) with `agent.kind: claude-code` in REVIEW.md (expensive reviewer). The review orchestrator loads REVIEW.md via `load_workflow()` and passes it to `launch.py --workflow REVIEW.md --step review`, so the review container uses its own agent config. `nightshift export-training-data` extracts (prompt, agent_output, review_feedback) tuples from paired coder+review sessions as JSONL for finetuning. `core/training_export.py` contains the extraction logic; it pairs each coder session with its `review-<sid>` counterpart, extracts the initial prompt, agent output, review verdict, and reviewer feedback.
+- **Usage tracking (REQ-032)**: Token usage and cost are tracked per session and persisted to `.nightshift/usage.jsonl` (outside session dirs, survives cleanup). `ClaudeCodeAgent._parse()` extracts `cost_usd`, `input_tokens`, `output_tokens` from `result` events into `AgentEvent.metadata["usage"]`. `SessionRunner._maybe_record_usage()` accumulates these via `StateManager.update_usage()` (additive across resumes). On session completion, `host/launch.py:_post_container()` appends a JSON-line entry to `usage.jsonl` and includes a cost summary in the proof-of-work comment (via `core/post_run.format_cost_line()`). `nightshift usage [issue-id]` queries and aggregates the log. Constants: `USAGE_LOG_FILENAME` (in `host/constants`).
 
 ## Testing
 

@@ -224,6 +224,18 @@ class TestUsageInNotifyDone:
         assert any("45K input" in c.body for c in comments)
         assert any("$0.38" in c.body for c in comments)
 
+    def test_cost_line_includes_resumes(self, tmp_path):
+        """Cost line includes resume count when step > 0."""
+        _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_usage(45000, 12000, 0.38, "claude-sonnet-4-6")
+        # Simulate 3 resumes
+        for _ in range(3):
+            sm.increment_step()
+        st = sm.load_state()
+        notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
+        comments = tracker.get_comments(issue.id)
+        assert any("3 resumes" in c.body for c in comments)
+
     def test_no_cost_line_when_zero_usage(self, tmp_path):
         """No cost line when usage is all zeros."""
         _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)

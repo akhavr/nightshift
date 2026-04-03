@@ -131,8 +131,11 @@ def scan_conversation_for_verdict(state_mgr: StateManager) -> str | None:
     return None
 
 
-def _format_cost_line(usage) -> str:
-    """Format a one-line cost summary from UsageData (or dict with same fields)."""
+def format_cost_line(usage, resumes: int = 0) -> str:
+    """Format a one-line cost summary from UsageData (or dict with same fields).
+
+    Accepts both UsageData dataclass instances and plain dicts.
+    """
     input_t = getattr(usage, "input_tokens", 0) or 0
     output_t = getattr(usage, "output_tokens", 0) or 0
     cost = getattr(usage, "cost_usd", 0.0) or 0.0
@@ -143,8 +146,13 @@ def _format_cost_line(usage) -> str:
     in_k = f"{input_t / 1000:.0f}K" if input_t >= 1000 else str(input_t)
     out_k = f"{output_t / 1000:.0f}K" if output_t >= 1000 else str(output_t)
     parts = [f"{in_k} input / {out_k} output tokens, ${cost:.2f}"]
+    detail_parts = []
     if model:
-        parts.append(f"({model})")
+        detail_parts.append(model)
+    if resumes:
+        detail_parts.append(f"{resumes} resumes")
+    if detail_parts:
+        parts.append(f"({', '.join(detail_parts)})")
     return "**Cost:** " + " ".join(parts)
 
 
@@ -168,7 +176,7 @@ def notify_done(
     summary_lines = [f"- {cp.description}" for cp in state.checkpoints]
     summary = "\n".join(summary_lines) if summary_lines else "No checkpoints recorded."
 
-    cost_line = _format_cost_line(current_state.usage)
+    cost_line = format_cost_line(current_state.usage, resumes=current_state.step)
     cost_section = f"\n{cost_line}" if cost_line else ""
 
     proof = (
