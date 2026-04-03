@@ -732,6 +732,16 @@ def test_docker_cmd_openhands_env_passthrough():
     assert "LLM_BASE_URL" in _PASSTHROUGH_ENV_VARS
 
 
+def test_codex_env_passthrough():
+    """OVERFLOW_API_KEY and CODEX_MODEL_PROVIDER are in _PASSTHROUGH_ENV_VARS."""
+    from host.docker_cmd import _PASSTHROUGH_ENV_VARS
+
+    assert "OVERFLOW_API_KEY" in _PASSTHROUGH_ENV_VARS
+    assert "OVERFLOW_BASE_URL" in _PASSTHROUGH_ENV_VARS
+    assert "OVERFLOW_MODEL" in _PASSTHROUGH_ENV_VARS
+    assert "CODEX_MODEL_PROVIDER" in _PASSTHROUGH_ENV_VARS
+
+
 def test_litellm_constants():
     """Litellm proxy constants are defined and sensible."""
     from core.constants import (

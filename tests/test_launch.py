@@ -939,6 +939,91 @@ class TestReviewOverflowIsolation:
 # ── OpenHands env var passthrough ──────────────────────────
 
 
+# ── Codex Docker support (REQ-033) ──────────────────────────
+
+
+class TestCodexDockerSupport:
+
+    def test_codex_config_mounted_in_container(self):
+        """When overflow env vars are set, they're passed through so
+        docker-entrypoint.sh can generate ~/.codex/config.toml at runtime."""
+        from core.config.models import OverflowConfig
+
+        overflow = OverflowConfig(
+            env={
+                "OVERFLOW_API_KEY": "sk-codex-test",
+                "OVERFLOW_BASE_URL": "https://openrouter.ai/api/v1",
+                "OVERFLOW_MODEL": "qwen/qwen3-coder",
+            },
+        )
+        cmd = build_docker_cmd(
+            repo=Path("/repo"),
+            workspace_mount="/workspace",
+            session_dir=Path("/session"),
+            container_name="nightshift-abc123",
+            worktree_name="agent-abc123",
+            issue_id="abc123",
+            short_id="abc123",
+            max_turns=50,
+            step="coder",
+            is_resume=False,
+            workflow_path="/repo/WORKFLOW.md",
+            image="nightshift:latest",
+            overflow=overflow,
+        )
+
+        env_pairs = []
+        for i, arg in enumerate(cmd):
+            if arg == "-e" and i + 1 < len(cmd):
+                env_pairs.append(cmd[i + 1])
+
+        # Overflow env vars needed by docker-entrypoint.sh for codex config
+        assert "OVERFLOW_API_KEY=sk-codex-test" in env_pairs
+        assert "OVERFLOW_BASE_URL=https://openrouter.ai/api/v1" in env_pairs
+        assert "OVERFLOW_MODEL=qwen/qwen3-coder" in env_pairs
+        assert "OVERFLOW_ACTIVE=1" in env_pairs
+
+    def test_codex_model_provider_passthrough(self):
+        """CODEX_MODEL_PROVIDER env var is forwarded to the container."""
+        env_to_clear = [
+            "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "NOTIFY_WEBHOOK_URL",
+            "SLACK_WEBHOOK", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "SSH_AUTH_SOCK",
+        ]
+        saved = {}
+        for var in env_to_clear:
+            if var in os.environ:
+                saved[var] = os.environ.pop(var)
+
+        os.environ["CODEX_MODEL_PROVIDER"] = "openrouter"
+
+        try:
+            cmd = build_docker_cmd(
+                repo=Path("/repo"),
+                workspace_mount="/workspace",
+                session_dir=Path("/session"),
+                container_name="nightshift-abc123",
+                worktree_name="agent-abc123",
+                issue_id="abc123",
+                short_id="abc123",
+                max_turns=50,
+                step="coder",
+                is_resume=False,
+                workflow_path="/repo/WORKFLOW.md",
+                image="nightshift:latest",
+            )
+
+            env_pairs = []
+            for i, arg in enumerate(cmd):
+                if arg == "-e" and i + 1 < len(cmd):
+                    env_pairs.append(cmd[i + 1])
+
+            assert "CODEX_MODEL_PROVIDER=openrouter" in env_pairs
+        finally:
+            os.environ.pop("CODEX_MODEL_PROVIDER", None)
+            for k, v in saved.items():
+                os.environ[k] = v
+
+
 class TestOpenHandsEnvVars:
 
     def test_openhands_env_vars_forwarded(self):
