@@ -153,6 +153,7 @@ class SessionRunner:
 
     def _dispatch_event(self, event) -> str | None:
         """Dispatch a single agent event. Returns 'STOP' to break the loop."""
+        self._maybe_record_usage(event)
         if event.type == AgentEventType.TEXT:
             return self._handle_text(event.content)
         if event.type == AgentEventType.TOOL_CALL:
@@ -160,7 +161,6 @@ class SessionRunner:
         elif event.type == AgentEventType.TOOL_RESULT:
             self.state_mgr.append_conversation("tool_result", event.content)
         elif event.type == AgentEventType.SYSTEM:
-            self._maybe_record_usage(event)
             return self._handle_system_event(event.content)
         elif event.type == AgentEventType.AUTH_FAILURE:
             log.error(f"Auth failure: {event.content}")

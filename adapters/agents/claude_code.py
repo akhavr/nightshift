@@ -122,12 +122,22 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                 self._extra_events.append(AgentEvent(
                     type=AgentEventType.TEXT, content="@@DONE@@", raw=raw))
             metadata = {}
-            if "cost_usd" in ev or "input_tokens" in ev or "output_tokens" in ev:
+            usage_obj = ev.get("usage", {})
+            cost = ev.get("total_cost_usd", ev.get("cost_usd", 0.0))
+            in_tok = usage_obj.get("input_tokens", 0) if isinstance(usage_obj, dict) else 0
+            out_tok = usage_obj.get("output_tokens", 0) if isinstance(usage_obj, dict) else 0
+            # Extract model from modelUsage keys, fall back to top-level model
+            model = ev.get("model", "")
+            if not model:
+                model_usage = ev.get("modelUsage", {})
+                if isinstance(model_usage, dict) and model_usage:
+                    model = next(iter(model_usage))
+            if cost or in_tok or out_tok:
                 metadata["usage"] = {
-                    "input_tokens": ev.get("input_tokens", 0),
-                    "output_tokens": ev.get("output_tokens", 0),
-                    "cost_usd": ev.get("cost_usd", 0.0),
-                    "model": ev.get("model", ""),
+                    "input_tokens": in_tok,
+                    "output_tokens": out_tok,
+                    "cost_usd": cost,
+                    "model": model,
                 }
             return AgentEvent(type=AgentEventType.SYSTEM,
                               content=result_text, metadata=metadata, raw=raw)

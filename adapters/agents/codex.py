@@ -112,6 +112,8 @@ class CodexAgent(HeadlessAgentBase):
                 metadata["usage"] = {
                     "input_tokens": usage.get("input_tokens", 0),
                     "output_tokens": usage.get("output_tokens", 0),
+                    "cost_usd": usage.get("cost_usd", 0.0),
+                    "model": usage.get("model", ev.get("model", "")),
                 }
             return AgentEvent(
                 type=AgentEventType.TEXT,
