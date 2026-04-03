@@ -1,5 +1,6 @@
 """Tests for watcher graceful shutdown on SIGTERM/SIGINT."""
 
+import json
 import signal
 import subprocess
 import sys
@@ -15,9 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from host.cli import cmd_watcher
 from host.watcher.main import _handle_shutdown, shutdown_event
 from host.watcher.host_watcher import HostWatcher
+from host.watcher.telegram_relay import TelegramRelay
+from host.watcher.qa_handler import QAHandler
+from host.watcher.tracker_writer import TrackerSocketServer, TrackerWriter
 from adapters.trackers.git_bug import GitBugTracker, _graceful_kill
 
-from tests.watcher.conftest import _make_watcher
+from tests.watcher.conftest import _make_watcher, _make_session
 
 
 # ---------------------------------------------------------------------------
@@ -340,3 +344,119 @@ class TestCmdWatcherExecvpe:
 
             env = mock_exec.call_args[0][2]  # third positional arg is env dict
             assert "PYTHONPATH" in env
+
+
+# ---------------------------------------------------------------------------
+# TelegramRelay.poll_all shutdown tests
+# ---------------------------------------------------------------------------
+
+class TestTelegramRelayShutdown:
+    def test_poll_all_returns_immediately_when_shutdown_set(self, tmp_path):
+        """poll_all() returns empty results without HTTP call when shutdown is set."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        relay = TelegramRelay("tok", "123", "proj", sessions)
+        relay.enabled = True
+        relay._shutdown.set()
+
+        with patch("host.watcher.requests") as mock_req:
+            qa, reviews = relay.poll_all({})
+
+        mock_req.get.assert_not_called()
+        assert qa == {}
+        assert reviews == {}
+
+    def test_poll_all_makes_request_when_shutdown_not_set(self, tmp_path):
+        """poll_all() makes the HTTP request normally when not shutting down."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        relay = TelegramRelay("tok", "123", "proj", sessions)
+        relay.enabled = True
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"result": []}
+        with patch("host.watcher.requests") as mock_req:
+            mock_req.get.return_value = mock_resp
+            qa, reviews = relay.poll_all({})
+
+        mock_req.get.assert_called_once()
+        assert qa == {}
+        assert reviews == {}
+
+    def test_run_propagates_shutdown_to_telegram(self, tmp_path):
+        """HostWatcher.run() sets telegram._shutdown to the shutdown event."""
+        w = _make_watcher(tmp_path)
+        ev = threading.Event()
+        ev.set()
+        w.run(shutdown_event=ev)
+        assert w.telegram._shutdown is ev
+
+
+# ---------------------------------------------------------------------------
+# QAHandler shutdown-aware sleep tests
+# ---------------------------------------------------------------------------
+
+class TestQAHandlerShutdown:
+    def test_scan_returns_early_on_shutdown(self, tmp_path):
+        """scan_for_waiting() returns without pausing when shutdown fires during sleep."""
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+        waiting = {"question": "Q?", "issue_id": "issue-abc"}
+        (sd / "waiting.json").write_text(json.dumps(waiting))
+
+        shutdown_ev = threading.Event()
+        w.qa._shutdown = shutdown_ev
+        # Set shutdown before scan -- the wait(timeout=PRE_PAUSE_DELAY_S) returns True
+        shutdown_ev.set()
+
+        with patch("host.watcher.docker_pause") as mock_pause:
+            w.qa.scan_for_waiting()
+
+        # Should NOT have attempted to pause because shutdown was set
+        mock_pause.assert_not_called()
+
+    def test_scan_proceeds_when_shutdown_not_set(self, tmp_path):
+        """scan_for_waiting() pauses container normally when not shutting down."""
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+        waiting = {"question": "Q?", "issue_id": "issue-abc"}
+        (sd / "waiting.json").write_text(json.dumps(waiting))
+
+        shutdown_ev = threading.Event()
+        w.qa._shutdown = shutdown_ev  # not set
+
+        with patch("host.watcher.docker_pause", return_value=True) as mock_pause, \
+             patch("host.watcher.time") as mock_time:
+            mock_time.time.return_value = 1000.0
+            w.qa.scan_for_waiting()
+
+        mock_pause.assert_called_once_with("nightshift-abc")
+
+    def test_run_propagates_shutdown_to_qa(self, tmp_path):
+        """HostWatcher.run() sets qa._shutdown to the shutdown event."""
+        w = _make_watcher(tmp_path)
+        ev = threading.Event()
+        ev.set()
+        w.run(shutdown_event=ev)
+        assert w.qa._shutdown is ev
+
+
+# ---------------------------------------------------------------------------
+# TrackerSocketServer connection timeout tests
+# ---------------------------------------------------------------------------
+
+class TestSocketServerShutdown:
+    def test_handle_connection_uses_short_timeout(self, tmp_path):
+        """_handle_connection sets a 2s timeout on accepted sockets."""
+        shutdown_ev = threading.Event()
+        writer = MagicMock(spec=TrackerWriter)
+        sock_path = tmp_path / "test.sock"
+        server = TrackerSocketServer(sock_path, writer, shutdown_ev)
+
+        mock_conn = MagicMock()
+        # recv_json_line returns None (no data) -> connection closes
+        with patch("host.watcher.tracker_writer.recv_json_line", return_value=None):
+            server._handle_connection(mock_conn)
+
+        mock_conn.settimeout.assert_called_once_with(2)
+        mock_conn.close.assert_called_once()

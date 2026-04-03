@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 from pathlib import Path
 
 from host.constants import (
@@ -23,10 +24,11 @@ class QAHandler:
     """Q&A pause/unpause cycle: detects waiting containers, delivers answers."""
 
     def __init__(self, sessions_dir: Path, telegram: TelegramRelay,
-                 get_tracker=None):
+                 get_tracker=None, shutdown_event: threading.Event | None = None):
         self.sessions_dir = sessions_dir
         self.telegram = telegram
         self._get_tracker = get_tracker
+        self._shutdown = shutdown_event or threading.Event()
         self._paused: dict[str, dict] = {}
         self._posted_question: set[str] = set()
 
@@ -51,7 +53,9 @@ class QAHandler:
                 container = f"nightshift-{sid}"
 
                 # Brief delay to let container finish writing state
-                _pkg().time.sleep(PRE_PAUSE_DELAY_S)
+                # Use shutdown_event.wait() so Ctrl-C can interrupt
+                if self._shutdown.wait(timeout=PRE_PAUSE_DELAY_S):
+                    return
 
                 if _pkg().docker_pause(container):
                     self._paused[sid] = {
