@@ -23,7 +23,7 @@ mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ -n "$OVERFLOW_API_KEY" ]; then
     cat > "$HOME/.codex/config.toml" << CODEXCFG
 model = "${OVERFLOW_MODEL:-qwen/qwen3-coder}"
-model_provider = "openrouter"
+model_provider = "${CODEX_MODEL_PROVIDER:-openrouter}"
 
 [model_providers.openrouter]
 name = "OpenRouter"

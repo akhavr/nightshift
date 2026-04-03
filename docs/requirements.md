@@ -199,7 +199,7 @@ Token usage and cost are tracked per session and persisted to `.nightshift/usage
 ### REQ-033: Codex CLI Docker support
 The Docker image includes the OpenAI Codex CLI (`@openai/codex`) so `agent.kind: codex` works inside containers. The entrypoint generates `~/.codex/config.toml` from overflow env vars (`OVERFLOW_API_KEY`, `OVERFLOW_BASE_URL`, `OVERFLOW_MODEL`) when present. `CODEX_MODEL_PROVIDER` is passed through to the container.
 
-- **Tests:** test_launch.py (TestCodexDockerSupport), test_overflow.py (test_codex_env_passthrough)
+- **Tests:** test_launch.py (TestCodexDockerSupport), test_overflow.py (test_codex_env_passthrough), test_codex_agent.py (TestCodexAgentStart, TestCodexAgentParse, TestInDocker)
 - **Status:** covered
 
 ---
@@ -237,6 +237,7 @@ The Docker image includes the OpenAI Codex CLI (`@openai/codex`) so `agent.kind:
 | test_issue_redump.py | REQ-016b |
 | watcher/test_issue_sync.py | REQ-016b |
 | test_stream_parser.py | REQ-004, REQ-014, REQ-032 |
+| test_codex_agent.py | REQ-033 |
 | test_overflow.py | REQ-028, REQ-033 |
 | test_upstream.py | REQ-027 |
 | test_template_lint.py | REQ-027 |
