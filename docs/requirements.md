@@ -184,6 +184,12 @@ The system supports OpenHands as an alternative coding agent. The adapter transl
 - **Tests:** test_openhands_agent.py, test_config_factories.py
 - **Status:** covered
 
+### REQ-031: Dual-agent workflow with finetuning loop
+The system supports using different agent kinds for development (coder) and review steps. WORKFLOW.md `agent.kind` controls the coder agent; REVIEW.md `agent.kind` controls the reviewer independently. Per-step `max_turns` and `stall_timeout_s` are configured in each file's YAML front matter. Review verdicts (approve/revise) and session conversation logs are exportable as structured training data via `nightshift export-training-data`, producing JSONL files with (prompt, agent_output, review_feedback) tuples suitable for finetuning cheaper agents.
+
+- **Tests:** test_training_export.py
+- **Status:** covered
+
 ---
 
 ## Traceability Matrix
@@ -236,6 +242,7 @@ The system supports OpenHands as an alternative coding agent. The adapter transl
 | watcher/test_tracker_writer.py | REQ-026 |
 | test_openhands_agent.py | REQ-030 |
 | test_overflow.py | REQ-028 |
+| test_training_export.py | REQ-031 |
 
 ---
 
