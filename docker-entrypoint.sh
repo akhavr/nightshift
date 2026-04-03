@@ -35,7 +35,9 @@ CODEXCFG
 elif [ "$AGENT_KIND" = "codex" ]; then
     # Non-overflow codex: pick the best available API key
     CODEX_KEY="${CODEX_API_KEY:-$ANTHROPIC_API_KEY}"
-    if [ -n "$CODEX_KEY" ]; then
+    if [ -z "$CODEX_KEY" ]; then
+        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or ANTHROPIC_API_KEY set — Codex CLI will fail" >&2
+    elif [ -n "$CODEX_KEY" ]; then
         # Export so Codex CLI can read it via env_key reference
         export CODEX_API_KEY="$CODEX_KEY"
         cat > "$HOME/.codex/config.toml" << CODEXCFG
