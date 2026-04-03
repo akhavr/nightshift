@@ -13,7 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
-from core.post_run import format_token_count
+from core.post_run import format_cost_line, format_token_count
+from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import (
@@ -677,7 +678,24 @@ def cmd_accept(a):
     verify_no_conflict_markers(r, config, a.issue_id, sid,
                                 sessions_dir(), _report_accept_failure)
 
-    archive_session(sessions_dir() / sid, r)
+    # Print cost summary before cleanup removes session files
+    session_dir = sessions_dir() / sid
+    try:
+        state = read_state(session_dir)
+        usage = state.get("usage", {})
+        usage_data = UsageData(
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cost_usd=usage.get("cost_usd", 0.0),
+            model=usage.get("model", ""),
+        )
+        resumes = state.get("step", 0)
+        cost_line = format_cost_line(usage_data, resumes=resumes)
+    except Exception as e:
+        logging.debug("Could not read usage data: %s", e)
+        cost_line = ""
+
+    archive_session(session_dir, r)
     remove_worktree(r, wt, branch)
     _cleanup_review_artifacts(r, sid, config)
 
@@ -690,6 +708,8 @@ def cmd_accept(a):
         print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
 
     print(f"Accepted and cleaned up {sid}")
+    if cost_line:
+        print(cost_line)
 
 
 def cmd_reject(a):
