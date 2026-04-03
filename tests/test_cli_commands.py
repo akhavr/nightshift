@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.cli import (
+    cmd_accept,
     cmd_status,
     cmd_answer,
     cmd_history,
@@ -879,3 +880,100 @@ def test_cmd_usage_empty_file(tmp_path, capsys):
         cmd_usage(_make_args(issue_id=None))
     out = capsys.readouterr().out
     assert "No usage entries found" in out
+
+
+# ── cmd_accept cost summary ────────────────────────────────────────────────
+
+
+@pytest.fixture
+def accept_env(tmp_path):
+    """Set up common mocks for cmd_accept tests."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sessions = repo / ".nightshift" / "sessions"
+    sid = "abc123def456"
+    session_dir = sessions / sid
+    session_dir.mkdir(parents=True)
+
+    mock_config = MagicMock()
+    mock_config.workspace.base_branch = "main"
+    mock_config.workspace.root = "worktrees"
+
+    return {
+        "repo": repo,
+        "sessions": sessions,
+        "sid": sid,
+        "session_dir": session_dir,
+        "config": mock_config,
+    }
+
+
+def _run_cmd_accept(env, args):
+    """Run cmd_accept with all heavy dependencies mocked out."""
+    sid = env["sid"]
+    with (
+        patch("host.cli.repo_root", return_value=env["repo"]),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.load_workflow", return_value=env["config"]),
+        patch("host.cli._resolve_workflow", return_value="WORKFLOW.md"),
+        patch("host.cli.resolve_merge_ref", return_value=f"agent/{sid}"),
+        patch("host.cli.check_branch_not_behind_base", return_value=None),
+        patch("host.cli.merge_with_rebase_fallback"),
+        patch("host.cli.verify_no_conflict_markers"),
+        patch("host.cli.archive_session"),
+        patch("host.cli.remove_worktree"),
+        patch("host.cli._cleanup_review_artifacts"),
+        patch("host.cli.get_tracker_with_fallback", return_value=MagicMock()),
+        patch("host.cli.sessions_dir", return_value=env["sessions"]),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+    ):
+        cmd_accept(args)
+
+
+def test_accept_prints_cost_summary(accept_env, capsys):
+    """cmd_accept output includes 'Cost:' line when usage data exists in state.json."""
+    state_data = {
+        "issue_id": "issue-1",
+        "branch": "agent/abc123def456",
+        "status": "waiting:review",
+        "step": 3,
+        "usage": {
+            "input_tokens": 45000,
+            "output_tokens": 12000,
+            "cost_usd": 0.38,
+            "model": "claude-sonnet-4-6",
+        },
+    }
+    (accept_env["session_dir"] / "state.json").write_text(json.dumps(state_data))
+
+    _run_cmd_accept(accept_env, _make_args(issue_id="issue-1", workflow=None))
+
+    out = capsys.readouterr().out
+    assert "Cost:" in out
+    assert "45K input" in out
+    assert "12K output" in out
+    assert "$0.38" in out
+    assert "claude-sonnet-4-6" in out
+    assert "3 resumes" in out
+
+
+def test_accept_no_cost_when_no_usage(accept_env, capsys):
+    """cmd_accept output does not include 'Cost:' when no usage data in state.json."""
+    state_data = {
+        "issue_id": "issue-1",
+        "branch": "agent/abc123def456",
+        "status": "waiting:review",
+        "step": 0,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "model": "",
+        },
+    }
+    (accept_env["session_dir"] / "state.json").write_text(json.dumps(state_data))
+
+    _run_cmd_accept(accept_env, _make_args(issue_id="issue-1", workflow=None))
+
+    out = capsys.readouterr().out
+    assert "Cost:" not in out
