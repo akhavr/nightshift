@@ -733,12 +733,13 @@ def test_docker_cmd_openhands_env_passthrough():
 
 
 def test_codex_env_passthrough():
-    """CODEX_API_KEY, CODEX_BASE_URL, CODEX_MODEL are in _PASSTHROUGH_ENV_VARS."""
+    """CODEX_API_KEY, CODEX_BASE_URL, CODEX_MODEL, OPENAI_API_KEY are in _PASSTHROUGH_ENV_VARS."""
     from host.docker_cmd import _PASSTHROUGH_ENV_VARS
 
     assert "CODEX_API_KEY" in _PASSTHROUGH_ENV_VARS
     assert "CODEX_BASE_URL" in _PASSTHROUGH_ENV_VARS
     assert "CODEX_MODEL" in _PASSTHROUGH_ENV_VARS
+    assert "OPENAI_API_KEY" in _PASSTHROUGH_ENV_VARS
 
 
 def test_litellm_constants():

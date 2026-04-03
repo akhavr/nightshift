@@ -983,8 +983,8 @@ class TestCodexDockerSupport:
         assert "OVERFLOW_MODEL=qwen/qwen3-coder" in env_pairs
         assert "OVERFLOW_ACTIVE=1" in env_pairs
 
-    def test_codex_model_provider_passthrough(self):
-        """CODEX_MODEL_PROVIDER env var is forwarded to the container."""
+    def test_codex_env_vars_passthrough(self):
+        """CODEX_API_KEY, CODEX_BASE_URL, CODEX_MODEL, OPENAI_API_KEY are forwarded to the container."""
         env_to_clear = [
             "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "NOTIFY_WEBHOOK_URL",
             "SLACK_WEBHOOK", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "SSH_AUTH_SOCK",
@@ -994,7 +994,10 @@ class TestCodexDockerSupport:
             if var in os.environ:
                 saved[var] = os.environ.pop(var)
 
-        os.environ["CODEX_MODEL_PROVIDER"] = "openrouter"
+        os.environ["CODEX_API_KEY"] = "sk-test"
+        os.environ["CODEX_BASE_URL"] = "https://example.com/v1"
+        os.environ["CODEX_MODEL"] = "test-model"
+        os.environ["OPENAI_API_KEY"] = "sk-openai-test"
 
         try:
             cmd = build_docker_cmd(
@@ -1017,9 +1020,15 @@ class TestCodexDockerSupport:
                 if arg == "-e" and i + 1 < len(cmd):
                     env_pairs.append(cmd[i + 1])
 
-            assert "CODEX_MODEL_PROVIDER=openrouter" in env_pairs
+            assert "CODEX_API_KEY=sk-test" in env_pairs
+            assert "CODEX_BASE_URL=https://example.com/v1" in env_pairs
+            assert "CODEX_MODEL=test-model" in env_pairs
+            assert "OPENAI_API_KEY=sk-openai-test" in env_pairs
         finally:
-            os.environ.pop("CODEX_MODEL_PROVIDER", None)
+            os.environ.pop("CODEX_API_KEY", None)
+            os.environ.pop("CODEX_BASE_URL", None)
+            os.environ.pop("CODEX_MODEL", None)
+            os.environ.pop("OPENAI_API_KEY", None)
             for k, v in saved.items():
                 os.environ[k] = v
 
