@@ -114,17 +114,19 @@ def main():
     dump_issue_data(config, repo, session_dir, args.issue_id,
                     names["is_review"], args.resume)
 
-    # Check overflow flag file
+    # Check overflow flag file — skip overflow for review sessions so the
+    # review agent always uses its own provider (e.g. Claude Code).
     overflow = None
-    overflow_flag = repo / ".nightshift" / OVERFLOW_FLAG_FILENAME
-    has_overflow_config = (
-        config.overflow.extra_args
-        or config.overflow.env
-        or config.overflow.agent_kind
-    )
-    if overflow_flag.exists() and has_overflow_config:
-        overflow = config.overflow
-        print(f"Overflow active: using alternate provider")
+    if not names["is_review"]:
+        overflow_flag = repo / ".nightshift" / OVERFLOW_FLAG_FILENAME
+        has_overflow_config = (
+            config.overflow.extra_args
+            or config.overflow.env
+            or config.overflow.agent_kind
+        )
+        if overflow_flag.exists() and has_overflow_config:
+            overflow = config.overflow
+            print(f"Overflow active: using alternate provider")
 
     returncode = run_container(
         repo, workspace_mount, session_dir, names, args.issue_id,
