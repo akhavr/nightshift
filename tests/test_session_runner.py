@@ -849,6 +849,46 @@ class TestUsageTracking:
         assert st.usage.output_tokens == 8000
         assert st.usage.cost_usd == pytest.approx(0.40)
 
+    def test_usage_recorded_from_text_event(self, tmp_path):
+        """Usage metadata on TEXT events (e.g. Codex turn.completed) is also recorded."""
+        usage_event = AgentEvent(
+            type=AgentEventType.TEXT, content="@@DONE@@ done",
+            metadata={"usage": {
+                "input_tokens": 5000, "output_tokens": 1500,
+                "cost_usd": 0.08, "model": "gpt-4o",
+            }},
+            raw="done",
+        )
+        events = [usage_event]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.usage.input_tokens == 5000
+        assert st.usage.output_tokens == 1500
+        assert st.usage.cost_usd == 0.08
+        assert st.usage.model == "gpt-4o"
+
+    def test_usage_recorded_from_real_result_event(self, tmp_path):
+        """After processing a result event with real usage data, state.usage has non-zero values."""
+        usage_event = AgentEvent(
+            type=AgentEventType.SYSTEM, content="result",
+            metadata={"usage": {
+                "input_tokens": 7, "output_tokens": 295,
+                "cost_usd": 0.0819675, "model": "claude-opus-4-6",
+            }},
+            raw="result",
+        )
+        events = [usage_event, _text_event("@@DONE@@ done")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.usage.input_tokens > 0
+        assert st.usage.output_tokens > 0
+        assert st.usage.cost_usd > 0
+        assert st.usage.model != ""
+
     def test_usage_no_metadata_no_update(self, tmp_path):
         """Events without usage metadata should not modify usage."""
         events = [_system_event("init"), _text_event("@@DONE@@ done")]

@@ -320,27 +320,78 @@ class TestAuthFailureDetection:
         assert ev.type == AgentEventType.AUTH_FAILURE
 
     def test_result_event_extracts_usage(self):
-        """Result events with cost_usd/tokens should populate metadata.usage."""
+        """Result events with total_cost_usd and nested usage should populate metadata.usage."""
         agent = make_agent()
         line = json.dumps({
             "type": "result",
             "subtype": "success",
             "result": "Task completed",
             "session_id": "abc-123",
-            "cost_usd": 0.38,
-            "input_tokens": 45000,
-            "output_tokens": 12000,
-            "model": "claude-sonnet-4-6",
+            "total_cost_usd": 0.0819675,
+            "usage": {
+                "input_tokens": 7,
+                "cache_creation_input_tokens": 10524,
+                "cache_read_input_tokens": 17565,
+                "output_tokens": 295,
+            },
+            "modelUsage": {
+                "claude-opus-4-6": {
+                    "inputTokens": 7,
+                    "outputTokens": 295,
+                    "costUSD": 0.0819675,
+                },
+            },
         })
         ev = agent._parse(line)
         assert ev is not None
         assert ev.type == AgentEventType.SYSTEM
         assert "usage" in ev.metadata
         usage = ev.metadata["usage"]
-        assert usage["input_tokens"] == 45000
-        assert usage["output_tokens"] == 12000
-        assert usage["cost_usd"] == 0.38
-        assert usage["model"] == "claude-sonnet-4-6"
+        assert usage["input_tokens"] == 7
+        assert usage["output_tokens"] == 295
+        assert usage["cost_usd"] == 0.0819675
+        assert usage["model"] == "claude-opus-4-6"
+
+    def test_result_event_usage_actually_extracted(self):
+        """Parse a real Claude Code result event and verify non-zero usage values."""
+        agent = make_agent()
+        # Real result event from fixtures_stream_json.jsonl
+        line = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "duration_ms": 9406,
+            "duration_api_ms": 9266,
+            "num_turns": 3,
+            "result": "Here are the files...",
+            "session_id": "f22d7a65-ebbe-4b9b-8635-6a2ad5228be9",
+            "total_cost_usd": 0.0819675,
+            "usage": {
+                "input_tokens": 7,
+                "cache_creation_input_tokens": 10524,
+                "cache_read_input_tokens": 17565,
+                "output_tokens": 295,
+                "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
+                "service_tier": "standard",
+            },
+            "modelUsage": {
+                "claude-opus-4-6": {
+                    "inputTokens": 7,
+                    "outputTokens": 295,
+                    "cacheReadInputTokens": 17565,
+                    "cacheCreationInputTokens": 10524,
+                    "costUSD": 0.0819675,
+                },
+            },
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert "usage" in ev.metadata
+        usage = ev.metadata["usage"]
+        assert usage["input_tokens"] > 0, "input_tokens should be non-zero"
+        assert usage["output_tokens"] > 0, "output_tokens should be non-zero"
+        assert usage["cost_usd"] > 0, "cost_usd should be non-zero"
+        assert usage["model"] != "", "model should be non-empty"
 
     def test_result_event_no_usage_when_absent(self):
         """Result events without cost fields should have empty metadata."""
