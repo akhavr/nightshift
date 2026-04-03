@@ -44,6 +44,9 @@ CONFLICT_FILE_PREVIEW_LEN = 20   # Max conflict files to show
 # ── Overflow (alternate LLM provider) ─────────────────
 OVERFLOW_FLAG_FILENAME = "overflow"  # Flag file in .nightshift/
 
+# ── Archive ───────────────────────────────────────────
+ARCHIVE_DIR = "archive"  # Subdirectory of .nightshift/ for archived session data
+
 # ── Usage tracking ────────────────────────────────────
 USAGE_LOG_FILENAME = "usage.jsonl"  # Append-only usage log in .nightshift/
 

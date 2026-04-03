@@ -43,6 +43,7 @@ from host.merge import (
     check_branch_not_behind_base,
 )
 from host.session_utils import (
+    archive_session,
     get_repo_root,
     read_state, write_state, update_status,
     force_remove_dir, remove_worktree,
@@ -642,6 +643,7 @@ def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
                        capture_output=True, cwd=str(repo))
 
     if review_session.exists():
+        archive_session(review_session, repo)
         shutil.rmtree(review_session, ignore_errors=True)
         print(f"Cleaned up review session for {coder_sid}")
 
@@ -675,6 +677,7 @@ def cmd_accept(a):
     verify_no_conflict_markers(r, config, a.issue_id, sid,
                                 sessions_dir(), _report_accept_failure)
 
+    archive_session(sessions_dir() / sid, r)
     remove_worktree(r, wt, branch)
     _cleanup_review_artifacts(r, sid, config)
 
@@ -709,6 +712,7 @@ def cmd_reject(a):
 
     ss = sessions_dir() / sid
     if ss.exists():
+        archive_session(ss, r)
         shutil.rmtree(ss)
 
     try:
@@ -833,6 +837,7 @@ def cmd_cleanup(a):
 
     ss = sessions_dir() / sid
     if ss.exists() and not a.keep_session:
+        archive_session(ss, r)
         shutil.rmtree(ss)
     print(f"Cleaned up {sid}")
 
