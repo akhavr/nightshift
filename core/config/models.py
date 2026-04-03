@@ -66,7 +66,11 @@ class AutoStartConfig:
 class OverflowConfig:
     extra_args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
-    litellm_config: str | None = None  # path to litellm-config.yaml for proxy-based model remapping
+    # Path to litellm-config.yaml for proxy-based model remapping
+    litellm_config: str | None = None
+    # Agent kind to use in overflow mode (e.g., "openhands" vs "claude-code")
+    # In regular mode, agent.kind is used; in overflow mode, this overrides it
+    agent_kind: str | None = None
 
 
 @dataclass

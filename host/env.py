@@ -7,8 +7,9 @@ from pathlib import Path
 GLOBAL_ENV = Path.home() / ".config" / "nightshift" / "env"
 
 
-def load_all_dotenv(project_env: Path) -> None:
+def load_all_dotenv(project_dir: Path) -> None:
     """Load global env first, then project .env (neither overrides existing)."""
+    project_env = project_dir / ".env"
     load_dotenv(GLOBAL_ENV)
     load_dotenv(project_env)
 
@@ -17,7 +18,9 @@ def load_dotenv(path: Path) -> None:
     """Parse a .env file and inject into os.environ.
 
     Handles KEY=VALUE, KEY="VALUE", KEY='VALUE', and export KEY=VALUE.
-    Skips comments and blank lines. Does NOT override existing entries.
+    Skips comments and blank lines. Does NOT override existing entries,
+    except for OVERFLOW_* vars which are always overridden (to allow
+    project .env to override global/parent process settings).
     """
     if not path.is_file():
         return
@@ -35,5 +38,8 @@ def load_dotenv(path: Path) -> None:
         # Strip matching quotes
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
             value = value[1:-1]
-        if key not in os.environ:
+        # Always override OVERFLOW_* vars to allow project .env to take effect
+        if key.startswith("OVERFLOW_"):
+            os.environ[key] = value
+        elif key not in os.environ:
             os.environ[key] = value

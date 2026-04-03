@@ -9,14 +9,19 @@ import subprocess
 from pathlib import Path
 
 from core.config.models import OverflowConfig
-from core.constants import LITELLM_CONFIG_CONTAINER_PATH, LITELLM_PROXY_PORT
+from core.constants import *
 from host.docker_utils import docker_remove
 
 
 _PASSTHROUGH_ENV_VARS = (
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     "NOTIFY_WEBHOOK_URL", "SLACK_WEBHOOK",
-    "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "GITHUB_TOKEN",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "GITHUB_TOKEN",
+    "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "OVERFLOW_API_KEY", "OVERFLOW_BASE_URL", "OVERFLOW_MODEL",
+    # OpenHands uses LLM_* env vars (litellm under the hood)
+    "LLM_API_KEY", "LLM_MODEL", "LLM_BASE_URL",
 )
 
 
@@ -54,6 +59,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
     overflow_args_env: list[str] = []
     overflow_mounts: list[str] = []
     if overflow:
+        overflow_env += ["-e", "OVERFLOW_ACTIVE=1"]
         for key, val in overflow.env.items():
             overflow_env += ["-e", f"{key}={val}"]
         if overflow.extra_args:
@@ -82,10 +88,14 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "-e", f"MAX_TURNS={max_turns}",
         "-e", f"STEP={step}",
         "-e", f"PROJECT_NAME={repo.name}",
-        *overflow_mounts,
+        # Disable Rich terminal UI codes for JSON parsing
+        # Set to 1 to force interactive mode (plain JSON output)
+        "-e", "TTY_INTERACTIVE=1",
+        "-e", "TTY_COMPATIBLE=1",
         *notify_env,
         *overflow_env,
         *overflow_args_env,
+        *overflow_mounts,
         image,
     ]
 

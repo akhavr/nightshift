@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from core.config.models import WorkflowConfig
+from core.config.models import OverflowConfig, WorkflowConfig
 
 log = logging.getLogger(__name__)
 
@@ -47,13 +47,25 @@ def _instantiate(registry: dict, kind: str, **kwargs) -> Any:
     return cls(**kwargs)
 
 
-def create_agent(config: WorkflowConfig) -> Any:
+def create_agent(config: WorkflowConfig, overflow: OverflowConfig | None = None) -> Any:
+    """Create an agent instance.
+    
+    Args:
+        config: The workflow configuration
+        overflow: Optional overflow config. If provided and overflow.agent_kind is set,
+                  use that instead of config.agent.kind (for overflow mode).
+    """
+    # Use overflow agent_kind if in overflow mode and set
+    agent_kind = config.agent.kind
+    if overflow and overflow.agent_kind:
+        agent_kind = overflow.agent_kind
+    
     kwargs = {
         "stall_timeout_s": config.agent.stall_timeout_s,
         "extra_args": config.agent.extra_args,
         **config.agent.extra,
     }
-    return _instantiate(AGENT_REGISTRY, config.agent.kind, **kwargs)
+    return _instantiate(AGENT_REGISTRY, agent_kind, **kwargs)
 
 
 def create_tracker(config: WorkflowConfig, **overrides) -> Any:

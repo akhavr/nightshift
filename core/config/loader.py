@@ -156,6 +156,7 @@ def _parse_overflow(raw: dict, config: WorkflowConfig):
         extra_args=o.get("extra_args", []),
         env=o.get("env", {}),
         litellm_config=o.get("litellm_config"),
+        agent_kind=o.get("agent_kind"),
     )
 
 

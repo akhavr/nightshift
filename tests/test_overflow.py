@@ -136,6 +136,20 @@ def test_docker_cmd_no_overflow():
     cmd = _build_cmd_with_overflow(overflow=None)
     cmd_str = " ".join(cmd)
     assert "OVERFLOW_EXTRA_ARGS" not in cmd_str
+    assert "OVERFLOW_ACTIVE" not in cmd_str
+
+
+def test_docker_cmd_overflow_active_flag():
+    """Overflow always sets OVERFLOW_ACTIVE=1 in docker command."""
+    overflow = OverflowConfig(agent_kind="openhands", env={})
+    cmd = _build_cmd_with_overflow(overflow=overflow)
+
+    env_pairs = []
+    for i, arg in enumerate(cmd):
+        if arg == "-e" and i + 1 < len(cmd):
+            env_pairs.append(cmd[i + 1])
+
+    assert "OVERFLOW_ACTIVE=1" in env_pairs
 
 
 def test_docker_cmd_with_overflow_env():
@@ -439,6 +453,82 @@ def test_entrypoint_no_overflow_extra_args():
         config.agent.extra_args = list(overflow_args) + config.agent.extra_args
 
     assert config.agent.extra_args == ["--existing"]
+
+
+def test_entrypoint_overflow_active_triggers_agent_kind(monkeypatch):
+    """OVERFLOW_ACTIVE=1 causes entrypoint to use overflow.agent_kind."""
+    from core.config.models import AgentConfig
+
+    config = WorkflowConfig()
+    config.agent = AgentConfig(kind="claude-code")
+    config.overflow = OverflowConfig(agent_kind="openhands")
+
+    monkeypatch.setenv("OVERFLOW_ACTIVE", "1")
+
+    overflow_active = os.environ.get("OVERFLOW_ACTIVE") == "1"
+    overflow_config = config.overflow if overflow_active else None
+
+    assert overflow_config is not None
+    assert overflow_config.agent_kind == "openhands"
+
+
+def test_entrypoint_no_overflow_active_no_agent_kind_override(monkeypatch):
+    """Without OVERFLOW_ACTIVE, overflow.agent_kind is not used."""
+    from core.config.models import AgentConfig
+
+    config = WorkflowConfig()
+    config.agent = AgentConfig(kind="claude-code")
+    config.overflow = OverflowConfig(agent_kind="openhands")
+
+    monkeypatch.delenv("OVERFLOW_ACTIVE", raising=False)
+
+    overflow_active = os.environ.get("OVERFLOW_ACTIVE") == "1"
+    overflow_config = config.overflow if overflow_active else None
+
+    assert overflow_config is None
+
+
+# ── Launch agent_kind in overflow check ────────────────────────────────────
+
+
+def test_launch_passes_overflow_with_agent_kind_only(tmp_path, monkeypatch):
+    """launch.py activates overflow when only agent_kind is set."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
+
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text("""\
+---
+overflow:
+  agent_kind: openhands
+---
+Prompt.
+""")
+
+    from host.launch import main
+
+    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("host.launch.discover_workflow", lambda *a, **kw: wf)
+    monkeypatch.setattr("host.launch.load_all_dotenv", lambda *a: None)
+    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
+    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    import sys
+    monkeypatch.setattr(sys, "argv", ["launch.py", "abc123"])
+
+    captured_kwargs = {}
+
+    def mock_run_container(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("host.launch.run_container", mock_run_container)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs.get("overflow") is not None
+    assert captured_kwargs["overflow"].agent_kind == "openhands"
 
 
 # ── Watcher _diff_config detects overflow changes ───────────────────────────

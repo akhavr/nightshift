@@ -16,6 +16,7 @@ from adapters.trackers.static import StaticTracker
 from core.config import (
     load_workflow, create_agent, create_tracker,
     create_workspace_mgr, create_notifiers,
+    OverflowConfig,
 )
 from core.constants import MERGE_NEEDED_FILENAME
 from core.prompts import render_template, build_initial_prompt
@@ -134,10 +135,16 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
     return build_initial_prompt(issue.title, issue.body, related)
 
 
-def _create_adapters(config):
-    """Instantiate all adapters from config."""
+def _create_adapters(config, overflow: OverflowConfig | None = None):
+    """Instantiate all adapters from config.
+    
+    Args:
+        config: The workflow configuration
+        overflow: Optional overflow config. If provided, use overflow.agent_kind
+                  for the agent (for overflow mode).
+    """
     tracker = StaticTracker(session_dir="/session")
-    agent = create_agent(config)
+    agent = create_agent(config, overflow)
     workspace_mgr = create_workspace_mgr(config, repo_root=Path("/workspace"))
     workspace = Workspace(
         path=Path("/workspace"),
@@ -168,7 +175,10 @@ def main():
 
     max_turns = int(os.environ.get("MAX_TURNS", config.agent.max_turns))
 
-    tracker, agent, workspace_mgr, workspace, state_mgr, notifier = _create_adapters(config)
+    # Check if we're in overflow mode (OVERFLOW_ACTIVE set by host)
+    overflow_active = os.environ.get("OVERFLOW_ACTIVE") == "1"
+    overflow_config = config.overflow if overflow_active else None
+    tracker, agent, workspace_mgr, workspace, state_mgr, notifier = _create_adapters(config, overflow_config)
     notifier.start()
 
     issue = tracker.get_issue(issue_id)

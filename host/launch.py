@@ -120,14 +120,11 @@ def main():
     has_overflow_config = (
         config.overflow.extra_args
         or config.overflow.env
-        or config.overflow.litellm_config
+        or config.overflow.agent_kind
     )
     if overflow_flag.exists() and has_overflow_config:
         overflow = config.overflow
-        if overflow.litellm_config:
-            print(f"Overflow active: litellm proxy ({overflow.litellm_config})")
-        else:
-            print(f"Overflow active: using alternate provider")
+        print(f"Overflow active: using alternate provider")
 
     returncode = run_container(
         repo, workspace_mount, session_dir, names, args.issue_id,

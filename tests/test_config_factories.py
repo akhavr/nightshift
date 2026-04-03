@@ -20,6 +20,7 @@ from core.config.factories import (
 from core.config.models import (
     AgentConfig,
     NotifierConfig,
+    OverflowConfig,
     TrackerConfig,
     WorkflowConfig,
     WorkspaceConfig,
@@ -130,6 +131,33 @@ class TestCreateAgent:
         cfg = WorkflowConfig(agent=AgentConfig(kind="unknown-agent"))
         with pytest.raises(ValueError, match="Unknown adapter kind 'unknown-agent'"):
             create_agent(cfg)
+
+    def test_overflow_agent_kind_overrides_default(self):
+        """When overflow.agent_kind is set, it should override config.agent.kind."""
+        cfg = WorkflowConfig(
+            agent=AgentConfig(kind="claude-code")
+        )
+        overflow = OverflowConfig(agent_kind="openhands")
+        mod, mock_cls = _make_mock_module("OpenHandsAgent")
+
+        with patch("core.config.factories.importlib.import_module", return_value=mod):
+            result = create_agent(cfg, overflow)
+
+        mock_cls.assert_called_once()
+        assert result == mock_cls.return_value
+
+    def test_regular_mode_uses_agent_kind(self):
+        """When overflow is None, use config.agent.kind."""
+        cfg = WorkflowConfig(
+            agent=AgentConfig(kind="claude-code")
+        )
+        mod, mock_cls = _make_mock_module("ClaudeCodeAgent")
+
+        with patch("core.config.factories.importlib.import_module", return_value=mod):
+            result = create_agent(cfg, None)
+
+        mock_cls.assert_called_once()
+        assert result == mock_cls.return_value
 
 
 # ── create_tracker ────────────────────────────────────────────
