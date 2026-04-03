@@ -1,6 +1,6 @@
 ---
 agent:
-  kind: claude-code
+  kind: codex
   max_turns: 50
   stall_timeout_s: 300
   extra_args: []
