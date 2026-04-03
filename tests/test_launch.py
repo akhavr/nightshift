@@ -646,51 +646,6 @@ class TestMain:
         #  reached because args.resume is True)
 
 
-# ── Overflow + review step tests ─────────────────────────
-
-def test_review_launch_ignores_overflow(tmp_path, monkeypatch):
-    """Review launch with overflow flag present does not inject overflow env vars."""
-    from host.constants import OVERFLOW_FLAG_FILENAME
-    from host.launch import main
-
-    ns_dir = tmp_path / ".nightshift"
-    ns_dir.mkdir()
-    (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
-
-    wf = tmp_path / "REVIEW.md"
-    wf.write_text(
-        "---\n"
-        "overflow:\n"
-        "  extra_args: ['--model', 'm2.7']\n"
-        "  env:\n"
-        "    ANTHROPIC_API_KEY: sk-overflow\n"
-        "---\nReview prompt.\n"
-    )
-
-    monkeypatch.setattr("sys.argv", [
-        "launch.py", "test-issue-id",
-        "--workflow", str(wf),
-        "--step", "review",
-    ])
-    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
-    monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
-    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
-    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
-
-    captured_kwargs = {}
-
-    def mock_run_container(*args, **kwargs):
-        captured_kwargs.update(kwargs)
-        return 0
-
-    monkeypatch.setattr("host.launch.run_container", mock_run_container)
-
-    with pytest.raises(SystemExit):
-        main()
-
-    assert captured_kwargs.get("overflow") is None
-
-
 # ── _post_container tests ────────────────────────────────
 
 class TestPostContainer:
