@@ -44,6 +44,9 @@ CONFLICT_FILE_PREVIEW_LEN = 20   # Max conflict files to show
 # ── Overflow (alternate LLM provider) ─────────────────
 OVERFLOW_FLAG_FILENAME = "overflow"  # Flag file in .nightshift/
 
+# ── Usage tracking ────────────────────────────────────
+USAGE_LOG_FILENAME = "usage.jsonl"  # Append-only usage log in .nightshift/
+
 # ── Tracker IPC (single-writer architecture) ──────────
 TRACKER_SOCKET_FILENAME = "tracker.sock"  # Unix socket in .nightshift/
 TRACKER_WRITER_QUEUE_SIZE = 100          # Bounded queue to prevent memory issues

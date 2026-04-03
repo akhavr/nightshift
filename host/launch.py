@@ -14,9 +14,11 @@ from pathlib import Path
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
+from core.post_run import format_cost_line
+from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
-from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME
+from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
@@ -40,6 +42,35 @@ def _resolve_names(issue_id: str, step: str, config):
     }
 
 
+def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
+                      step="coder"):
+    """Append a usage entry to .nightshift/usage.jsonl (survives session cleanup)."""
+    usage = state.get("usage", {})
+    if not usage.get("input_tokens") and not usage.get("output_tokens"):
+        return
+    usage_file = repo / ".nightshift" / USAGE_LOG_FILENAME
+    usage_file.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "session_id": state.get("branch", "").split("/")[-1] if state.get("branch") else "",
+        "issue_id": issue_id,
+        "title": title,
+        "agent_kind": agent_kind,
+        "model": usage.get("model", ""),
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+        "cost_usd": usage.get("cost_usd", 0.0),
+        "started_at": state.get("started_at", ""),
+        "completed_at": state.get("completed_at", ""),
+        "resumes": state.get("step", 0),
+        "step": step,
+    }
+    try:
+        with open(usage_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print(f"Warning: failed to append usage log: {e}", file=sys.stderr)
+
+
 def _post_container(session_dir, config, repo, issue_id):
     """After container exits, post proof-of-work summary to the real tracker."""
     state_file = session_dir / "state.json"
@@ -49,6 +80,19 @@ def _post_container(session_dir, config, repo, issue_id):
     state = json.loads(state_file.read_text())
     if state.get("status") != "waiting:review":
         return
+
+    # Read issue title from dumped issue.json for usage log
+    issue_title = ""
+    issue_file = session_dir / "issue.json"
+    if issue_file.exists():
+        try:
+            issue_title = json.loads(issue_file.read_text()).get("title", "")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: could not read issue title: {e}", file=sys.stderr)
+
+    # Append usage log before posting (survives cleanup)
+    _append_usage_log(repo, state, issue_id, title=issue_title,
+                      agent_kind=config.agent.kind)
 
     checkpoints = state.get("checkpoints", [])
     human_answers = state.get("human_answers", [])
@@ -64,12 +108,24 @@ def _post_container(session_dir, config, repo, issue_id):
     )
     diff = diff_result.stdout.strip() if diff_result.returncode == 0 else "N/A"
 
+    usage = state.get("usage", {})
+    usage_data = UsageData(
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        cost_usd=usage.get("cost_usd", 0.0),
+        model=usage.get("model", ""),
+    )
+    resumes = state.get("step", 0)
+    cost_line = format_cost_line(usage_data, resumes=resumes)
+    cost_section = f"\n{cost_line}\n" if cost_line else "\n"
+
     ticks = "```"
     proof = (
         f"🏁 **Work complete — awaiting review**\n\n"
         f"**Summary:**\n{summary}\n\n"
         f"**Q&A exchanges:** {len(human_answers)}\n"
-        f"**Changes:**\n{ticks}\n{diff}\n{ticks}\n\n"
+        f"**Changes:**\n{ticks}\n{diff}\n{ticks}"
+        f"{cost_section}\n"
         f"Review with: `nightshift accept/reject/revise {issue_id}`"
     )
 

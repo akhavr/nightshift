@@ -13,11 +13,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
+from core.post_run import format_token_count
 from host.tracker_client import get_tracker_with_fallback
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import (
     SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN,
-    HISTORY_FOLLOW_POLL_S, OVERFLOW_FLAG_FILENAME,
+    HISTORY_FOLLOW_POLL_S, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME,
 )
 from core.upgrade import (
     read_template_version, get_canonical_version,
@@ -879,6 +880,53 @@ def cmd_export_training_data(a):
     print(f"  Approved: {approvals}  |  Revisions: {revisions}")
 
 
+def cmd_usage(a):
+    """Show token usage and cost from completed sessions."""
+    usage_file = repo_root() / ".nightshift" / USAGE_LOG_FILENAME
+    if not usage_file.exists():
+        print("No usage data found. Sessions must complete before usage is recorded.")
+        return
+
+    entries = []
+    for line in usage_file.read_text().strip().splitlines():
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            print(f"Warning: skipping malformed line: {e}", file=sys.stderr)
+
+    if not entries:
+        print("No usage entries found.")
+        return
+
+    # Filter by issue_id if provided
+    if hasattr(a, "issue_id") and a.issue_id:
+        entries = [e for e in entries if a.issue_id in e.get("issue_id", "")]
+
+    # Print individual entries
+    total_input = 0
+    total_output = 0
+    total_cost = 0.0
+    for e in entries:
+        inp = e.get("input_tokens", 0)
+        out = e.get("output_tokens", 0)
+        cost = e.get("cost_usd", 0.0)
+        model = e.get("model", "?")
+        sid = e.get("session_id", "?")
+        step = e.get("step", "coder")
+        total_input += inp
+        total_output += out
+        total_cost += cost
+        in_k = format_token_count(inp)
+        out_k = format_token_count(out)
+        print(f"  {sid:<14} {step:<8} {in_k:>6} in / {out_k:>6} out  ${cost:.2f}  ({model})")
+
+    # Print totals
+    print(f"\n  {'TOTAL':<14} {'':8} "
+          f"{format_token_count(total_input):>6} in / {format_token_count(total_output):>6} out  "
+          f"${total_cost:.2f}")
+    print(f"  {len(entries)} session(s)")
+
+
 def _register_session_commands(s):
     """Register session lifecycle commands."""
     sp = s.add_parser("start")
@@ -970,6 +1018,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("state", choices=["on", "off"],
                     help="Turn overflow on or off")
     sp.set_defaults(func=cmd_overflow)
+
+    sp = s.add_parser("usage", help="Show token usage and cost from completed sessions")
+    sp.add_argument("issue_id", nargs="?", default=None,
+                    help="Filter by issue ID (prefix match)")
+    sp.set_defaults(func=cmd_usage)
 
     sp = s.add_parser("export-training-data",
                        help="Export training data from session logs for finetuning")

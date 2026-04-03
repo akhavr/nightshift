@@ -798,6 +798,68 @@ class TestAuthFailure:
         assert any("Fix the widget" in n for n in notifier.notifications)
 
 
+class TestUsageTracking:
+    def test_usage_from_result_event(self, tmp_path):
+        """When agent emits a system event with usage metadata, state.usage is updated."""
+        usage_event = AgentEvent(
+            type=AgentEventType.SYSTEM, content="result",
+            metadata={"usage": {
+                "input_tokens": 10000, "output_tokens": 3000,
+                "cost_usd": 0.15, "model": "claude-sonnet-4-6",
+            }},
+            raw="result",
+        )
+        events = [usage_event, _text_event("@@DONE@@ done")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.usage.input_tokens == 10000
+        assert st.usage.output_tokens == 3000
+        assert st.usage.cost_usd == 0.15
+        assert st.usage.model == "claude-sonnet-4-6"
+
+    def test_usage_accumulated_across_resumes(self, tmp_path):
+        """After 2 agent runs, state.usage.input_tokens is the sum of both."""
+        usage1 = AgentEvent(
+            type=AgentEventType.SYSTEM, content="result",
+            metadata={"usage": {
+                "input_tokens": 10000, "output_tokens": 3000,
+                "cost_usd": 0.15, "model": "claude-sonnet-4-6",
+            }},
+            raw="result",
+        )
+        usage2 = AgentEvent(
+            type=AgentEventType.SYSTEM, content="result",
+            metadata={"usage": {
+                "input_tokens": 20000, "output_tokens": 5000,
+                "cost_usd": 0.25, "model": "claude-sonnet-4-6",
+            }},
+            raw="result",
+        )
+        agent = ScriptedAgent([
+            [usage1, _system_event("context window exceeded")],
+            [usage2, _text_event("@@DONE@@ done")],
+        ])
+        runner, _, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, agent=agent)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.usage.input_tokens == 30000
+        assert st.usage.output_tokens == 8000
+        assert st.usage.cost_usd == pytest.approx(0.40)
+
+    def test_usage_no_metadata_no_update(self, tmp_path):
+        """Events without usage metadata should not modify usage."""
+        events = [_system_event("init"), _text_event("@@DONE@@ done")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.usage.input_tokens == 0
+        assert st.usage.cost_usd == 0.0
+
+
 class TestDispatchEvent:
     def test_dispatch_text_returns_handle_text_result(self, tmp_path):
         runner, *_, state_mgr = _make_runner(tmp_path)

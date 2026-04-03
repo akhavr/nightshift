@@ -319,6 +319,42 @@ class TestAuthFailureDetection:
         assert ev is not None
         assert ev.type == AgentEventType.AUTH_FAILURE
 
+    def test_result_event_extracts_usage(self):
+        """Result events with cost_usd/tokens should populate metadata.usage."""
+        agent = make_agent()
+        line = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "result": "Task completed",
+            "session_id": "abc-123",
+            "cost_usd": 0.38,
+            "input_tokens": 45000,
+            "output_tokens": 12000,
+            "model": "claude-sonnet-4-6",
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.SYSTEM
+        assert "usage" in ev.metadata
+        usage = ev.metadata["usage"]
+        assert usage["input_tokens"] == 45000
+        assert usage["output_tokens"] == 12000
+        assert usage["cost_usd"] == 0.38
+        assert usage["model"] == "claude-sonnet-4-6"
+
+    def test_result_event_no_usage_when_absent(self):
+        """Result events without cost fields should have empty metadata."""
+        agent = make_agent()
+        line = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "result": "Task completed",
+            "session_id": "abc-123",
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert "usage" not in ev.metadata
+
     def test_is_auth_failure_static_method(self):
         from adapters.agents.claude_code import ClaudeCodeAgent
         assert ClaudeCodeAgent._is_auth_failure("invalid_api_key") is True

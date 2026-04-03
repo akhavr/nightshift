@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.protocols import UsageData
+
 RECENT_CONVERSATION_DEFAULT = 50
 CONVERSATION_PREVIEW_LEN = 500
 
@@ -35,12 +37,15 @@ class SessionState:
     completed_at: str = ""
     checkpoints: list[Checkpoint] = field(default_factory=list)
     human_answers: list[QAExchange] = field(default_factory=list)
+    usage: UsageData = field(default_factory=UsageData)
 
     def __post_init__(self):
         if not self.started_at:
             self.started_at = datetime.now(timezone.utc).isoformat()
         self.checkpoints = [Checkpoint(**c) if isinstance(c, dict) else c for c in self.checkpoints]
         self.human_answers = [QAExchange(**q) if isinstance(q, dict) else q for q in self.human_answers]
+        if isinstance(self.usage, dict):
+            self.usage = UsageData(**self.usage)
 
 
 class StateManager:
@@ -74,6 +79,17 @@ class StateManager:
         st.checkpoints.append(Checkpoint(
             step=step, description=desc,
             timestamp=datetime.now(timezone.utc).isoformat(), commit=commit))
+        self._write(st)
+
+    def update_usage(self, input_tokens: int, output_tokens: int,
+                     cost_usd: float, model: str = ""):
+        """Accumulate token usage from an agent result event."""
+        st = self.load_state()
+        st.usage.input_tokens += input_tokens
+        st.usage.output_tokens += output_tokens
+        st.usage.cost_usd += cost_usd
+        if model:
+            st.usage.model = model
         self._write(st)
 
     def add_qa(self, q: str, a: str):
