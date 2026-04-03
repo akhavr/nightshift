@@ -21,27 +21,25 @@ log = logging.getLogger(__name__)
 EVENT_SEPARATOR = "--JSON Event--"
 CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
 
-# Patterns indicating LLM API authentication/authorization failures.
-# Checked against ObservationEvent content when is_error=true.
-AUTH_FAILURE_PATTERNS = (
-    "error code: 401",
-    "error code: 429",
-    "error code: 404",
-    "invalid api key",
-    "incorrect api key",
-    "authentication_error",
-    "authenticationerror",
-    "authorization_error",
-    "unauthorized",
-    "rate limit",
-    "ratelimiterror",
-    "model not found",
-    "connection error",
-    "litellm.",
-)
-
-
 class OpenHandsAgent(HeadlessAgentBase):
+    # Patterns indicating LLM API authentication/authorization failures.
+    # Checked against ObservationEvent content when is_error=true.
+    AUTH_FAILURE_PATTERNS = (
+        "error code: 401",
+        "error code: 429",
+        "error code: 404",
+        "invalid api key",
+        "incorrect api key",
+        "authentication_error",
+        "authenticationerror",
+        "authorization_error",
+        "unauthorized",
+        "rate limit",
+        "ratelimiterror",
+        "model not found",
+        "connection error",
+        "litellm.",
+    )
     def __init__(
         self,
         command: str = "openhands",
@@ -85,12 +83,6 @@ class OpenHandsAgent(HeadlessAgentBase):
                     log.info(f"Session ID: {self._session_id}")
         except Exception as e:
             log.warning(f"Failed to read stderr for session ID: {e}")
-
-    @staticmethod
-    def _is_auth_failure(text: str) -> bool:
-        """Check if text indicates an LLM API auth/rate-limit/connection failure."""
-        lower = text.lower()
-        return any(pattern in lower for pattern in AUTH_FAILURE_PATTERNS)
 
     def _parse(self, raw: str) -> Optional[AgentEvent]:
         """Parse a JSON event line into an AgentEvent."""

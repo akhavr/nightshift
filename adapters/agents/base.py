@@ -28,6 +28,15 @@ class HeadlessAgentBase:
     start() and _parse().
     """
 
+    # Subclasses define their own patterns for auth/rate-limit detection.
+    AUTH_FAILURE_PATTERNS: tuple[str, ...] = ()
+
+    @classmethod
+    def _is_auth_failure(cls, text: str) -> bool:
+        """Check if text indicates an authentication/authorization failure."""
+        lower = text.lower()
+        return any(pattern in lower for pattern in cls.AUTH_FAILURE_PATTERNS)
+
     def __init__(
         self,
         command: str,

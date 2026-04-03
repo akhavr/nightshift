@@ -19,22 +19,21 @@ log = logging.getLogger(__name__)
 
 TOOL_INPUT_PREVIEW_LEN = 300
 
-# Patterns that indicate authentication/authorization failures
-AUTH_FAILURE_PATTERNS = (
-    "invalid_api_key",
-    "authentication_error",
-    "authorization_error",
-    "invalid x-api-key",
-    "permission_error",
-    "api key is invalid",
-    "token has expired",
-    "expired token",
-    "unauthorized",
-    "could not authenticate",
-)
-
 
 class ClaudeCodeAgent(HeadlessAgentBase):
+    AUTH_FAILURE_PATTERNS = (
+        "invalid_api_key",
+        "authentication_error",
+        "authorization_error",
+        "invalid x-api-key",
+        "permission_error",
+        "api key is invalid",
+        "token has expired",
+        "expired token",
+        "unauthorized",
+        "could not authenticate",
+    )
+
     def __init__(
         self,
         command: str = "claude",
@@ -86,12 +85,6 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                     type=AgentEventType.TOOL_RESULT,
                     content=str(result_content)[:TOOL_RESULT_PREVIEW_LEN], raw=raw)
         return None
-
-    @staticmethod
-    def _is_auth_failure(text: str) -> bool:
-        """Check if a message indicates an authentication/authorization failure."""
-        lower = text.lower()
-        return any(pattern in lower for pattern in AUTH_FAILURE_PATTERNS)
 
     def _parse(self, raw: str) -> Optional[AgentEvent]:
         """Parse a stream-json line into an AgentEvent."""
