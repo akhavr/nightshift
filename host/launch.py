@@ -187,7 +187,7 @@ def main():
     returncode = run_container(
         repo, workspace_mount, session_dir, names, args.issue_id,
         max_turns, args.step, args.resume, str(workflow_path), args.image,
-        overflow=overflow,
+        overflow=overflow, agent_kind=config.agent.kind,
     )
 
     if not names["is_review"]:

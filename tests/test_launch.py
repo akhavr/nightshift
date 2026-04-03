@@ -1024,6 +1024,62 @@ class TestCodexDockerSupport:
                 os.environ[k] = v
 
 
+class TestCodexAgentKindEnv:
+
+    def test_codex_agent_gets_agent_kind_env(self):
+        """When agent_kind is codex, AGENT_KIND=codex is in docker command
+        so docker-entrypoint.sh can generate ~/.codex/config.toml."""
+        cmd = build_docker_cmd(
+            repo=Path("/repo"),
+            workspace_mount="/workspace",
+            session_dir=Path("/session"),
+            container_name="nightshift-abc123",
+            worktree_name="agent-abc123",
+            issue_id="abc123",
+            short_id="abc123",
+            max_turns=50,
+            step="coder",
+            is_resume=False,
+            workflow_path="/repo/WORKFLOW.md",
+            image="nightshift:latest",
+            agent_kind="codex",
+        )
+
+        env_pairs = []
+        for i, arg in enumerate(cmd):
+            if arg == "-e" and i + 1 < len(cmd):
+                env_pairs.append(cmd[i + 1])
+
+        assert "AGENT_KIND=codex" in env_pairs
+
+    def test_non_codex_agent_no_codex_agent_kind(self):
+        """When agent_kind is claude-code, AGENT_KIND=claude-code (not codex)."""
+        cmd = build_docker_cmd(
+            repo=Path("/repo"),
+            workspace_mount="/workspace",
+            session_dir=Path("/session"),
+            container_name="nightshift-abc123",
+            worktree_name="agent-abc123",
+            issue_id="abc123",
+            short_id="abc123",
+            max_turns=50,
+            step="coder",
+            is_resume=False,
+            workflow_path="/repo/WORKFLOW.md",
+            image="nightshift:latest",
+            agent_kind="claude-code",
+        )
+
+        env_pairs = []
+        for i, arg in enumerate(cmd):
+            if arg == "-e" and i + 1 < len(cmd):
+                env_pairs.append(cmd[i + 1])
+
+        assert "AGENT_KIND=claude-code" in env_pairs
+        # Should NOT have AGENT_KIND=codex
+        assert "AGENT_KIND=codex" not in env_pairs
+
+
 class TestOpenHandsEnvVars:
 
     def test_openhands_env_vars_forwarded(self):
