@@ -456,3 +456,137 @@ class TestIsAlive:
         mock_proc.poll.return_value = 0
         agent._process = mock_proc
         assert agent.is_alive() is False
+
+
+# ── _is_auth_failure() ─────────────────────────────────────
+
+
+class TestIsAuthFailure:
+    def _agent(self):
+        from adapters.agents.openhands import OpenHandsAgent
+        return OpenHandsAgent()
+
+    def test_detects_401_invalid_key(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("AuthenticationError: Error code: 401 - Invalid API key")
+
+    def test_detects_429_rate_limit(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("Rate limit exceeded: Error code: 429")
+
+    def test_detects_404_model_not_found(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("NotFoundError: Error code: 404 - model not found")
+
+    def test_detects_invalid_api_key_text(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("Incorrect API key provided: sk-proj-****")
+
+    def test_detects_litellm_auth_error(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("litellm.AuthenticationError: invalid api key")
+
+    def test_detects_connection_error(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("Connection error to LLM provider: refused")
+
+    def test_detects_litellm_prefix(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("litellm.RateLimitError: you exceeded your quota")
+
+    def test_ignores_500_server_error(self):
+        agent = self._agent()
+        assert not agent._is_auth_failure("Error code: 500 - Internal server error")
+
+    def test_ignores_timeout(self):
+        agent = self._agent()
+        assert not agent._is_auth_failure("Request timed out after 30 seconds")
+
+    def test_ignores_normal_output(self):
+        agent = self._agent()
+        assert not agent._is_auth_failure("Successfully completed task")
+
+    def test_case_insensitive(self):
+        agent = self._agent()
+        assert agent._is_auth_failure("AUTHENTICATION_ERROR: Invalid Key")
+
+
+# ── AUTH_FAILURE in _parse() ────────────────────────────────
+
+
+class TestParseAuthFailure:
+    def _agent(self):
+        from adapters.agents.openhands import OpenHandsAgent
+        return OpenHandsAgent()
+
+    def test_observation_error_with_auth_pattern(self):
+        """ObservationEvent with is_error=true and auth content emits AUTH_FAILURE."""
+        agent = self._agent()
+        raw = _observation_event(
+            "ErrorObservation",
+            content="AuthenticationError: Error code: 401 - Invalid API key",
+            is_error=True,
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert "401" in ev.content
+
+    def test_observation_error_with_429(self):
+        """ObservationEvent with rate limit error emits AUTH_FAILURE."""
+        agent = self._agent()
+        raw = _observation_event(
+            "ErrorObservation",
+            content="litellm.RateLimitError: Error code: 429",
+            is_error=True,
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_observation_error_non_auth_stays_tool_result(self):
+        """ObservationEvent with is_error=true but non-auth content stays TOOL_RESULT."""
+        agent = self._agent()
+        raw = _observation_event(
+            "ErrorObservation",
+            content="Error code: 500 - Internal server error",
+            is_error=True,
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.TOOL_RESULT
+
+    def test_observation_without_error_flag_not_auth_failure(self):
+        """ObservationEvent without is_error=true is never AUTH_FAILURE."""
+        agent = self._agent()
+        raw = _observation_event(
+            "CmdOutputObservation",
+            content="Error code: 401 - but this is just command output",
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.TOOL_RESULT
+
+    def test_observation_error_with_litellm_message(self):
+        """litellm error messages in ObservationEvent trigger AUTH_FAILURE."""
+        agent = self._agent()
+        raw = _observation_event(
+            "ErrorObservation",
+            content="litellm.AuthenticationError: OpenAIException - Incorrect API key",
+            is_error=True,
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_observation_error_with_connection_error(self):
+        """Connection error to LLM provider triggers AUTH_FAILURE."""
+        agent = self._agent()
+        raw = _observation_event(
+            "ErrorObservation",
+            content="Connection error to LLM provider: connection refused",
+            is_error=True,
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE

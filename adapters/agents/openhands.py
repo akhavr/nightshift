@@ -21,8 +21,26 @@ log = logging.getLogger(__name__)
 EVENT_SEPARATOR = "--JSON Event--"
 CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
 
-
 class OpenHandsAgent(HeadlessAgentBase):
+    # Patterns indicating LLM API authentication/authorization failures.
+    # Checked against ObservationEvent content when is_error=true.
+    AUTH_FAILURE_PATTERNS = (
+        "error code: 401",
+        "error code: 429",
+        "error code: 404",
+        "invalid api key",
+        "incorrect api key",
+        "authentication_error",
+        "authenticationerror",
+        "authorization_error",
+        "unauthorized",
+        "rate limit",
+        "ratelimiterror",
+        "model not found",
+        "connection error",
+        "litellm.",
+    )
+
     def __init__(
         self,
         command: str = "openhands",
@@ -85,6 +103,12 @@ class OpenHandsAgent(HeadlessAgentBase):
 
         if kind == "ObservationEvent":
             content = str(ev.get("content", ""))[:TOOL_RESULT_PREVIEW_LEN]
+            if ev.get("is_error") and self._is_auth_failure(content):
+                return AgentEvent(
+                    type=AgentEventType.AUTH_FAILURE,
+                    content=content,
+                    raw=raw,
+                )
             return AgentEvent(
                 type=AgentEventType.TOOL_RESULT,
                 content=content,
