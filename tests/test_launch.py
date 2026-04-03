@@ -777,3 +777,45 @@ class TestResolveNames:
         coder = _resolve_names("abc123def456ef", "coder", config)
         review = _resolve_names("abc123def456ef", "review", config)
         assert coder["container_name"] != review["container_name"]
+
+
+# ── Review overflow isolation tests ─────────────────────
+
+class TestReviewOverflowIsolation:
+
+    @patch("host.docker_cmd.docker_remove")
+    @patch("host.docker_cmd.subprocess.run")
+    def test_review_launch_ignores_overflow(self, mock_run, mock_remove, tmp_path):
+        """Review launch with overflow=None does not inject overflow env vars."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / ".git").write_text("gitdir: /repo-git/worktrees/agent-abc")
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        names = {
+            "container_name": "nightshift-review-abc123",
+            "worktree_name": "agent-abc123",
+            "short_id": "abc123",
+        }
+
+        # launch.py sets overflow=None for review steps; verify no overflow
+        # env vars appear in the resulting docker command.
+        with patch("host.docker_cmd.Path.home", return_value=tmp_path):
+            run_container(
+                repo=tmp_path, workspace_mount=str(workspace),
+                session_dir=session_dir, names=names,
+                issue_id="abc123def456", max_turns=30,
+                step="review", is_resume=False,
+                workflow_path=str(tmp_path / "WORKFLOW.md"),
+                image="nightshift:latest",
+                overflow=None,
+            )
+
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        # No overflow-specific env vars or args should be present
+        assert "sk-overflow" not in cmd_str
+        assert "ANTHROPIC_BASE_URL" not in cmd_str
