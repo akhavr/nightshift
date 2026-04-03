@@ -131,20 +131,21 @@ def scan_conversation_for_verdict(state_mgr: StateManager) -> str | None:
     return None
 
 
-def format_cost_line(usage, resumes: int = 0) -> str:
-    """Format a one-line cost summary from UsageData (or dict with same fields).
+def format_token_count(n: int) -> str:
+    """Format a token count as 'NK' for thousands or plain number for smaller values."""
+    return f"{n / 1000:.0f}K" if n >= 1000 else str(n)
 
-    Accepts both UsageData dataclass instances and plain dicts.
-    """
+
+def format_cost_line(usage, resumes: int = 0) -> str:
+    """Format a one-line cost summary from a UsageData dataclass instance."""
     input_t = getattr(usage, "input_tokens", 0) or 0
     output_t = getattr(usage, "output_tokens", 0) or 0
     cost = getattr(usage, "cost_usd", 0.0) or 0.0
     model = getattr(usage, "model", "") or ""
     if input_t == 0 and output_t == 0 and cost == 0.0:
         return ""
-    # Format token counts as K for readability
-    in_k = f"{input_t / 1000:.0f}K" if input_t >= 1000 else str(input_t)
-    out_k = f"{output_t / 1000:.0f}K" if output_t >= 1000 else str(output_t)
+    in_k = format_token_count(input_t)
+    out_k = format_token_count(output_t)
     parts = [f"{in_k} input / {out_k} output tokens, ${cost:.2f}"]
     detail_parts = []
     if model:

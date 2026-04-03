@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
 from core.post_run import format_cost_line
+from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
@@ -108,7 +109,6 @@ def _post_container(session_dir, config, repo, issue_id):
     diff = diff_result.stdout.strip() if diff_result.returncode == 0 else "N/A"
 
     usage = state.get("usage", {})
-    from core.protocols import UsageData
     usage_data = UsageData(
         input_tokens=usage.get("input_tokens", 0),
         output_tokens=usage.get("output_tokens", 0),

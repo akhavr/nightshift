@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
+from core.post_run import format_token_count
 from host.tracker_client import get_tracker_with_fallback
 from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import (
@@ -915,8 +916,8 @@ def cmd_usage(a):
         total_input += inp
         total_output += out
         total_cost += cost
-        in_k = f"{inp / 1000:.0f}K" if inp >= 1000 else str(inp)
-        out_k = f"{out / 1000:.0f}K" if out >= 1000 else str(out)
+        in_k = format_token_count(inp)
+        out_k = format_token_count(out)
         print(f"  {sid:<14} {step:<8} {in_k:>6} in / {out_k:>6} out  ${cost:.2f}  ({model})")
 
     # Print totals
