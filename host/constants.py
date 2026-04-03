@@ -5,7 +5,7 @@ Replaces magic numbers scattered across watcher.py, cli.py, and launch.py.
 
 # ── ID formatting ──────────────────────────────────────────
 SHORT_ID_LEN = 12   # default truncation length for issue/commit IDs
-REVIEW_SESSION_PREFIX = "review-"  # prefix for review session IDs
+from core.constants import REVIEW_SESSION_PREFIX  # canonical definition in core; re-exported for host callers  # noqa: F401,E501
 
 # ── Watcher polling intervals (seconds) ──────────────────
 REVIEW_POLL_INTERVAL_S = 30

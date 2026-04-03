@@ -32,6 +32,7 @@ from core.upstream import (
     count_prompt_lines, UpstreamProposal,
     PROMPT_SOFT_CAP_LINES, PROMPT_HARD_CAP_LINES,
 )
+from core.training_export import extract_training_data, export_jsonl
 from host.config_discovery import discover_workflow as _discover_workflow, write_local_config
 from host.env import load_all_dotenv
 from host.docker_utils import docker_stop
@@ -853,6 +854,31 @@ def cmd_overflow(a):
         print("Overflow OFF -- new container launches will use the primary provider.")
 
 
+def cmd_export_training_data(a):
+    """Export training data from completed session pairs (coder + review)."""
+    sd = sessions_dir()
+    if not sd.exists():
+        print("No sessions directory found.", file=sys.stderr)
+        sys.exit(1)
+
+    verdict = a.verdict if hasattr(a, "verdict") else None
+    examples = extract_training_data(sd, verdict_filter=verdict)
+
+    if not examples:
+        print("No training examples found. Requires completed sessions "
+              "with matching review sessions containing a verdict.")
+        return
+
+    output = Path(a.output)
+    count = export_jsonl(examples, output)
+
+    # Print summary
+    approvals = sum(1 for e in examples if e.review_verdict == "approve")
+    revisions = sum(1 for e in examples if e.review_verdict == "revise")
+    print(f"Exported {count} training example(s) to {output}")
+    print(f"  Approved: {approvals}  |  Revisions: {revisions}")
+
+
 def _register_session_commands(s):
     """Register session lifecycle commands."""
     sp = s.add_parser("start")
@@ -944,6 +970,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("state", choices=["on", "off"],
                     help="Turn overflow on or off")
     sp.set_defaults(func=cmd_overflow)
+
+    sp = s.add_parser("export-training-data",
+                       help="Export training data from session logs for finetuning")
+    sp.add_argument("-o", "--output", default="training-data.jsonl",
+                    help="Output JSONL file path (default: training-data.jsonl)")
+    sp.add_argument("--verdict", choices=["approve", "revise"], default=None,
+                    help="Filter by review verdict (default: all)")
+    sp.set_defaults(func=cmd_export_training_data)
 
     return p
 
