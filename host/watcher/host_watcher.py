@@ -91,6 +91,7 @@ class HostWatcher:
             self._get_tracker, self._get_auto_start_config,
             self._recently_launched, self._launch_background,
             workflow_path=self.workflow_path,
+            review_orchestrator=self.reviews,
         )
 
     @staticmethod
