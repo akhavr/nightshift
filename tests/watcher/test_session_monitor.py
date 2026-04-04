@@ -881,3 +881,149 @@ class TestReviewingStatusRecovery:
         # Review sessions in "reviewing" are not handled by the new code path
         assert state["status"] == "reviewing"
         assert launched == []
+
+
+# ---------------------------------------------------------------------------
+# Verdict recovery tests — coder stuck in "reviewing" with completed review
+# ---------------------------------------------------------------------------
+
+def _make_completed_review_session(sessions_dir, coder_sid, verdict="approve",
+                                   issue_id="issue-abc"):
+    """Create a review session dir that looks like a completed review with a verdict."""
+    review_sid = f"review-{coder_sid}"
+    review_dir = sessions_dir / review_sid
+    review_dir.mkdir(exist_ok=True)
+
+    state = {
+        "issue_id": issue_id,
+        "branch": f"review/{coder_sid}",
+        "status": "waiting:review",
+        "step": 1,
+        "checkpoints": [],
+        "human_answers": [],
+        "completed_at": "2026-04-04T10:00:00",
+    }
+    (review_dir / "state.json").write_text(json.dumps(state))
+
+    # Write a conversation log with the verdict
+    entry = {"role": "assistant", "content": f"@nightshift {verdict}"}
+    (review_dir / "conversation.jsonl").write_text(json.dumps(entry) + "\n")
+
+    return review_dir
+
+
+class TestVerdictRecovery:
+    """When coder is 'reviewing' and review completed with a verdict,
+    recover the verdict instead of blindly reverting to waiting:review."""
+
+    def test_reviewing_with_completed_review_processes_verdict_approve(self, tmp_path):
+        """Coder transitions from reviewing to waiting:human-review on approve verdict."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                 issue_id="issue-abc")
+        _make_completed_review_session(w.sessions_dir, "abc", verdict="approve")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((coder_sd / "state.json").read_text())
+        # Approve verdict -> waiting:human-review (not waiting:review)
+        assert state["status"] == "waiting:human-review"
+        assert launched == []
+
+    def test_reviewing_with_completed_review_processes_verdict_revise(self, tmp_path):
+        """Coder transitions from reviewing to working on revise verdict."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                 issue_id="issue-abc")
+        _make_completed_review_session(w.sessions_dir, "abc", verdict="revise")
+        launched = []
+        # VerdictHandler launches via ReviewOrchestrator's _launch_background
+        w.reviews.verdicts._launch_background = lambda cmd, sid: launched.append(sid)
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((coder_sd / "state.json").read_text())
+        # Revise verdict -> working (coder resumed)
+        assert state["status"] == "working"
+        assert "abc" in launched  # coder was relaunched
+
+    def test_reviewing_with_running_review_not_touched(self, tmp_path):
+        """Coder stays in reviewing when review container is still running."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                 issue_id="issue-abc")
+        _make_completed_review_session(w.sessions_dir, "abc", verdict="approve")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        def mock_status(container):
+            if "review-" in container:
+                return "running"
+            return None
+
+        with patch("host.watcher.docker_container_status", side_effect=mock_status):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((coder_sd / "state.json").read_text())
+        assert state["status"] == "reviewing"  # unchanged
+        assert launched == []
+
+    def test_reviewing_no_verdict_reverts_to_waiting_review(self, tmp_path):
+        """When review completed but has no verdict, fall back to reverting."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                 issue_id="issue-abc")
+
+        # Create completed review session but with no verdict in conversation
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir()
+        review_state = {
+            "issue_id": "issue-abc",
+            "branch": "review/abc",
+            "status": "waiting:review",
+            "step": 1,
+            "checkpoints": [],
+            "human_answers": [],
+            "completed_at": "2026-04-04T10:00:00",
+        }
+        (review_dir / "state.json").write_text(json.dumps(review_state))
+        # Empty conversation — no verdict
+        (review_dir / "conversation.jsonl").write_text("")
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((coder_sd / "state.json").read_text())
+        # No verdict found -> falls back to reverting
+        assert state["status"] == "waiting:review"
+        assert launched == []
+
+    def test_reviewing_review_not_completed_no_review_session_reverts(self, tmp_path):
+        """When no review session exists at all, revert to waiting:review."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                 issue_id="issue-abc")
+        # No review session dir at all
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        state = json.loads((coder_sd / "state.json").read_text())
+        # No review session -> falls back to reverting
+        assert state["status"] == "waiting:review"
+        assert launched == []

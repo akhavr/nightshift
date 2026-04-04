@@ -17,6 +17,7 @@ from host.session_utils import read_state, write_state, update_status
 from core.config import load_workflow
 from host.watcher.lifecycle_comments import post_start, post_resume, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
+from host.watcher.issue_sync import process_outbox
 
 log = logging.getLogger("watcher")
 
@@ -38,7 +39,8 @@ class SessionMonitor:
     def __init__(self, sessions_dir: Path, repo_dir: Path, auto_start: bool,
                  telegram: TelegramRelay, get_tracker, get_auto_start_config,
                  recently_launched: dict, launch_background,
-                 workflow_path: Path | None = None):
+                 workflow_path: Path | None = None,
+                 review_orchestrator=None):
         self.sessions_dir = sessions_dir
         self.repo_dir = repo_dir
         self.auto_start = auto_start
@@ -48,6 +50,7 @@ class SessionMonitor:
         self._get_auto_start_config = get_auto_start_config
         self._recently_launched = recently_launched
         self._launch_background = launch_background
+        self._review_orchestrator = review_orchestrator
         self._last_orphan_check = 0.0
         self._last_closed_check = 0.0
         self._last_auto_start_poll = 0.0
@@ -98,8 +101,8 @@ class SessionMonitor:
                 return  # normal completion, not an orphan
         elif status == "reviewing" and not is_review_session:
             # Coder session stuck in "reviewing" — check if the review
-            # container is actually running.  If not, revert to
-            # waiting:review so auto-review can retry.
+            # container is actually running.  If not, try to recover the
+            # verdict from the completed review session before reverting.
             review_sid = f"{REVIEW_SESSION_PREFIX}{sid}"
             if review_sid in self._recently_launched:
                 if now - self._recently_launched[review_sid] < ORPHAN_GRACE_PERIOD_S:
@@ -107,6 +110,12 @@ class SessionMonitor:
             review_container = f"nightshift-{review_sid}"
             if _pkg().docker_container_status(review_container) in ("running", "paused"):
                 return  # review container is alive
+
+            # Check if the review session completed with a verdict that
+            # was never processed (e.g. watcher restarted before processing).
+            if self._try_recover_review_verdict(sid, session_dir, review_sid):
+                return  # verdict recovered and applied
+
             log.warning(f"[{sid}] Stuck in 'reviewing' with no review container — "
                         f"reverting to 'waiting:review'")
             update_status(session_dir, "waiting:review")
@@ -146,6 +155,61 @@ class SessionMonitor:
 
         session_dir = self.sessions_dir / sid
         self._resume_session(sid, issue_id, reason="orphaned (container gone)")
+
+    def _try_recover_review_verdict(self, coder_sid: str, coder_dir: Path,
+                                    review_sid: str) -> bool:
+        """Try to recover a verdict from a completed review session.
+
+        When the watcher restarts after a review container has exited but
+        before the verdict was processed, the review outbox and conversation
+        log may still contain the verdict.  Process the outbox first (so
+        tracker comments are applied), then extract and apply the verdict.
+
+        Returns True if a verdict was found and applied, False otherwise.
+        """
+        review_dir = self.sessions_dir / review_sid
+        if not review_dir.exists() or not (review_dir / "state.json").exists():
+            return False
+
+        try:
+            review_state = read_state(review_dir)
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{review_sid}] Failed to read review state for verdict recovery: {e}")
+            return False
+
+        # Only recover from reviews that actually completed
+        if not review_state.get("completed_at"):
+            return False
+
+        if self._review_orchestrator is None:
+            return False
+
+        # Process any pending outbox entries first so verdicts posted
+        # via the tracker are visible for extraction.
+        try:
+            tracker = self._get_tracker()
+            process_outbox(review_dir, tracker)
+        except Exception as e:
+            log.warning(f"[{review_sid}] Failed to process review outbox during recovery: {e}")
+
+        # Extract verdict from conversation log or tracker
+        issue_id = review_state.get("issue_id", "")
+        conv_log = review_dir / "conversation.jsonl"
+        verdict = self._review_orchestrator.extract_reviewer_verdict(conv_log, issue_id)
+        if not verdict:
+            log.info(f"[{coder_sid}] Review {review_sid} completed but no verdict found")
+            return False
+
+        log.info(f"[{coder_sid}] Recovered review verdict '{verdict}' from {review_sid}")
+        if verdict == "approve":
+            self._review_orchestrator.handle_reviewer_approve(coder_sid, coder_dir, issue_id)
+        elif verdict == "revise":
+            self._review_orchestrator.handle_reviewer_revise(
+                coder_sid, coder_dir, issue_id, review_dir)
+
+        # Clean up the review session
+        self._review_orchestrator.cleanup_review_session(review_sid, review_dir)
+        return True
 
     def _handle_coder_orphan_limit(self, sid: str, session_dir: Path,
                                     state: dict, issue_id: str):
