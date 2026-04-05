@@ -83,6 +83,42 @@ def archive_session(session_dir: Path, repo: Path | None = None) -> Path | None:
     return archive_dir
 
 
+# ── Duplicate detection ─────────────────────────────────
+
+def find_existing_session_by_prefix(sessions_root: Path, issue_id: str) -> str | None:
+    """Check if any existing session has an issue_id that is a prefix match.
+
+    Returns the existing issue_id if found, None otherwise.
+    Two IDs match if one starts with the other (handles both
+    short-prefix and full-ID lookups).
+    """
+    if not sessions_root.exists():
+        return None
+    for session_dir in sessions_root.iterdir():
+        state_file = session_dir / "state.json"
+        if not state_file.exists():
+            continue
+        try:
+            state = json.loads(state_file.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning("Failed to read %s: %s", state_file, e)
+            continue
+        existing_id = state.get("issue_id", "")
+        if not existing_id:
+            continue
+        if existing_id.startswith(issue_id) or issue_id.startswith(existing_id):
+            return existing_id
+    return None
+
+
+def _issue_id_prefix_match(issue_id: str, existing_ids: set[str]) -> bool:
+    """Return True if issue_id matches any existing ID by prefix."""
+    return any(
+        eid.startswith(issue_id) or issue_id.startswith(eid)
+        for eid in existing_ids
+    )
+
+
 # ── Worktree cleanup ────────────────────────────────────
 
 def force_remove_dir(path: Path) -> None:

@@ -1159,3 +1159,55 @@ class TestOpenHandsEnvVars:
             os.environ.pop("LLM_BASE_URL", None)
             for k, v in saved.items():
                 os.environ[k] = v
+
+
+# ── Duplicate session detection tests ────────────────────
+
+class TestDuplicateSessionDetection:
+    """launch.py main() should reject starts when a session already exists by prefix."""
+
+    def _create_session(self, sessions_dir, session_name, issue_id, status="working"):
+        sd = sessions_dir / session_name
+        sd.mkdir(parents=True, exist_ok=True)
+        (sd / "state.json").write_text(json.dumps({
+            "issue_id": issue_id,
+            "status": status,
+        }))
+
+    def test_start_rejects_duplicate_session_by_prefix(self, tmp_path):
+        """Starting with short ID when full-ID session exists fails."""
+        sessions_dir = tmp_path / ".nightshift" / "sessions"
+        self._create_session(sessions_dir, "64dd71361d31", "64dd71361d31")
+
+        with patch("host.launch.get_repo_root", return_value=tmp_path), \
+             patch("host.launch.load_all_dotenv"), \
+             patch("host.launch.discover_workflow", return_value=tmp_path / "WF.md"), \
+             patch("host.launch.load_workflow") as mock_lw, \
+             patch("sys.argv", ["launch.py", "64dd713"]):
+            mock_lw.return_value = WorkflowConfig(
+                agent=AgentConfig(max_turns=30),
+                workspace=WorkspaceConfig(base_branch="master"),
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                from host.launch import main
+                main()
+            assert exc_info.value.code == 1
+
+    def test_start_rejects_duplicate_session_by_full_id(self, tmp_path):
+        """Starting with full ID when short-ID session exists fails."""
+        sessions_dir = tmp_path / ".nightshift" / "sessions"
+        self._create_session(sessions_dir, "64dd713", "64dd713")
+
+        with patch("host.launch.get_repo_root", return_value=tmp_path), \
+             patch("host.launch.load_all_dotenv"), \
+             patch("host.launch.discover_workflow", return_value=tmp_path / "WF.md"), \
+             patch("host.launch.load_workflow") as mock_lw, \
+             patch("sys.argv", ["launch.py", "64dd71361d31"]):
+            mock_lw.return_value = WorkflowConfig(
+                agent=AgentConfig(max_turns=30),
+                workspace=WorkspaceConfig(base_branch="master"),
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                from host.launch import main
+                main()
+            assert exc_info.value.code == 1

@@ -148,6 +148,34 @@ class TestWatcherAutoStart:
 
         assert launched == ["id-2"]
 
+    def test_auto_start_skips_prefix_match(self, tmp_path):
+        """Auto-start skips issue when existing session matches by prefix."""
+        watcher = self._make_watcher(tmp_path, label="nightshift")
+        tracker = MagicMock()
+        # Issue from tracker has full ID
+        tracker.list_issues.return_value = [
+            _make_issue("64dd71361d31abcd", labels=["nightshift"]),
+            _make_issue("unrelated123456", labels=["nightshift"]),
+        ]
+        watcher._tracker = tracker
+        watcher._config = MagicMock()
+
+        # Existing session uses short prefix of the same issue
+        sd = tmp_path / "sessions" / "64dd713"
+        sd.mkdir()
+        (sd / "state.json").write_text(json.dumps({
+            "issue_id": "64dd713",
+            "status": "working",
+        }))
+
+        launched = []
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+
+        watcher.monitor.check_new_issues()
+
+        # Only the unrelated issue should launch; the prefix match should be skipped
+        assert launched == ["unrelated123"]
+
     def test_respects_max_concurrent(self, tmp_path):
         """Max concurrent sessions limit is respected."""
         watcher = self._make_watcher(tmp_path, label="nightshift", max_concurrent=2)
