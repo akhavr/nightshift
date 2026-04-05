@@ -18,6 +18,78 @@ log = logging.getLogger(__name__)
 _CMD_TIMEOUT_S = 30
 _POLL_INTERVAL_S = 0.1
 _GRACEFUL_KILL_TIMEOUT_S = 5
+_TREE_CMD_TIMEOUT_S = 10
+
+_CLOCK_DIR = "git-bug/clocks"
+_CLOCK_FILES = {"bugs-edit": "edit-clock", "bugs-create": "create-clock"}
+
+
+def detect_corrupt_clocks(repo_dir: str | Path) -> list[str]:
+    """Return list of empty (corrupt) lamport clock filenames under .git/git-bug/clocks/."""
+    clock_dir = Path(repo_dir) / ".git" / _CLOCK_DIR
+    corrupt = []
+    for filename in _CLOCK_FILES:
+        path = clock_dir / filename
+        if path.exists() and path.stat().st_size == 0:
+            corrupt.append(filename)
+    return corrupt
+
+
+def _scan_max_clocks(repo_dir: str | Path) -> dict[str, int]:
+    """Scan refs/bugs/ tip trees for max edit-clock and create-clock values.
+
+    Returns dict mapping clock prefix ("edit-clock", "create-clock") to max value found.
+    """
+    maxvals: dict[str, int] = {}
+    try:
+        refs_out = subprocess.run(
+            ["git", "for-each-ref", "--format=%(objectname)", "refs/bugs/"],
+            cwd=str(repo_dir), capture_output=True, text=True, timeout=_CMD_TIMEOUT_S,
+        )
+        if refs_out.returncode != 0:
+            return maxvals
+        for ref_hash in refs_out.stdout.strip().splitlines():
+            tree_out = subprocess.run(
+                ["git", "ls-tree", ref_hash],
+                cwd=str(repo_dir), capture_output=True, text=True, timeout=_TREE_CMD_TIMEOUT_S,
+            )
+            if tree_out.returncode != 0:
+                continue
+            for line in tree_out.stdout.splitlines():
+                for prefix in _CLOCK_FILES.values():
+                    m = re.search(rf"{prefix}-(\d+)", line)
+                    if m:
+                        val = int(m.group(1))
+                        if val > maxvals.get(prefix, 0):
+                            maxvals[prefix] = val
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log.warning(f"Failed to scan bug refs for clock repair: {e}")
+    return maxvals
+
+
+def repair_lamport_clocks(repo_dir: str | Path) -> list[str]:
+    """Detect and repair empty git-bug lamport clock files.
+
+    Returns list of filenames that were repaired.
+    """
+    corrupt = detect_corrupt_clocks(repo_dir)
+    if not corrupt:
+        return []
+
+    log.warning(f"Corrupt git-bug clock files detected: {corrupt}")
+    maxvals = _scan_max_clocks(repo_dir)
+
+    clock_dir = Path(repo_dir) / ".git" / _CLOCK_DIR
+    repaired = []
+    for filename, prefix in _CLOCK_FILES.items():
+        if filename not in corrupt:
+            continue
+        val = maxvals.get(prefix, 0)
+        path = clock_dir / filename
+        path.write_text(str(val))
+        log.warning(f"Repaired {filename}: wrote value {val}")
+        repaired.append(filename)
+    return repaired
 
 
 def _graceful_kill(proc: subprocess.Popen, timeout: int = _GRACEFUL_KILL_TIMEOUT_S) -> None:
