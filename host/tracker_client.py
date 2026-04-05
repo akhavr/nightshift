@@ -10,6 +10,7 @@ import logging
 import socket
 from pathlib import Path
 
+from adapters.trackers.git_bug import repair_lamport_clocks
 from core.config import create_tracker
 from core.config.models import WorkflowConfig
 from host.constants import TRACKER_SOCKET_FILENAME
@@ -93,6 +94,5 @@ def get_tracker_with_fallback(config: WorkflowConfig, repo_dir: str | Path):
     # Repair corrupt lamport clocks before direct git-bug access.
     # When the watcher is running (socket path above), it already repairs
     # on startup, so this only runs in the fallback path.
-    from adapters.trackers.git_bug import repair_lamport_clocks
     repair_lamport_clocks(repo_dir)
     return create_tracker(config, repo_dir=str(repo_dir))
