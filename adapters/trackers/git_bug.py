@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 _CMD_TIMEOUT_S = 30
 _POLL_INTERVAL_S = 0.1
 _GRACEFUL_KILL_TIMEOUT_S = 5
+_TREE_CMD_TIMEOUT_S = 10
 
 _CLOCK_DIR = "git-bug/clocks"
 _CLOCK_FILES = {"bugs-edit": "edit-clock", "bugs-create": "create-clock"}
@@ -43,14 +44,14 @@ def _scan_max_clocks(repo_dir: str | Path) -> dict[str, int]:
     try:
         refs_out = subprocess.run(
             ["git", "for-each-ref", "--format=%(objectname)", "refs/bugs/"],
-            cwd=str(repo_dir), capture_output=True, text=True, timeout=30,
+            cwd=str(repo_dir), capture_output=True, text=True, timeout=_CMD_TIMEOUT_S,
         )
         if refs_out.returncode != 0:
             return maxvals
         for ref_hash in refs_out.stdout.strip().splitlines():
             tree_out = subprocess.run(
                 ["git", "ls-tree", ref_hash],
-                cwd=str(repo_dir), capture_output=True, text=True, timeout=10,
+                cwd=str(repo_dir), capture_output=True, text=True, timeout=_TREE_CMD_TIMEOUT_S,
             )
             if tree_out.returncode != 0:
                 continue
