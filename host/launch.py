@@ -22,7 +22,7 @@ from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FI
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
-from host.session_utils import get_repo_root
+from host.session_utils import get_repo_root, find_existing_session_by_prefix
 from host.workspace_setup import setup_workspace
 
 
@@ -164,6 +164,14 @@ def main():
     max_turns = args.max_turns or config.agent.max_turns
     names = _resolve_names(args.issue_id, args.step, config)
     session_dir = repo / ".nightshift" / "sessions" / names["session_name"]
+
+    # Check for duplicate sessions (prefix match) — skip for resume
+    if not args.resume:
+        sessions_root = repo / ".nightshift" / "sessions"
+        existing = find_existing_session_by_prefix(sessions_root, args.issue_id)
+        if existing:
+            print(f"Error: session already exists for issue {existing}", file=sys.stderr)
+            sys.exit(1)
 
     workspace_mount = setup_workspace(config, repo, names, args.resume, args.issue_id)
 

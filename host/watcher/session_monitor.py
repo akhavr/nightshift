@@ -13,7 +13,7 @@ from host.constants import (
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
-from host.session_utils import read_state, write_state, update_status
+from host.session_utils import read_state, write_state, update_status, _issue_id_prefix_match
 from core.config import load_workflow
 from host.watcher.lifecycle_comments import post_start, post_resume, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
@@ -472,7 +472,7 @@ class SessionMonitor:
         active_count = self.count_active_sessions(states=all_states)
 
         for issue in issues:
-            if issue.id in existing_issue_ids or issue.id in self._known_issue_ids:
+            if _issue_id_prefix_match(issue.id, existing_issue_ids) or issue.id in self._known_issue_ids:
                 continue
 
             if active_count >= asc.max_concurrent:
