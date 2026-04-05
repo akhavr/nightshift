@@ -19,6 +19,7 @@ from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
 from host.watcher.session_monitor import SessionMonitor
 from host.watcher.issue_sync import sync_sessions
+from adapters.trackers.git_bug import repair_lamport_clocks
 
 log = logging.getLogger("watcher")
 
@@ -207,6 +208,9 @@ class HostWatcher:
         # Propagate shutdown event to TelegramRelay so long-poll HTTP
         # requests can be interrupted on shutdown
         self.telegram._shutdown = self._shutdown
+
+        # Repair corrupt lamport clocks before any git-bug operations
+        repair_lamport_clocks(self.repo_dir)
 
         # Propagate shutdown event to tracker so interruptible subprocess
         # polls can be interrupted when stuck in git-bug calls
