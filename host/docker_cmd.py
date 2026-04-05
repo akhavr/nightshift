@@ -84,6 +84,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
     cmd = [
         "docker", "run", "--rm",
         "--name", container_name,
+        "--memory=8g", "--memory-swap=24g",
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",

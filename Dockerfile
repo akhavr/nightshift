@@ -14,12 +14,13 @@ RUN curl -sL https://github.com/git-bug/git-bug/releases/latest/download/git-bug
 COPY requirements.txt /opt/nightshift/
 RUN pip install --break-system-packages -r /opt/nightshift/requirements.txt
 RUN pip install --break-system-packages 'litellm[proxy]'
-RUN pip install --break-system-packages openhands python-frontmatter
+RUN pip install --break-system-packages 'openhands==1.13.1' python-frontmatter
 
 COPY core/ /opt/nightshift/core/
 COPY adapters/ /opt/nightshift/adapters/
 COPY entrypoint.py /opt/nightshift/
 COPY overflow-proxy.py /opt/nightshift/
+COPY openhands-launcher.py /opt/nightshift/
 COPY docker-entrypoint.sh /opt/nightshift/
 
 RUN useradd -m -s /bin/bash agent && \

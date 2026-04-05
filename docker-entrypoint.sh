@@ -27,6 +27,19 @@ fi
 # Create OpenHands conversation persistence directory
 mkdir -p "$HOME/.openhands" 2>/dev/null || true
 
+# OpenHands Docker workaround: shadow the openhands binary with a patched launcher.
+# Fixes two bugs: condenser crash on startup + inflated max_output_tokens.
+# See docs/openhands-docker-investigation.md for details.
+if [ "$AGENT_KIND" = "openhands" ]; then
+    mkdir -p "$HOME/bin"
+    cat > "$HOME/bin/openhands" << 'OHWRAP'
+#!/bin/sh
+exec python3 /opt/nightshift/openhands-launcher.py "$@"
+OHWRAP
+    chmod +x "$HOME/bin/openhands"
+    export PATH="$HOME/bin:$PATH"
+fi
+
 # Generate Codex config from env vars.
 # CODEX_API_KEY → OPENAI_API_KEY fallback chain.
 # If CODEX_BASE_URL is set → generate config.toml with custom provider.
