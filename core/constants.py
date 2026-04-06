@@ -22,3 +22,5 @@ LITELLM_HEALTH_POLL_INTERVAL_S = 0.5    # Poll interval for health check
 
 # ── MCP signal server ──────────────────────────────────
 MCP_SIGNAL_SERVER = "nightshift-signals"  # MCP server name for signal tools
+MCP_CONFIG_CONTAINER_PATH = "/opt/nightshift/mcp-config.json"  # MCP config mounted in container
+MCP_SIGNAL_SERVER_PREFIX = "mcp__nightshift-signals__"         # Prefix for signal tool names

@@ -412,3 +412,100 @@ class TestAuthFailureDetection:
         assert ClaudeCodeAgent._is_auth_failure("AUTHENTICATION_ERROR") is True
         assert ClaudeCodeAgent._is_auth_failure("rate limit exceeded") is False
         assert ClaudeCodeAgent._is_auth_failure("") is False
+
+
+# ── MCP signal parsing ───────────────────────────────────
+
+def test_mcp_signal_done_emits_done_marker():
+    agent = make_agent()
+    line = json.dumps({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "name": "mcp__nightshift-signals__nightshift_done",
+                "input": {"summary": "task done"},
+                "id": "toolu_mcp_done",
+            }],
+        },
+    })
+    ev = agent._parse(line)
+    assert ev is not None
+    assert ev.type == AgentEventType.TEXT
+    assert ev.content == "@@DONE@@"
+
+
+def test_mcp_signal_checkpoint_emits_checkpoint_marker():
+    agent = make_agent()
+    line = json.dumps({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "name": "mcp__nightshift-signals__nightshift_checkpoint",
+                "input": {"description": "progress"},
+                "id": "toolu_mcp_cp",
+            }],
+        },
+    })
+    ev = agent._parse(line)
+    assert ev is not None
+    assert ev.type == AgentEventType.TEXT
+    assert ev.content == "@@CHECKPOINT@@ progress"
+
+
+def test_mcp_signal_question_emits_question_marker():
+    agent = make_agent()
+    line = json.dumps({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "name": "mcp__nightshift-signals__nightshift_question",
+                "input": {"question": "what next?"},
+                "id": "toolu_mcp_q",
+            }],
+        },
+    })
+    ev = agent._parse(line)
+    assert ev is not None
+    assert ev.type == AgentEventType.TEXT
+    assert ev.content == "@@QUESTION@@ what next?"
+    # Second event: @@WAITING@@
+    assert len(agent._extra_events) == 1
+    assert agent._extra_events[0].type == AgentEventType.TEXT
+    assert agent._extra_events[0].content == "@@WAITING@@"
+
+
+def test_non_signal_mcp_tool_parsed_as_tool_call():
+    agent = make_agent()
+    line = json.dumps({
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "tool_use",
+                "name": "mcp__other-server__some_tool",
+                "input": {"arg": "value"},
+                "id": "toolu_mcp_other",
+            }],
+        },
+    })
+    ev = agent._parse(line)
+    assert ev is not None
+    assert ev.type == AgentEventType.TOOL_CALL
+    assert "mcp__other-server__some_tool" in ev.content
+
+
+def test_start_includes_mcp_config_flag(tmp_path):
+    from unittest.mock import patch
+    agent = make_agent()
+    mcp_path = tmp_path / "mcp-config.json"
+    mcp_path.write_text("{}")
+    with patch("adapters.agents.claude_code.MCP_CONFIG_CONTAINER_PATH", str(mcp_path)):
+        # Capture the Popen call
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 12345
+            agent.start("test prompt", tmp_path)
+            cmd = mock_popen.call_args[0][0]
+            assert "--mcp-config" in cmd
+            assert str(mcp_path) in cmd
