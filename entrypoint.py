@@ -112,6 +112,7 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
                 base_prompt = render_template(
                     config.prompt_template, issue=issue,
                     related_context=related, attempt=None,
+                    agent_kind=config.agent.kind,
                 )
             else:
                 base_prompt = build_initial_prompt(issue.title, issue.body, related)
@@ -122,7 +123,7 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
     state_mgr.update_status("working")
 
     if config.prompt_template:
-        extra_vars = {}
+        extra_vars = {"agent_kind": config.agent.kind}
         if step == "review":
             extra_vars["diff"] = _read_diff()
             extra_vars["base_branch"] = os.environ.get("BASE_BRANCH", "master")

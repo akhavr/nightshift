@@ -110,3 +110,32 @@ class TestBuildResumePrompt:
 
         result = build_resume_prompt("t", "b", "", sm, checkpoint_summary="Key decisions here")
         assert "Key decisions here" in result
+
+
+class TestSignalInstructions:
+    def test_openhands_prompt_includes_signal_instructions(self):
+        """When agent_kind is 'openhands', the rendered prompt contains signal file instructions."""
+        issue = make_test_issue(title="Fix bug", body="It's broken")
+        template = Path(__file__).parent.parent / "templates" / "WORKFLOW.md"
+        # Read the prompt template (after the YAML front matter)
+        content = template.read_text()
+        # Extract prompt body after the closing ---
+        parts = content.split("---", 2)
+        prompt_body = parts[2] if len(parts) >= 3 else content
+
+        result = render_template(prompt_body, issue, agent_kind="openhands")
+        assert "/session/signal/done" in result
+        assert "/session/signal/question.json" in result
+        assert "/session/signal/checkpoint" in result
+        assert "Signal Protocol" in result
+
+    def test_non_openhands_prompt_no_signal_instructions(self):
+        """When agent_kind is 'claude-code', the prompt does NOT contain signal file instructions."""
+        issue = make_test_issue(title="Fix bug", body="It's broken")
+        template = Path(__file__).parent.parent / "templates" / "WORKFLOW.md"
+        content = template.read_text()
+        parts = content.split("---", 2)
+        prompt_body = parts[2] if len(parts) >= 3 else content
+
+        result = render_template(prompt_body, issue, agent_kind="claude-code")
+        assert "/session/signal/" not in result

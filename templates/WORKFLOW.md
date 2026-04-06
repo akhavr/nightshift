@@ -79,4 +79,12 @@ For bug fixes, follow this protocol:
 5. Confirm the original reproduction scenario no longer fails.
 6. Search for similar patterns elsewhere in the codebase and fix them too.
 
+{% if agent_kind == "openhands" %}
+## Signal Protocol
+When you complete the task, write a file at /session/signal/done containing a one-line summary.
+If you have a question, write /session/signal/question.json with {"question": "your question"}.
+For progress checkpoints, write /session/signal/checkpoint with a description.
+These signal files are REQUIRED in addition to using FinishAction.
+{% endif %}
+
 Begin by reading the codebase, then plan your approach.
