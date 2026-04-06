@@ -993,3 +993,87 @@ class TestTrackerReload:
         assert result.endswith(prompt)
         # Comments should be cleared after injection
         assert len(runner._new_comments) == 0
+
+
+# ── File signal fallback tests ─────────────────────────
+
+
+class TestFileSignals:
+    """Tests for file-based signal detection (_check_file_signals)."""
+
+    def test_file_signal_dir_created_on_init(self, tmp_path):
+        """SessionRunner creates /session/signal/ directory if it doesn't exist."""
+        runner, *_ = _make_runner(tmp_path)
+        signal_dir = tmp_path / "session" / "signal"
+        assert signal_dir.is_dir()
+
+    def test_file_signal_not_detected_when_absent(self, tmp_path):
+        """When signal dir is empty, _check_file_signals returns None."""
+        runner, *_ = _make_runner(tmp_path)
+        assert runner._check_file_signals() is None
+
+    def test_file_signal_done_detected(self, tmp_path):
+        """When /session/signal/done exists, SessionRunner detects DONE signal and deletes the file."""
+        runner, *_ = _make_runner(tmp_path)
+        signal_dir = tmp_path / "session" / "signal"
+        done_file = signal_dir / "done"
+        done_file.write_text("")
+
+        result = runner._check_file_signals()
+        assert result == "DONE"
+        assert not done_file.exists(), "done file should be deleted after detection"
+
+    def test_file_signal_checkpoint_detected(self, tmp_path):
+        """When /session/signal/checkpoint exists with text content, SessionRunner detects CHECKPOINT signal."""
+        runner, *_ = _make_runner(tmp_path)
+        signal_dir = tmp_path / "session" / "signal"
+        checkpoint_file = signal_dir / "checkpoint"
+        checkpoint_file.write_text("All tests passing")
+
+        result = runner._check_file_signals()
+        assert result == ("CHECKPOINT", "All tests passing")
+        assert not checkpoint_file.exists(), "checkpoint file should be deleted after detection"
+
+    def test_file_signal_question_detected(self, tmp_path):
+        """When /session/signal/question.json exists with JSON, SessionRunner detects QUESTION signal."""
+        runner, *_ = _make_runner(tmp_path)
+        signal_dir = tmp_path / "session" / "signal"
+        question_file = signal_dir / "question.json"
+        question_file.write_text(json.dumps({"question": "what?"}))
+
+        result = runner._check_file_signals()
+        assert result == ("QUESTION", "what?")
+        assert not question_file.exists(), "question file should be deleted after detection"
+
+    def test_file_signal_done_in_event_loop(self, tmp_path):
+        """File signal DONE triggers the same flow as @@DONE@@ marker in event loop."""
+        # Agent produces some text events, then exits. Meanwhile a done file appears.
+        events = [
+            _text_event("working on it..."),
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path, events)
+        signal_dir = tmp_path / "session" / "signal"
+
+        # Write the done file before running — it'll be picked up in the event loop
+        (signal_dir / "done").write_text("")
+
+        runner.run()
+        state = state_mgr.load_state()
+        # post_run transitions done:pending-review -> waiting:review
+        assert state.status in ("done:pending-review", "waiting:review")
+
+    def test_file_signal_checkpoint_in_event_loop(self, tmp_path):
+        """File signal CHECKPOINT triggers checkpoint recording in event loop."""
+        events = [
+            _text_event("working..."),
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path, events)
+        signal_dir = tmp_path / "session" / "signal"
+        (signal_dir / "checkpoint").write_text("tests green")
+
+        runner.run()
+        state = state_mgr.load_state()
+        assert state.step == 1
+        assert any("tests green" in cp.description for cp in state.checkpoints)

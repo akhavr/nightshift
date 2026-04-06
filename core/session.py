@@ -3,11 +3,12 @@
 Works with any adapters implementing the protocols.
 """
 
+import json
 import logging
 import time
 
 from core.config import MergeConfig, WorkspaceConfig
-from core.constants import TITLE_TRUNCATE_LEN
+from core.constants import SIGNAL_DIR_NAME, TITLE_TRUNCATE_LEN
 from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
 from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
@@ -61,6 +62,10 @@ class SessionRunner:
         if workspace_config is None:
             workspace_config = WorkspaceConfig()
         self.workspace_config = workspace_config
+
+        # File-based signal fallback (Phase 3)
+        self._signal_dir = self.state_mgr.session_dir / SIGNAL_DIR_NAME
+        self._signal_dir.mkdir(exist_ok=True)
 
     def _init_workspace(self, workspace: Workspace | None):
         """Set up workspace and run after_create hook if new."""
@@ -130,6 +135,15 @@ class SessionRunner:
         question_time: float | None = None  # OQ-4: track when question was asked
 
         for event in self.agent.stream_events():
+            # Check file-based signals before processing agent output
+            file_signal = self._check_file_signals()
+            if file_signal is not None:
+                result = self._handle_file_signal(file_signal)
+                if result == "STOP":
+                    break
+                if result == "QUESTION_ASKED":
+                    question_time = time.monotonic()
+
             self.state_mgr.append_raw(event.raw)
 
             result = self._dispatch_event(event)
@@ -226,6 +240,60 @@ class SessionRunner:
                 log.info(f"Accumulated {len(new_comments)} new comment(s) from tracker reload")
         except Exception as e:
             log.warning(f"Tracker reload failed: {e}")
+
+    # ── File-based signal fallback ─────────────────────────────
+
+    def _check_file_signals(self) -> str | tuple[str, str] | None:
+        """Poll /session/signal/ for file-based signals (fallback for non-MCP agents).
+
+        Returns "DONE", ("CHECKPOINT", desc), ("QUESTION", text), or None.
+        Detected signal files are unlinked to prevent re-triggering.
+        """
+        done_file = self._signal_dir / "done"
+        if done_file.exists():
+            done_file.unlink()
+            return "DONE"
+
+        question_file = self._signal_dir / "question.json"
+        if question_file.exists():
+            try:
+                data = json.loads(question_file.read_text())
+            except (json.JSONDecodeError, OSError) as e:
+                log.error(f"Failed to read question signal file: {e}")
+                data = {}
+            question_file.unlink(missing_ok=True)
+            return ("QUESTION", data.get("question", ""))
+
+        checkpoint_file = self._signal_dir / "checkpoint"
+        if checkpoint_file.exists():
+            try:
+                desc = checkpoint_file.read_text().strip()
+            except OSError as e:
+                log.error(f"Failed to read checkpoint signal file: {e}")
+                desc = ""
+            checkpoint_file.unlink(missing_ok=True)
+            return ("CHECKPOINT", desc)
+
+        return None
+
+    def _handle_file_signal(self, signal) -> str | None:
+        """Process a file signal the same way as the corresponding @@MARKER@@."""
+        if signal == "DONE":
+            self._on_done()
+            return "STOP"
+        if isinstance(signal, tuple):
+            kind, content = signal
+            if kind == "CHECKPOINT":
+                step = self.state_mgr.increment_step()
+                commit = self._commit_checkpoint(content, step)
+                self.state_mgr.add_checkpoint(content, step, commit)
+                self._build_resume()
+                self.tracker.add_comment(
+                    self.issue.id, f"📌 Checkpoint {step}: {content}")
+            elif kind == "QUESTION":
+                self._on_question(content)
+                return "QUESTION_ASKED"
+        return None
 
     # ── Text / marker handling ────────────────────────────────
 
