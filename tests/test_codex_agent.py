@@ -355,6 +355,70 @@ class TestLifecycle:
             CodexAgent().send_input("hello")
 
 
+# ── MCP signal tool calls ────────────────────────────────
+
+
+class TestMCPSignalParsing:
+    def _agent(self):
+        return CodexAgent()
+
+    def test_mcp_signal_done_emits_done_marker(self):
+        """mcp_tool_call with server=nightshift-signals, tool=nightshift_done → @@DONE@@."""
+        agent = self._agent()
+        raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_done",
+            arguments={"summary": "Task complete"},
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@DONE@@"
+
+    def test_mcp_signal_checkpoint_emits_checkpoint_marker(self):
+        """mcp_tool_call with tool=nightshift_checkpoint → @@CHECKPOINT@@ description."""
+        agent = self._agent()
+        raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_checkpoint",
+            arguments={"description": "progress"},
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@CHECKPOINT@@ progress"
+
+    def test_mcp_signal_question_emits_question_and_waiting(self):
+        """mcp_tool_call with tool=nightshift_question → @@QUESTION@@ then @@WAITING@@."""
+        agent = self._agent()
+        raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_question",
+            arguments={"question": "What branch?"},
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@QUESTION@@ What branch?"
+        # Drain the extra @@WAITING@@ event
+        extras = list(agent._drain_extra())
+        assert len(extras) == 1
+        assert extras[0].content == "@@WAITING@@"
+
+    def test_non_signal_mcp_tool_parsed_as_system(self):
+        """mcp_tool_call with a different server is parsed as SYSTEM."""
+        agent = self._agent()
+        raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="other-server", tool="some_tool",
+            arguments={},
+        )
+        ev = agent._parse(raw)
+        assert ev is not None
+        assert ev.type == AgentEventType.SYSTEM
+        assert "mcp_tool_call" in ev.content
+
+
 # ── Registry ─────────────────────────────────────────────
 
 

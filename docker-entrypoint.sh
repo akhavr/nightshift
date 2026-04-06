@@ -69,6 +69,8 @@ CODEXCFG
         # OpenAI native: just export the key, no config.toml needed
         export OPENAI_API_KEY="$CODEX_KEY"
     fi
+    # Register MCP signal server so Codex can call nightshift_done/checkpoint/question
+    codex mcp add nightshift-signals -- python3 /opt/nightshift/nightshift-mcp-server.py
 fi
 
 # Note: litellm proxy removed - agents use LLM_*/ANTHROPIC_* env vars directly

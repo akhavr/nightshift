@@ -12,7 +12,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from typing import Iterator
+
 from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
+from core.constants import MCP_SIGNAL_SERVER
 from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
@@ -45,6 +48,14 @@ class CodexAgent(HeadlessAgentBase):
         extra_args: list[str] | None = None,
     ):
         super().__init__(command, stall_timeout_s, extra_args)
+        self._extra_events: list[AgentEvent] = []
+
+    def _before_stream(self) -> None:
+        self._extra_events.clear()
+
+    def _drain_extra(self) -> Iterator[AgentEvent]:
+        while self._extra_events:
+            yield self._extra_events.pop(0)
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         if self._session_id:
@@ -189,4 +200,49 @@ class CodexAgent(HeadlessAgentBase):
                 raw=raw,
             )
 
+        if item_type == "mcp_tool_call":
+            server = item.get("server", "")
+            if server == MCP_SIGNAL_SERVER:
+                return self._parse_mcp_signal(item, raw)
+            return AgentEvent(
+                type=AgentEventType.SYSTEM,
+                content=f"item:mcp_tool_call:{server}",
+                raw=raw,
+            )
+
         return AgentEvent(type=AgentEventType.SYSTEM, content=f"item:{item_type}", raw=raw)
+
+    def _parse_mcp_signal(self, item: dict, raw: str) -> AgentEvent:
+        """Parse a nightshift-signals MCP tool call into a marker event."""
+        tool = item.get("tool", "")
+        args = item.get("arguments", {})
+        if not isinstance(args, dict):
+            args = {}
+
+        if tool == "nightshift_done":
+            return AgentEvent(type=AgentEventType.TEXT, content="@@DONE@@", raw=raw)
+
+        if tool == "nightshift_checkpoint":
+            desc = args.get("description", "")
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@CHECKPOINT@@ {desc}",
+                raw=raw,
+            )
+
+        if tool == "nightshift_question":
+            question = args.get("question", "")
+            self._extra_events.append(
+                AgentEvent(type=AgentEventType.TEXT, content="@@WAITING@@", raw=raw)
+            )
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@QUESTION@@ {question}",
+                raw=raw,
+            )
+
+        return AgentEvent(
+            type=AgentEventType.SYSTEM,
+            content=f"mcp_signal:{tool}",
+            raw=raw,
+        )
