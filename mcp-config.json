@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nightshift-signals": {
+      "command": "python3",
+      "args": ["/opt/nightshift/nightshift-mcp-server.py"]
+    }
+  }
+}
