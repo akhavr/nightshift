@@ -2,6 +2,7 @@
 """CLI — reads WORKFLOW.md for config, delegates to launch.py and watcher."""
 
 import argparse
+import datetime
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -905,29 +907,50 @@ def cmd_export_training_data(a):
     print(f"  Approved: {approvals}  |  Revisions: {revisions}")
 
 
-def cmd_usage(a):
-    """Show token usage and cost from completed sessions."""
-    usage_file = repo_root() / ".nightshift" / USAGE_LOG_FILENAME
-    if not usage_file.exists():
-        print("No usage data found. Sessions must complete before usage is recorded.")
-        return
+def _parse_date(s):
+    """Parse a YYYY-MM-DD string into a datetime.date."""
+    return datetime.date.fromisoformat(s)
 
+
+def _entry_date(entry):
+    """Extract a datetime.date from an entry's completed_at or started_at."""
+    for field in ("completed_at", "started_at"):
+        val = entry.get(field)
+        if not val:
+            continue
+        try:
+            return datetime.date.fromisoformat(val[:10])
+        except (ValueError, TypeError) as e:
+            logging.debug("Cannot parse date from %s=%r: %s", field, val, e)
+    return None
+
+
+def _load_usage_entries(usage_file):
+    """Read JSONL file and return list of dicts. Warns on malformed lines."""
     entries = []
     for line in usage_file.read_text().strip().splitlines():
         try:
             entries.append(json.loads(line))
         except json.JSONDecodeError as e:
             print(f"Warning: skipping malformed line: {e}", file=sys.stderr)
+    return entries
 
-    if not entries:
-        print("No usage entries found.")
-        return
 
-    # Filter by issue_id if provided
-    if hasattr(a, "issue_id") and a.issue_id:
-        entries = [e for e in entries if a.issue_id in e.get("issue_id", "")]
+def _filter_entries(entries, issue_id=None, since=None, until=None):
+    """Filter entries by issue_id prefix and date range."""
+    if issue_id:
+        entries = [e for e in entries if issue_id in e.get("issue_id", "")]
+    if since:
+        since_d = _parse_date(since)
+        entries = [e for e in entries if (_entry_date(e) or datetime.date.min) >= since_d]
+    if until:
+        until_d = _parse_date(until)
+        entries = [e for e in entries if (_entry_date(e) or datetime.date.max) <= until_d]
+    return entries
 
-    # Print individual entries
+
+def _print_entries(entries):
+    """Print the per-entry table and totals."""
     total_input = 0
     total_output = 0
     total_cost = 0.0
@@ -944,12 +967,109 @@ def cmd_usage(a):
         in_k = format_token_count(inp)
         out_k = format_token_count(out)
         print(f"  {sid:<14} {step:<8} {in_k:>6} in / {out_k:>6} out  ${cost:.2f}  ({model})")
-
-    # Print totals
     print(f"\n  {'TOTAL':<14} {'':8} "
           f"{format_token_count(total_input):>6} in / {format_token_count(total_output):>6} out  "
           f"${total_cost:.2f}")
     print(f"  {len(entries)} session(s)")
+
+
+def _print_daily_summary(entries):
+    """Group entries by date, print per-day subtotals and grand total."""
+    by_day = defaultdict(list)
+    for e in entries:
+        d = _entry_date(e)
+        by_day[d or datetime.date.min].append(e)
+    grand_in = grand_out = 0
+    grand_cost = 0.0
+    grand_count = 0
+    for day in sorted(by_day):
+        day_entries = by_day[day]
+        day_in = sum(e.get("input_tokens", 0) for e in day_entries)
+        day_out = sum(e.get("output_tokens", 0) for e in day_entries)
+        day_cost = sum(e.get("cost_usd", 0.0) for e in day_entries)
+        grand_in += day_in
+        grand_out += day_out
+        grand_cost += day_cost
+        grand_count += len(day_entries)
+        label = str(day) if day != datetime.date.min else "unknown"
+        print(f"  {label}  {len(day_entries)} session(s)  "
+              f"{format_token_count(day_in):>6} in / {format_token_count(day_out):>6} out  "
+              f"${day_cost:.2f}")
+    print(f"\n  {'TOTAL':<14} {grand_count} session(s)  "
+          f"{format_token_count(grand_in):>6} in / {format_token_count(grand_out):>6} out  "
+          f"${grand_cost:.2f}")
+
+
+def _all_projects_src_dir():
+    """Return the ~/src directory path for cross-project scanning."""
+    return Path.home() / "src"
+
+
+def _cmd_usage_all_projects(since, until, daily):
+    """Scan ~/src/*/.nightshift/usage.jsonl, aggregate by project."""
+    src_dir = _all_projects_src_dir()
+    all_entries = []
+    project_data = []
+    for usage_file in sorted(src_dir.glob("*/.nightshift/" + USAGE_LOG_FILENAME)):
+        project_name = usage_file.parent.parent.name
+        entries = _load_usage_entries(usage_file)
+        entries = _filter_entries(entries, since=since, until=until)
+        if not entries:
+            continue
+        all_entries.extend(entries)
+        total_in = sum(e.get("input_tokens", 0) for e in entries)
+        total_out = sum(e.get("output_tokens", 0) for e in entries)
+        total_cost = sum(e.get("cost_usd", 0.0) for e in entries)
+        project_data.append((project_name, len(entries), total_in, total_out, total_cost))
+    if not all_entries:
+        print("No matching usage entries.")
+        return
+    if daily:
+        _print_daily_summary(all_entries)
+        return
+    for name, count, inp, out, cost in project_data:
+        print(f"  {name:<20} {count} session(s)  "
+              f"{format_token_count(inp):>6} in / {format_token_count(out):>6} out  "
+              f"${cost:.2f}")
+    grand_in = sum(p[2] for p in project_data)
+    grand_out = sum(p[3] for p in project_data)
+    grand_cost = sum(p[4] for p in project_data)
+    print(f"\n  {'GRAND TOTAL':<20} {len(all_entries)} session(s)  "
+          f"{format_token_count(grand_in):>6} in / {format_token_count(grand_out):>6} out  "
+          f"${grand_cost:.2f}")
+
+
+def cmd_usage(a):
+    """Show token usage and cost from completed sessions."""
+    since = getattr(a, "since", None)
+    until = getattr(a, "until", None)
+    daily = getattr(a, "daily", False)
+    all_projects = getattr(a, "all_projects", False)
+
+    if all_projects:
+        _cmd_usage_all_projects(since, until, daily)
+        return
+
+    usage_file = repo_root() / ".nightshift" / USAGE_LOG_FILENAME
+    if not usage_file.exists():
+        print("No usage data found. Sessions must complete before usage is recorded.")
+        return
+
+    entries = _load_usage_entries(usage_file)
+    if not entries:
+        print("No usage entries found.")
+        return
+
+    issue_id = getattr(a, "issue_id", None)
+    entries = _filter_entries(entries, issue_id=issue_id, since=since, until=until)
+    if not entries:
+        print("No matching usage entries.")
+        return
+
+    if daily:
+        _print_daily_summary(entries)
+    else:
+        _print_entries(entries)
 
 
 def _register_session_commands(s):
@@ -1047,6 +1167,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sp = s.add_parser("usage", help="Show token usage and cost from completed sessions")
     sp.add_argument("issue_id", nargs="?", default=None,
                     help="Filter by issue ID (prefix match)")
+    sp.add_argument("--since", default=None,
+                    help="Only show entries on or after this date (YYYY-MM-DD)")
+    sp.add_argument("--until", default=None,
+                    help="Only show entries on or before this date (YYYY-MM-DD)")
+    sp.add_argument("--daily", action="store_true", default=False,
+                    help="Group entries by date with per-day subtotals")
+    sp.add_argument("--all-projects", action="store_true", default=False,
+                    help="Scan ~/src/*/.nightshift/usage.jsonl and aggregate by project")
     sp.set_defaults(func=cmd_usage)
 
     sp = s.add_parser("export-training-data",
