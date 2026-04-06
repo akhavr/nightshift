@@ -195,6 +195,57 @@ fi
 """
 
 
+# Script that tests the codex mcp registration block from docker-entrypoint.sh.
+_CODEX_MCP_SCRIPT = """\
+#!/bin/sh
+MCP_REGISTERED=""
+if [ "$AGENT_KIND" = "codex" ]; then
+    codex() {
+        if [ "$1" = "mcp" ] && [ "$2" = "add" ]; then
+            echo "MCP_ADD: $3 $4 $5 $6 $7"
+            return 0
+        fi
+    }
+    codex mcp add nightshift-signals -- python3 /opt/nightshift/nightshift-mcp-server.py
+fi
+"""
+
+
+class TestCodexMCPRegistration:
+
+    def test_codex_mcp_registration(self, tmp_path):
+        """When AGENT_KIND=codex, docker-entrypoint.sh runs codex mcp add nightshift-signals."""
+        script = tmp_path / "mcp_test.sh"
+        script.write_text(_CODEX_MCP_SCRIPT)
+        script.chmod(0o755)
+
+        env = {"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+               "AGENT_KIND": "codex"}
+        result = subprocess.run(
+            ["/bin/sh", str(script)], env=env,
+            capture_output=True, text=True, timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "MCP_ADD: nightshift-signals" in result.stdout
+
+    def test_codex_mcp_not_registered_for_other_agents(self, tmp_path):
+        """When AGENT_KIND != codex, codex mcp add is not run."""
+        script = tmp_path / "mcp_test.sh"
+        script.write_text(_CODEX_MCP_SCRIPT)
+        script.chmod(0o755)
+
+        env = {"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+               "AGENT_KIND": "claude-code"}
+        result = subprocess.run(
+            ["/bin/sh", str(script)], env=env,
+            capture_output=True, text=True, timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "MCP_ADD" not in result.stdout
+
+
 class TestCodexAuthCopy:
 
     def test_codex_auth_copied_from_mount(self, tmp_path):
