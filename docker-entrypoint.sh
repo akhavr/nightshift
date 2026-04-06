@@ -6,6 +6,10 @@ if [ -d /claude-auth ]; then
     cp /claude-auth/settings.json "$HOME/.claude/" 2>/dev/null || true
     cp /claude-auth/settings.local.json "$HOME/.claude/" 2>/dev/null || true
     cp /claude-auth/.credentials.json "$HOME/.claude/" 2>/dev/null || true
+    # Copy plugins so Claude Code can discover installed skills (e.g. caveman)
+    if [ -d /claude-auth/plugins ]; then
+        cp -r /claude-auth/plugins "$HOME/.claude/plugins"
+    fi
 fi
 
 # Copy Codex login credentials from read-only mount to writable HOME.
