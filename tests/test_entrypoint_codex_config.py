@@ -257,3 +257,68 @@ class TestCodexAuthCopy:
         assert result.returncode == 0
         assert (fake_home / ".codex" / "auth.json").exists()
         assert not (fake_home / ".codex" / "config.toml").exists()
+
+
+# Script that tests the plugins copy block from docker-entrypoint.sh.
+_PLUGINS_COPY_SCRIPT = """\
+#!/bin/sh
+if [ -d /claude-auth ]; then
+    mkdir -p "$HOME/.claude"
+    cp /claude-auth/settings.json "$HOME/.claude/" 2>/dev/null || true
+    cp /claude-auth/settings.local.json "$HOME/.claude/" 2>/dev/null || true
+    cp /claude-auth/.credentials.json "$HOME/.claude/" 2>/dev/null || true
+    if [ -d /claude-auth/plugins ]; then
+        cp -r /claude-auth/plugins "$HOME/.claude/plugins"
+    fi
+fi
+"""
+
+
+class TestPluginsCopy:
+
+    def test_entrypoint_copies_plugins_dir(self, tmp_path):
+        """When /claude-auth/plugins/ exists, it is recursively copied to $HOME/.claude/plugins/."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        claude_auth = tmp_path / "claude-auth"
+        claude_auth.mkdir()
+        # Create a plugin with nested structure
+        plugin_dir = claude_auth / "plugins" / "caveman"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "plugin.json").write_text('{"name": "caveman"}')
+        (plugin_dir / "index.js").write_text("module.exports = {}")
+
+        script_text = _PLUGINS_COPY_SCRIPT.replace("/claude-auth", str(claude_auth))
+        script = tmp_path / "copy_plugins.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {"HOME": str(fake_home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        result = subprocess.run(["/bin/sh", str(script)], env=env, capture_output=True, text=True, timeout=10)
+
+        assert result.returncode == 0
+        dest = fake_home / ".claude" / "plugins"
+        assert dest.is_dir()
+        assert (dest / "caveman" / "plugin.json").exists()
+        assert "caveman" in (dest / "caveman" / "plugin.json").read_text()
+        assert (dest / "caveman" / "index.js").exists()
+
+    def test_entrypoint_no_plugins_dir(self, tmp_path):
+        """When /claude-auth/plugins/ does not exist, no error and $HOME/.claude/plugins/ not created."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        claude_auth = tmp_path / "claude-auth"
+        claude_auth.mkdir()
+        # No plugins dir — only credential files
+        (claude_auth / "settings.json").write_text("{}")
+
+        script_text = _PLUGINS_COPY_SCRIPT.replace("/claude-auth", str(claude_auth))
+        script = tmp_path / "copy_plugins.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {"HOME": str(fake_home), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        result = subprocess.run(["/bin/sh", str(script)], env=env, capture_output=True, text=True, timeout=10)
+
+        assert result.returncode == 0
+        assert not (fake_home / ".claude" / "plugins").exists()
