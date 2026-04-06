@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
+from core.constants import MCP_CONFIG_CONTAINER_PATH, MCP_SIGNAL_SERVER_PREFIX
 from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         # Resume previous session to preserve conversation context (OQ-1)
         if self._session_id:
             cmd += ["--resume", self._session_id]
+        if Path(MCP_CONFIG_CONTAINER_PATH).exists():
+            cmd += ["--mcp-config", MCP_CONFIG_CONTAINER_PATH]
         cmd += [*self.extra_args, "-p", prompt]
 
         self._process = subprocess.Popen(
@@ -184,9 +187,35 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                         type=AgentEventType.TEXT, content=text, raw=raw)
             elif pt == "tool_use":
                 name = part.get("name", "?")
-                inp = str(part.get("input", ""))[:TOOL_INPUT_PREVIEW_LEN]
-                yield AgentEvent(
-                    type=AgentEventType.TOOL_CALL,
-                    content=f"{name}: {inp}", raw=raw)
+                if name.startswith(MCP_SIGNAL_SERVER_PREFIX):
+                    signal = name[len(MCP_SIGNAL_SERVER_PREFIX):]
+                    inp_data = part.get("input", {})
+                    if signal == "nightshift_done":
+                        yield AgentEvent(
+                            type=AgentEventType.TEXT,
+                            content="@@DONE@@", raw=raw)
+                    elif signal == "nightshift_checkpoint":
+                        desc = inp_data.get("description", "") if isinstance(inp_data, dict) else ""
+                        yield AgentEvent(
+                            type=AgentEventType.TEXT,
+                            content=f"@@CHECKPOINT@@ {desc}", raw=raw)
+                    elif signal == "nightshift_question":
+                        question = inp_data.get("question", "") if isinstance(inp_data, dict) else ""
+                        yield AgentEvent(
+                            type=AgentEventType.TEXT,
+                            content=f"@@QUESTION@@ {question}", raw=raw)
+                        yield AgentEvent(
+                            type=AgentEventType.TEXT,
+                            content="@@WAITING@@", raw=raw)
+                    else:
+                        inp = str(inp_data)[:TOOL_INPUT_PREVIEW_LEN]
+                        yield AgentEvent(
+                            type=AgentEventType.TOOL_CALL,
+                            content=f"{name}: {inp}", raw=raw)
+                else:
+                    inp = str(part.get("input", ""))[:TOOL_INPUT_PREVIEW_LEN]
+                    yield AgentEvent(
+                        type=AgentEventType.TOOL_CALL,
+                        content=f"{name}: {inp}", raw=raw)
             elif pt == "thinking":
                 pass  # internal reasoning, not surfaced
