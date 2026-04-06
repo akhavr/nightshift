@@ -22,6 +22,8 @@ COPY entrypoint.py /opt/nightshift/
 COPY overflow-proxy.py /opt/nightshift/
 COPY openhands-launcher.py /opt/nightshift/
 COPY docker-entrypoint.sh /opt/nightshift/
+COPY nightshift-mcp-server.py /opt/nightshift/
+COPY mcp-config.json /opt/nightshift/
 
 RUN useradd -m -s /bin/bash agent && \
     chmod +x /opt/nightshift/docker-entrypoint.sh
