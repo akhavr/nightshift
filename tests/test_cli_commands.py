@@ -799,7 +799,7 @@ def test_cmd_usage_no_file(tmp_path, capsys):
     repo = tmp_path / "repo"
     repo.mkdir()
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_usage(_make_args(issue_id=None))
+        cmd_usage(_make_args(issue_id=None, since=None, until=None, daily=False, all_projects=False))
     out = capsys.readouterr().out
     assert "No usage data found" in out
 
@@ -821,7 +821,7 @@ def test_cmd_usage_basic_output(tmp_path, capsys):
         "\n".join(json.dumps(e) for e in entries) + "\n")
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_usage(_make_args(issue_id=None))
+        cmd_usage(_make_args(issue_id=None, since=None, until=None, daily=False, all_projects=False))
     out = capsys.readouterr().out
     assert "abc123" in out
     assert "def456" in out
@@ -846,7 +846,7 @@ def test_cmd_usage_filter_by_issue_id(tmp_path, capsys):
         "\n".join(json.dumps(e) for e in entries) + "\n")
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_usage(_make_args(issue_id="abc"))
+        cmd_usage(_make_args(issue_id="abc", since=None, until=None, daily=False, all_projects=False))
     out = capsys.readouterr().out
     assert "s1" in out
     assert "s2" not in out
@@ -862,7 +862,7 @@ def test_cmd_usage_malformed_lines(tmp_path, capsys):
     (ns / "usage.jsonl").write_text(content)
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_usage(_make_args(issue_id=None))
+        cmd_usage(_make_args(issue_id=None, since=None, until=None, daily=False, all_projects=False))
     captured = capsys.readouterr()
     assert "Warning: skipping malformed line" in captured.err
     assert "s1" in captured.out
@@ -877,9 +877,190 @@ def test_cmd_usage_empty_file(tmp_path, capsys):
     (ns / "usage.jsonl").write_text("")
 
     with patch("host.cli.repo_root", return_value=repo):
-        cmd_usage(_make_args(issue_id=None))
+        cmd_usage(_make_args(issue_id=None, since=None, until=None, daily=False, all_projects=False))
     out = capsys.readouterr().out
     assert "No usage entries found" in out
+
+
+def test_cmd_usage_since_filter(tmp_path, capsys):
+    """Entries before --since date are excluded from output."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    entries = [
+        {"session_id": "old1", "issue_id": "i1", "input_tokens": 1000,
+         "output_tokens": 500, "cost_usd": 0.05, "model": "m", "step": "coder",
+         "completed_at": "2025-01-01T10:00:00"},
+        {"session_id": "new1", "issue_id": "i2", "input_tokens": 2000,
+         "output_tokens": 800, "cost_usd": 0.10, "model": "m", "step": "coder",
+         "completed_at": "2025-06-15T10:00:00"},
+    ]
+    (ns / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None, since="2025-03-01",
+                             until=None, daily=False, all_projects=False))
+    out = capsys.readouterr().out
+    assert "old1" not in out
+    assert "new1" in out
+    assert "1 session(s)" in out
+
+
+def test_cmd_usage_until_filter(tmp_path, capsys):
+    """Entries after --until date are excluded from output."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    entries = [
+        {"session_id": "old1", "issue_id": "i1", "input_tokens": 1000,
+         "output_tokens": 500, "cost_usd": 0.05, "model": "m", "step": "coder",
+         "completed_at": "2025-01-01T10:00:00"},
+        {"session_id": "new1", "issue_id": "i2", "input_tokens": 2000,
+         "output_tokens": 800, "cost_usd": 0.10, "model": "m", "step": "coder",
+         "completed_at": "2025-06-15T10:00:00"},
+    ]
+    (ns / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None, since=None,
+                             until="2025-03-01", daily=False, all_projects=False))
+    out = capsys.readouterr().out
+    assert "old1" in out
+    assert "new1" not in out
+    assert "1 session(s)" in out
+
+
+def test_cmd_usage_since_and_until(tmp_path, capsys):
+    """Only entries within the date range are shown."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    entries = [
+        {"session_id": "s1", "issue_id": "i1", "input_tokens": 1000,
+         "output_tokens": 500, "cost_usd": 0.05, "model": "m", "step": "coder",
+         "completed_at": "2025-01-01T10:00:00"},
+        {"session_id": "s2", "issue_id": "i2", "input_tokens": 2000,
+         "output_tokens": 800, "cost_usd": 0.10, "model": "m", "step": "coder",
+         "completed_at": "2025-03-15T10:00:00"},
+        {"session_id": "s3", "issue_id": "i3", "input_tokens": 3000,
+         "output_tokens": 1200, "cost_usd": 0.20, "model": "m", "step": "coder",
+         "completed_at": "2025-06-15T10:00:00"},
+    ]
+    (ns / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None, since="2025-02-01",
+                             until="2025-05-01", daily=False, all_projects=False))
+    out = capsys.readouterr().out
+    assert "s1" not in out
+    assert "s2" in out
+    assert "s3" not in out
+    assert "1 session(s)" in out
+
+
+def test_cmd_usage_daily_summary(tmp_path, capsys):
+    """--daily groups entries by date with per-day subtotals."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    entries = [
+        {"session_id": "s1", "issue_id": "i1", "input_tokens": 1000,
+         "output_tokens": 500, "cost_usd": 0.05, "model": "m", "step": "coder",
+         "completed_at": "2025-03-10T08:00:00"},
+        {"session_id": "s2", "issue_id": "i2", "input_tokens": 2000,
+         "output_tokens": 800, "cost_usd": 0.10, "model": "m", "step": "coder",
+         "completed_at": "2025-03-10T14:00:00"},
+        {"session_id": "s3", "issue_id": "i3", "input_tokens": 3000,
+         "output_tokens": 1200, "cost_usd": 0.20, "model": "m", "step": "coder",
+         "completed_at": "2025-03-11T09:00:00"},
+    ]
+    (ns / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None, since=None, until=None,
+                             daily=True, all_projects=False))
+    out = capsys.readouterr().out
+    assert "2025-03-10" in out
+    assert "2025-03-11" in out
+    assert "2 session(s)" in out  # day 1
+    assert "1 session(s)" in out  # day 2 (also matches total but that's fine)
+    assert "TOTAL" in out
+
+
+def test_cmd_usage_all_projects(tmp_path, capsys):
+    """--all-projects scans ~/src/*/.nightshift/usage.jsonl and aggregates."""
+    src_dir = tmp_path / "src"
+    # Project A
+    pa = src_dir / "project-a" / ".nightshift"
+    pa.mkdir(parents=True)
+    (pa / "usage.jsonl").write_text(json.dumps(
+        {"session_id": "a1", "issue_id": "i1", "input_tokens": 1000,
+         "output_tokens": 500, "cost_usd": 0.05, "model": "m", "step": "coder",
+         "completed_at": "2025-03-10T10:00:00"}) + "\n")
+    # Project B
+    pb = src_dir / "project-b" / ".nightshift"
+    pb.mkdir(parents=True)
+    (pb / "usage.jsonl").write_text(json.dumps(
+        {"session_id": "b1", "issue_id": "i2", "input_tokens": 2000,
+         "output_tokens": 800, "cost_usd": 0.10, "model": "m", "step": "coder",
+         "completed_at": "2025-03-11T10:00:00"}) + "\n")
+
+    with patch("host.cli._all_projects_src_dir", return_value=src_dir):
+        cmd_usage(_make_args(issue_id=None, since=None, until=None,
+                             daily=False, all_projects=True))
+    out = capsys.readouterr().out
+    assert "project-a" in out
+    assert "project-b" in out
+    assert "GRAND TOTAL" in out
+
+
+def test_cmd_usage_all_projects_with_date_filter(tmp_path, capsys):
+    """--all-projects combined with --since/--until filters correctly."""
+    src_dir = tmp_path / "src"
+    pa = src_dir / "project-a" / ".nightshift"
+    pa.mkdir(parents=True)
+    entries = [
+        {"session_id": "a1", "issue_id": "i1", "input_tokens": 1000,
+         "output_tokens": 500, "cost_usd": 0.05, "model": "m", "step": "coder",
+         "completed_at": "2025-01-01T10:00:00"},
+        {"session_id": "a2", "issue_id": "i2", "input_tokens": 2000,
+         "output_tokens": 800, "cost_usd": 0.10, "model": "m", "step": "coder",
+         "completed_at": "2025-06-01T10:00:00"},
+    ]
+    (pa / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli._all_projects_src_dir", return_value=src_dir):
+        cmd_usage(_make_args(issue_id=None, since="2025-03-01", until=None,
+                             daily=False, all_projects=True))
+    out = capsys.readouterr().out
+    assert "project-a" in out
+    assert "a2" not in out  # individual entries not shown in all-projects mode
+    assert "1 session(s)" in out
+
+
+def test_cmd_usage_no_matching_entries(tmp_path, capsys):
+    """Prints message when filters exclude everything."""
+    repo = tmp_path / "repo"
+    ns = repo / ".nightshift"
+    ns.mkdir(parents=True)
+    entries = [
+        {"session_id": "s1", "issue_id": "i1", "input_tokens": 1000,
+         "output_tokens": 500, "cost_usd": 0.05, "model": "m", "step": "coder",
+         "completed_at": "2025-01-01T10:00:00"},
+    ]
+    (ns / "usage.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in entries) + "\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_usage(_make_args(issue_id=None, since="2025-06-01", until=None,
+                             daily=False, all_projects=False))
+    out = capsys.readouterr().out
+    assert "No matching usage entries." in out
 
 
 # ── cmd_accept cost summary ────────────────────────────────────────────────
