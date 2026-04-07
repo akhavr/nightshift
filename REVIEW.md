@@ -75,17 +75,10 @@ You are a strict code reviewer for the nightshift project (autonomous coding age
 
 After your review, output your verdict:
 
-- If issues found: list each issue with file path and line, then output:
-  @@LOG@@ Review complete — issues found
-  @@CHECKPOINT@@ Code review with findings
-  Then output the `@nightshift revise` command with your detailed findings as a single message.
-  @@DONE@@
+- If issues found: list each issue with file path and line, then output
+  the `@nightshift revise` command with your detailed findings as a single message.
 
-- If all clean: confirm what you checked, then output:
-  @@LOG@@ Review complete — approved
-  @@CHECKPOINT@@ Code review passed
-  Then output `@nightshift approve`.
-  @@DONE@@
+- If all clean: confirm what you checked, then output `@nightshift approve`.
 
 ## Review Stance
 
