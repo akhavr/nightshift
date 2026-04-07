@@ -1,5 +1,5 @@
 ---
-template_version: 1
+template_version: 2
 agent:
   kind: claude-code
   max_turns: 50
@@ -59,17 +59,10 @@ This is continuation attempt {{ attempt }}. Review previous work and continue.
 
 RULES:
 1. Work on the current branch. The repo is already checked out.
-2. For every significant thought: @@LOG@@ <your thought>
-3. After meaningful work: @@CHECKPOINT@@ <description>
-4. If you have a blocking question:
-   a. Include all relevant context IN the question itself (code snippets,
-      file paths, what you did, options you see) — the human reads ONLY
-      the question text, they cannot see your other output.
-   b. Output: @@QUESTION@@ <your self-contained question>
-   c. Then output: @@WAITING@@
-   d. The answer will appear as your next input.
-5. When done: @@DONE@@
-6. Commit frequently. Write tests where appropriate.
+2. If you have a blocking question, include all relevant context IN the question
+   itself (code snippets, file paths, what you did, options you see) — the human
+   reads ONLY the question text, they cannot see your other output.
+3. Commit frequently. Write tests where appropriate.
 
 For bug fixes, follow this protocol:
 1. Reproduce the bug — run the failing scenario and confirm the symptom.
