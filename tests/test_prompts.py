@@ -71,15 +71,14 @@ class TestBuildInitialPrompt:
         result = build_initial_prompt("Fix widget", "Widget is broken", "")
         assert "Fix widget" in result
         assert "Widget is broken" in result
-        assert "@@LOG@@" in result
-        assert "@@CHECKPOINT@@" in result
-        assert "@@DONE@@" in result
 
-    def test_custom_markers(self):
+    def test_markers_param_accepted_but_unused(self):
+        """markers parameter is kept for backward compat but no longer used."""
         markers = {"log": "LOG", "checkpoint": "CP", "question": "Q", "waiting": "W", "done": "D"}
         result = build_initial_prompt("t", "b", "", markers=markers)
-        assert "LOG" in result
-        assert "CP" in result
+        # Markers should NOT appear in the output anymore
+        assert "@@LOG@@" not in result
+        assert "@@DONE@@" not in result
 
 
 class TestBuildResumePrompt:
@@ -110,6 +109,35 @@ class TestBuildResumePrompt:
 
         result = build_resume_prompt("t", "b", "", sm, checkpoint_summary="Key decisions here")
         assert "Key decisions here" in result
+
+
+class TestNoAtMarkers:
+    """Phase 5: @@MARKER@@ instructions must not appear in rendered prompts."""
+
+    AT_MARKERS = ["@@DONE@@", "@@CHECKPOINT@@", "@@QUESTION@@", "@@WAITING@@", "@@LOG@@"]
+
+    def _render_workflow_prompt(self, agent_kind="claude-code"):
+        issue = make_test_issue(title="Fix bug", body="It's broken")
+        template = Path(__file__).parent.parent / "templates" / "WORKFLOW.md"
+        content = template.read_text()
+        parts = content.split("---", 2)
+        prompt_body = parts[2] if len(parts) >= 3 else content
+        return render_template(prompt_body, issue, agent_kind=agent_kind)
+
+    def test_prompt_does_not_contain_at_markers(self):
+        """Rendered WORKFLOW.md prompt for all agent kinds must NOT contain @@MARKER@@ instructions."""
+        for agent_kind in ("claude-code", "openhands", "codex"):
+            result = self._render_workflow_prompt(agent_kind=agent_kind)
+            for marker in self.AT_MARKERS:
+                assert marker not in result, (
+                    f"Found {marker} in rendered prompt for agent_kind={agent_kind}"
+                )
+
+    def test_fallback_prompt_does_not_contain_at_markers(self):
+        """build_initial_prompt() fallback must NOT contain @@MARKER@@ instructions."""
+        result = build_initial_prompt("Fix widget", "Widget is broken", "")
+        for marker in self.AT_MARKERS:
+            assert marker not in result, f"Found {marker} in fallback prompt"
 
 
 class TestSignalInstructions:

@@ -85,6 +85,15 @@ def test_marker_parse_done():
     assert m.type == MarkerType.DONE
 
 
+def test_parse_marker_still_works_for_legacy():
+    """Phase 5: parse_marker() must remain functional for backward compat with old sessions."""
+    assert parse_marker("@@DONE@@").type == MarkerType.DONE
+    assert parse_marker("@@CHECKPOINT@@ step1").type == MarkerType.CHECKPOINT
+    assert parse_marker("@@QUESTION@@ what?").type == MarkerType.QUESTION
+    assert parse_marker("@@LOG@@ thinking").type == MarkerType.LOG
+    assert parse_marker("@@WAITING@@").type == MarkerType.WAITING
+
+
 def test_marker_not_found():
     assert parse_marker("Just normal text") is None
     assert parse_marker("") is None

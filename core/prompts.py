@@ -54,9 +54,11 @@ def build_initial_prompt(
     issue_title: str, issue_body: str, related_context: str,
     markers: dict[str, str] | None = None,
 ) -> str:
-    """Fallback prompt when WORKFLOW.md has no prompt template."""
-    m = markers or {"log": "@@LOG@@", "checkpoint": "@@CHECKPOINT@@",
-                    "question": "@@QUESTION@@", "waiting": "@@WAITING@@", "done": "@@DONE@@"}
+    """Fallback prompt when WORKFLOW.md has no prompt template.
+
+    The markers parameter is kept for backward compatibility but no longer
+    used — signal detection is handled by MCP tools and file signals.
+    """
     return (
         f"You are working on the following issue:\n\n"
         f"**Title:** {issue_title}\n"
@@ -64,17 +66,11 @@ def build_initial_prompt(
         f"**Related previous issues:**\n{related_context}\n\n"
         f"RULES:\n"
         f"1. Work on the current branch. The repo is already checked out.\n"
-        f"2. For every significant thought: {m['log']} <your thought>\n"
-        f"3. After meaningful work: {m['checkpoint']} <description>\n"
-        f"4. If you have a blocking question:\n"
-        f"   a. Include all relevant context IN the question itself (code snippets,\n"
-        f"      file paths, what you did, options you see) — the human reads ONLY\n"
-        f"      the question text, they cannot see your other output.\n"
-        f"   b. Output: {m['question']} <your self-contained question>\n"
-        f"   c. Then output: {m['waiting']}\n"
-        f"   d. The answer will appear as your next input.\n"
-        f"5. When done: {m['done']}\n"
-        f"6. Commit frequently. Write tests where appropriate.\n\n"
+        f"2. If you have a blocking question, include all relevant context IN the\n"
+        f"   question itself (code snippets, file paths, what you did, options you\n"
+        f"   see) — the human reads ONLY the question text, they cannot see your\n"
+        f"   other output.\n"
+        f"3. Commit frequently. Write tests where appropriate.\n\n"
         f"Begin by reading the codebase, then plan your approach."
     )
 
