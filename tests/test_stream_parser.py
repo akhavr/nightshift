@@ -414,6 +414,48 @@ class TestAuthFailureDetection:
         assert ClaudeCodeAgent._is_auth_failure("") is False
 
 
+class TestAssistantAuthFailure:
+    """Auth failure via assistant event with error field."""
+
+    def test_assistant_authentication_failed_error_field(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "assistant",
+            "error": "authentication_failed",
+            "message": {
+                "content": [{"type": "text", "text": "Failed to authenticate. API Error: 401"}],
+            },
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert "401" in ev.content
+
+    def test_assistant_no_error_field_not_auth_failure(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": "Hello world"}],
+            },
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+
+    def test_assistant_authentication_failed_empty_content(self):
+        agent = make_agent()
+        line = json.dumps({
+            "type": "assistant",
+            "error": "authentication_failed",
+            "message": {"content": []},
+        })
+        ev = agent._parse(line)
+        assert ev is not None
+        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert ev.content == "authentication_failed"
+
+
 # ── MCP signal parsing ───────────────────────────────────
 
 def test_mcp_signal_done_emits_done_marker():

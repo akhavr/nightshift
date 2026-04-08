@@ -105,6 +105,16 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                               content="init", raw=raw)
 
         if t == "assistant":
+            if ev.get("error") == "authentication_failed":
+                msg = ev.get("message", {})
+                text = ""
+                if isinstance(msg, dict):
+                    for part in msg.get("content", []):
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            text = part.get("text", "")
+                            break
+                return AgentEvent(type=AgentEventType.AUTH_FAILURE,
+                                  content=text or "authentication_failed", raw=raw)
             msg = ev.get("message", {})
             content_parts = msg.get("content", []) if isinstance(msg, dict) else []
             events = list(self._parse_assistant_content(content_parts, raw))
