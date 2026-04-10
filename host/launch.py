@@ -44,14 +44,31 @@ def _resolve_names(issue_id: str, step: str, config):
 
 def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
                       step="coder"):
-    """Append a usage entry to .nightshift/usage.jsonl (survives session cleanup)."""
+    """Append a usage entry to .nightshift/usage.jsonl (survives session cleanup).
+
+    Deduplicates by session_id — skips if already logged.
+    """
     usage = state.get("usage", {})
     if not usage.get("input_tokens") and not usage.get("output_tokens"):
         return
     usage_file = repo / ".nightshift" / USAGE_LOG_FILENAME
     usage_file.parent.mkdir(parents=True, exist_ok=True)
+    session_id = state.get("branch", "").split("/")[-1] if state.get("branch") else ""
+
+    # Deduplicate: skip if session_id already logged
+    if session_id and usage_file.exists():
+        try:
+            for line in usage_file.read_text().splitlines():
+                if line.strip():
+                    existing = json.loads(line)
+                    if existing.get("session_id") == session_id:
+                        return
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: could not read usage log for dedup: {e}",
+                  file=sys.stderr)
+
     entry = {
-        "session_id": state.get("branch", "").split("/")[-1] if state.get("branch") else "",
+        "session_id": session_id,
         "issue_id": issue_id,
         "title": title,
         "agent_kind": agent_kind,
@@ -71,15 +88,17 @@ def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
         print(f"Warning: failed to append usage log: {e}", file=sys.stderr)
 
 
-def _post_container(session_dir, config, repo, issue_id):
-    """After container exits, post proof-of-work summary to the real tracker."""
+def _post_container(session_dir, config, repo, issue_id, step="coder"):
+    """After container exits, log usage and post proof-of-work summary.
+
+    Usage is logged for ALL sessions with usage data (any status/step).
+    Proof-of-work comment is only posted for coder sessions in waiting:review.
+    """
     state_file = session_dir / "state.json"
     if not state_file.exists():
         return
 
     state = json.loads(state_file.read_text())
-    if state.get("status") != "waiting:review":
-        return
 
     # Read issue title from dumped issue.json for usage log
     issue_title = ""
@@ -90,9 +109,13 @@ def _post_container(session_dir, config, repo, issue_id):
         except (json.JSONDecodeError, OSError) as e:
             print(f"Warning: could not read issue title: {e}", file=sys.stderr)
 
-    # Append usage log before posting (survives cleanup)
+    # Always log usage (survives cleanup), for any status/step
     _append_usage_log(repo, state, issue_id, title=issue_title,
-                      agent_kind=config.agent.kind)
+                      agent_kind=config.agent.kind, step=step)
+
+    # Proof-of-work comment only for coder sessions that reached waiting:review
+    if state.get("status") != "waiting:review" or step == "review":
+        return
 
     checkpoints = state.get("checkpoints", [])
     human_answers = state.get("human_answers", [])
@@ -198,8 +221,7 @@ def main():
         overflow=overflow, agent_kind=config.agent.kind,
     )
 
-    if not names["is_review"]:
-        _post_container(session_dir, config, repo, args.issue_id)
+    _post_container(session_dir, config, repo, args.issue_id, step=args.step)
 
     sys.exit(returncode)
 
