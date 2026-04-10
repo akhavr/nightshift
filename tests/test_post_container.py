@@ -23,6 +23,7 @@ def session_dir(tmp_path):
 def mock_config():
     config = MagicMock()
     config.workspace.base_branch = "main"
+    config.agent.kind = "claude-code"
     return config
 
 
@@ -129,3 +130,71 @@ def test_handles_tracker_error(session_dir, mock_config, tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "Failed to post review summary" in captured.err
+
+
+def _write_state_with_usage(session_dir, status="waiting:review", step="coder",
+                            usage=None):
+    """Helper to write state.json with usage data."""
+    state = {
+        "issue_id": "test-001",
+        "branch": "agent/test-001",
+        "status": status,
+        "step": 3,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "checkpoints": [],
+        "human_answers": [],
+        "usage": usage or {
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "cost_usd": 0.05,
+            "model": "claude-sonnet-4-20250514",
+        },
+    }
+    (session_dir / "state.json").write_text(json.dumps(state))
+
+
+def test_review_session_logs_usage(session_dir, mock_config, tmp_path):
+    """Usage entry with step=review is appended for review sessions."""
+    _write_state_with_usage(session_dir, status="waiting:review")
+
+    with patch("host.launch.get_tracker_with_fallback", return_value=MagicMock()), \
+         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
+        _post_container(session_dir, mock_config, tmp_path, "test-001", step="review")
+
+    usage_file = tmp_path / ".nightshift" / "usage.jsonl"
+    assert usage_file.exists()
+    entry = json.loads(usage_file.read_text().strip())
+    assert entry["step"] == "review"
+    assert entry["input_tokens"] == 1000
+    assert entry["cost_usd"] == 0.05
+
+
+def test_failed_session_logs_usage(session_dir, mock_config, tmp_path):
+    """Usage is logged for suspended:too-complex and suspended:auth-failure."""
+    for status in ("suspended:too-complex", "suspended:auth-failure"):
+        # Clean up usage file between iterations
+        usage_file = tmp_path / ".nightshift" / "usage.jsonl"
+        if usage_file.exists():
+            usage_file.unlink()
+
+        _write_state_with_usage(session_dir, status=status)
+
+        _post_container(session_dir, mock_config, tmp_path, "test-001")
+
+        assert usage_file.exists(), f"Usage not logged for {status}"
+        entry = json.loads(usage_file.read_text().strip())
+        assert entry["input_tokens"] == 1000
+
+
+def test_no_double_logging(session_dir, mock_config, tmp_path):
+    """Duplicate session_id is not appended twice."""
+    _write_state_with_usage(session_dir, status="waiting:review")
+
+    with patch("host.launch.get_tracker_with_fallback", return_value=MagicMock()), \
+         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
+        _post_container(session_dir, mock_config, tmp_path, "test-001")
+        _post_container(session_dir, mock_config, tmp_path, "test-001")
+
+    usage_file = tmp_path / ".nightshift" / "usage.jsonl"
+    lines = [l for l in usage_file.read_text().strip().split("\n") if l]
+    assert len(lines) == 1, f"Expected 1 entry, got {len(lines)}"
