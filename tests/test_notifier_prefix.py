@@ -3,7 +3,7 @@
 import os
 from unittest.mock import patch, MagicMock
 
-from adapters.notifiers._utils import project_prefix
+from adapters.notifiers._utils import project_prefix, redact_url
 
 
 class FakeTracker:
@@ -101,3 +101,45 @@ class TestLaunchProjectName:
         content = docker_cmd_py.read_text()
         assert "PROJECT_NAME" in content
         assert 'f"PROJECT_NAME={repo.name}"' in content
+
+
+class TestRedactUrl:
+    """Tests for redact_url() helper."""
+
+    def test_redacts_telegram_token(self):
+        token = "8367824483:AAEnnIQeRDv-F6V9NxUYAwzvdxsqXc4Ef5E"
+        exc = Exception(f"/bot{token}/sendMessage")
+        result = redact_url(exc)
+        assert token not in result
+        assert "/bot<REDACTED>/" in result
+
+    def test_redacts_query_params(self):
+        exc = Exception("url: https://example.com?secret=abc123&token=xyz")
+        result = redact_url(exc)
+        assert "secret=abc123" not in result
+        assert "token=xyz" not in result
+        assert "?<PARAMS>" in result
+
+    def test_redacts_both_token_and_params(self):
+        token = "123:ABCdef"
+        exc = Exception(f"/bot{token}/getUpdates?offset=10&timeout=30")
+        result = redact_url(exc)
+        assert token not in result
+        assert "/bot<REDACTED>/" in result
+        assert "?<PARAMS>" in result
+
+    def test_preserves_non_sensitive_parts(self):
+        exc = Exception("Connection refused: https://example.com/webhook")
+        result = redact_url(exc)
+        assert "Connection refused" in result
+        assert "example.com/webhook" in result
+
+    def test_handles_empty_exception(self):
+        exc = Exception("")
+        result = redact_url(exc)
+        assert result == ""
+
+    def test_handles_no_urls(self):
+        exc = Exception("Just a regular error message")
+        result = redact_url(exc)
+        assert result == "Just a regular error message"

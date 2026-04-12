@@ -53,8 +53,9 @@ class TestConstructor:
 
 
 class TestStart:
+    @patch("adapters.agents.codex._in_docker", return_value=False)
     @patch("adapters.agents.codex.subprocess.Popen")
-    def test_start_builds_exec_command(self, mock_popen):
+    def test_start_builds_exec_command(self, mock_popen, mock_in_docker):
         mock_proc = MagicMock()
         mock_proc.pid = 42
         mock_popen.return_value = mock_proc
@@ -71,8 +72,24 @@ class TestStart:
         assert "resume" not in cmd
         assert agent.pid == 42
 
+    @patch("adapters.agents.codex._in_docker", return_value=True)
     @patch("adapters.agents.codex.subprocess.Popen")
-    def test_start_resume_uses_thread_id(self, mock_popen):
+    def test_start_in_docker_uses_bypass_flag(self, mock_popen, mock_in_docker):
+        """In Docker, use --dangerously-bypass-approvals-and-sandbox instead of --full-auto."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_popen.return_value = mock_proc
+
+        agent = CodexAgent()
+        agent.start("do stuff", Path("/workspace"))
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--full-auto" not in cmd
+
+    @patch("adapters.agents.codex._in_docker", return_value=False)
+    @patch("adapters.agents.codex.subprocess.Popen")
+    def test_start_resume_uses_thread_id(self, mock_popen, mock_in_docker):
         mock_proc = MagicMock()
         mock_proc.pid = 99
         mock_popen.return_value = mock_proc
@@ -86,8 +103,9 @@ class TestStart:
         assert "019d-abc-123" in cmd
         assert "continue" in cmd
 
+    @patch("adapters.agents.codex._in_docker", return_value=False)
     @patch("adapters.agents.codex.subprocess.Popen")
-    def test_start_passes_extra_args(self, mock_popen):
+    def test_start_passes_extra_args(self, mock_popen, mock_in_docker):
         mock_proc = MagicMock()
         mock_proc.pid = 1
         mock_popen.return_value = mock_proc
