@@ -188,6 +188,70 @@ class TestPollTelegramAll:
 # route_message tests
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Secret redaction tests
+# ---------------------------------------------------------------------------
+
+class TestTgSecretRedaction:
+    def test_notify_failure_redacts_token(self, tmp_path, caplog):
+        import logging
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        token = w.telegram.token  # "test-token"
+        exc_msg = f"HTTPSConnectionPool(host='api.telegram.org'): Max retries with url: /bot{token}/sendMessage"
+        with patch("host.watcher.requests") as mock_req:
+            mock_req.post.side_effect = Exception(exc_msg)
+            with caplog.at_level(logging.WARNING):
+                w.telegram.notify("test")
+        assert len([r for r in caplog.records if "Telegram notify failed" in r.message]) == 1
+        log_msg = [r for r in caplog.records if "Telegram notify failed" in r.message][0].message
+        assert token not in log_msg
+        assert "/bot<REDACTED>/" in log_msg
+
+    def test_send_question_failure_redacts_token(self, tmp_path, caplog):
+        import logging
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        token = w.telegram.token
+        exc_msg = f"HTTPSConnectionPool: Max retries with url: /bot{token}/sendMessage"
+        with patch("host.watcher.requests") as mock_req:
+            mock_req.post.side_effect = Exception(exc_msg)
+            with caplog.at_level(logging.WARNING):
+                w.telegram.send_question("sid", "Q?", "short")
+        log_msg = [r for r in caplog.records if "Telegram send failed" in r.message][0].message
+        assert token not in log_msg
+        assert "/bot<REDACTED>/" in log_msg
+
+    def test_poll_failure_redacts_token_and_params(self, tmp_path, caplog):
+        import logging
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        token = w.telegram.token
+        exc_msg = f"HTTPSConnectionPool: Max retries with url: /bot{token}/getUpdates?offset=10&timeout=30"
+        with patch("host.watcher.requests") as mock_req:
+            mock_req.get.side_effect = Exception(exc_msg)
+            with caplog.at_level(logging.DEBUG):
+                w.telegram.poll_all(w.qa._paused)
+        log_msg = [r for r in caplog.records if "Telegram poll" in r.message][0].message
+        assert token not in log_msg
+        assert "/bot<REDACTED>/" in log_msg
+        assert "?<PARAMS>" in log_msg
+
+    def test_ack_failure_redacts_token(self, tmp_path, caplog):
+        import logging
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        token = w.telegram.token
+        exc_msg = f"HTTPSConnectionPool: Max retries with url: /bot{token}/sendMessage"
+        with patch("host.watcher.requests") as mock_req:
+            mock_req.post.side_effect = Exception(exc_msg)
+            with caplog.at_level(logging.WARNING):
+                w.telegram.ack(123, "sid")
+        log_msg = [r for r in caplog.records if "Telegram ack failed" in r.message][0].message
+        assert token not in log_msg
+        assert "/bot<REDACTED>/" in log_msg
+
+
+# ---------------------------------------------------------------------------
+# route_message tests
+# ---------------------------------------------------------------------------
+
 class TestRouteTgMessage:
     def test_qa_reply_routed_to_paused_session(self, tmp_path):
         w = _make_watcher(tmp_path)

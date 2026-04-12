@@ -9,7 +9,7 @@ from typing import Optional
 
 import requests
 from core.protocols import Notifier, IssueTracker, NotificationLevel, should_notify, SHORT_ID_LEN
-from adapters.notifiers._utils import project_prefix
+from adapters.notifiers._utils import project_prefix, redact_url
 
 HTTP_REQUEST_TIMEOUT_S = 10   # Default timeout for outgoing HTTP calls
 TG_LONG_POLL_TIMEOUT_S = 2   # Telegram getUpdates long-poll timeout
@@ -51,7 +51,7 @@ class TelegramNotifier:
                       "text": project_prefix(f"🤖 {message}"),
                       "parse_mode": "Markdown"}, timeout=HTTP_REQUEST_TIMEOUT_S)
         except requests.RequestException as e:
-            log.warning(f"Telegram notify failed: {e}")
+            log.warning(f"Telegram notify failed: {redact_url(e)}")
 
     def send_question(self, issue_id: str, question: str, short_id: str = "") -> bool:
         if not self.enabled: return False
@@ -76,7 +76,7 @@ class TelegramNotifier:
                 }
             return True
         except requests.RequestException as e:
-            log.warning(f"Telegram send_question failed: {e}")
+            log.warning(f"Telegram send_question failed: {redact_url(e)}")
             return False
 
     def check_answer(self, issue_id: str) -> Optional[str]:
@@ -102,7 +102,7 @@ class TelegramNotifier:
                     self._offset = u["update_id"] + 1
                     self._handle(u)
             except Exception as e:
-                log.warning(f"Telegram: {e}"); time.sleep(TG_ERROR_BACKOFF_S)
+                log.warning(f"Telegram: {redact_url(e)}"); time.sleep(TG_ERROR_BACKOFF_S)
 
     def _handle(self, u: dict):
         msg = u.get("message", {}); text = msg.get("text", "").strip()

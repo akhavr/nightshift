@@ -11,6 +11,7 @@ from host.constants import (
 )
 from core.protocols import NotificationLevel, should_notify
 from core.review import parse_nightshift_command
+from adapters.notifiers._utils import redact_url
 
 log = logging.getLogger("watcher")
 
@@ -63,7 +64,7 @@ class TelegramRelay:
                     continue
                 self.route_message(msg, text, qa, reviews, paused)
         except Exception as e:
-            log.debug(f"Telegram poll: {e}")
+            log.debug(f"Telegram poll: {redact_url(e)}")
         return qa, reviews
 
     def route_message(self, msg: dict, text: str,
@@ -126,7 +127,7 @@ class TelegramRelay:
                 }, timeout=TG_POST_TIMEOUT_S,
             )
         except Exception as e:
-            log.warning(f"Telegram notify failed: {e}")
+            log.warning(f"Telegram notify failed: {redact_url(e)}")
 
     def send_question(self, sid: str, question: str, short_id: str) -> Optional[int]:
         """Send question to Telegram with force_reply. Returns message_id."""
@@ -151,7 +152,7 @@ class TelegramRelay:
             d = resp.json()
             return d["result"]["message_id"] if d.get("ok") else None
         except Exception as e:
-            log.warning(f"Telegram send failed: {e}")
+            log.warning(f"Telegram send failed: {redact_url(e)}")
             return None
 
     def ack(self, reply_to: int, sid: str):
@@ -167,4 +168,4 @@ class TelegramRelay:
                 }, timeout=TG_POST_TIMEOUT_S,
             )
         except Exception as e:
-            log.warning(f"Telegram ack failed: {e}")
+            log.warning(f"Telegram ack failed: {redact_url(e)}")
