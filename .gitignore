@@ -7,3 +7,5 @@ __pycache__/
 .venv/
 .coverage
 litellm-config.yaml
+.claude/scheduled_tasks.lock
+.agent-worker/
