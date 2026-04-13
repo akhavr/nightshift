@@ -16,7 +16,7 @@ AGENT_REGISTRY: dict[str, tuple[str, str]] = {
     "claude-code": ("adapters.agents.claude_code", "ClaudeCodeAgent"),
     "openhands": ("adapters.agents.openhands", "OpenHandsAgent"),
     "codex": ("adapters.agents.codex", "CodexAgent"),
-    "openhands": ("adapters.agents.openhands", "OpenHandsAgent"),
+    "opencode": ("adapters.agents.opencode", "OpenCodeAgent"),
 }
 
 TRACKER_REGISTRY: dict[str, tuple[str, str]] = {
