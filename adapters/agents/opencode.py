@@ -95,8 +95,11 @@ class OpenCodeAgent(HeadlessAgentBase):
             )
 
         if event_type == "tool_use":
-            name = ev.get("name", ev.get("tool", "?"))
-            inp = ev.get("input", ev.get("arguments", {}))
+            # OpenCode wraps tool info in part.tool / part.state.input
+            part = ev.get("part", {})
+            name = part.get("tool") or ev.get("name", ev.get("tool", "?"))
+            state = part.get("state", {})
+            inp = state.get("input") or ev.get("input", ev.get("arguments", {}))
             inp_str = str(inp)[:TOOL_INPUT_PREVIEW_LEN]
             return AgentEvent(
                 type=AgentEventType.TOOL_CALL,
