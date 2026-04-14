@@ -189,9 +189,12 @@ def main():
     session_dir = repo / ".nightshift" / "sessions" / names["session_name"]
 
     # Check for duplicate sessions (prefix match) — skip for resume
+    # For reviews, only block if a review session exists (coder is expected to exist).
+    # For coders, only block if a coder session exists.
     if not args.resume:
         sessions_root = repo / ".nightshift" / "sessions"
-        existing = find_existing_session_by_prefix(sessions_root, args.issue_id)
+        existing = find_existing_session_by_prefix(sessions_root, args.issue_id,
+                                                   step=args.step)
         if existing:
             print(f"Error: session already exists for issue {existing}", file=sys.stderr)
             sys.exit(1)

@@ -1174,6 +1174,52 @@ class TestDuplicateSessionDetection:
             "status": status,
         }))
 
+    def test_find_existing_session_allows_review_when_coder_exists(self, tmp_path):
+        """Review launch should NOT be blocked when coder session exists.
+
+        When launching --step review, the coder session for the same issue
+        is expected to exist. The duplicate check should only block if a
+        review session already exists, not when a coder session exists.
+        """
+        from host.session_utils import find_existing_session_by_prefix
+        from host.constants import REVIEW_SESSION_PREFIX
+
+        sessions_dir = tmp_path / ".nightshift" / "sessions"
+        issue_id = "64dd71361d31full"
+        short_id = "64dd71361d31"
+
+        # Create coder session
+        self._create_session(sessions_dir, short_id, issue_id, status="waiting:review")
+
+        # When launching a review, we should NOT find a blocking session
+        # because the coder session exists but we're launching a DIFFERENT type
+        existing = find_existing_session_by_prefix(sessions_dir, issue_id, step="review")
+        assert existing is None, \
+            "Review launch should not be blocked by existing coder session"
+
+        # BUT if a review session already exists, it SHOULD block
+        self._create_session(sessions_dir, f"{REVIEW_SESSION_PREFIX}{short_id}",
+                            issue_id, status="working")
+        existing = find_existing_session_by_prefix(sessions_dir, issue_id, step="review")
+        assert existing == issue_id, \
+            "Review launch should be blocked when review session already exists"
+
+    def test_find_existing_session_blocks_coder_when_coder_exists(self, tmp_path):
+        """Coder launch should be blocked when coder session already exists."""
+        from host.session_utils import find_existing_session_by_prefix
+
+        sessions_dir = tmp_path / ".nightshift" / "sessions"
+        issue_id = "64dd71361d31full"
+        short_id = "64dd71361d31"
+
+        # Create coder session
+        self._create_session(sessions_dir, short_id, issue_id)
+
+        # When launching a coder, we SHOULD find a blocking session
+        existing = find_existing_session_by_prefix(sessions_dir, issue_id, step="coder")
+        assert existing == issue_id, \
+            "Coder launch should be blocked by existing coder session"
+
     def test_start_rejects_duplicate_session_by_prefix(self, tmp_path):
         """Starting with short ID when full-ID session exists fails."""
         sessions_dir = tmp_path / ".nightshift" / "sessions"

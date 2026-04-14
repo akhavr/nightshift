@@ -85,16 +85,41 @@ def archive_session(session_dir: Path, repo: Path | None = None) -> Path | None:
 
 # ── Duplicate detection ─────────────────────────────────
 
-def find_existing_session_by_prefix(sessions_root: Path, issue_id: str) -> str | None:
+# Import review session prefix from constants
+from host.constants import REVIEW_SESSION_PREFIX
+
+
+def find_existing_session_by_prefix(sessions_root: Path, issue_id: str,
+                                    step: str = "coder") -> str | None:
     """Check if any existing session has an issue_id that is a prefix match.
 
     Returns the existing issue_id if found, None otherwise.
     Two IDs match if one starts with the other (handles both
     short-prefix and full-ID lookups).
+
+    Args:
+        sessions_root: Path to the sessions directory.
+        issue_id: The issue ID to check for duplicates.
+        step: Either "coder" or "review". When "review", only checks for
+              existing review sessions (ignores coder sessions). When
+              "coder", only checks for existing coder sessions (ignores
+              review sessions).
     """
     if not sessions_root.exists():
         return None
+
+    is_review_launch = (step == "review")
+
     for session_dir in sessions_root.iterdir():
+        # Skip sessions of the wrong type
+        session_is_review = session_dir.name.startswith(REVIEW_SESSION_PREFIX)
+        if is_review_launch and not session_is_review:
+            # Launching review but found coder session — skip it
+            continue
+        if not is_review_launch and session_is_review:
+            # Launching coder but found review session — skip it
+            continue
+
         state_file = session_dir / "state.json"
         if not state_file.exists():
             continue

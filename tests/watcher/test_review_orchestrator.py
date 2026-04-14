@@ -17,6 +17,43 @@ from tests.watcher.conftest import _make_watcher, _make_session, _make_issue, _m
 
 
 # ---------------------------------------------------------------------------
+# Review launch vs coder relaunch tests
+# ---------------------------------------------------------------------------
+
+class TestReviewVsCoderLaunch:
+    """Watcher should launch review, not coder, when coder completes."""
+
+    def test_launches_review_not_coder_after_completion(self, tmp_path):
+        """When coder session is in waiting:review, watcher launches review, not coder.
+
+        This is the key test for the bug: the watcher was trying to relaunch
+        the coder session instead of launching a review session, causing
+        'session already exists' errors.
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nagent:\n  kind: claude-code\n---\nReview\n")
+
+        # Create coder session in waiting:review status
+        coder_dir = _make_session(w.sessions_dir, "abc123", status="waiting:review",
+                                  issue_id="abc123def456full")
+
+        # Track what gets launched
+        launched_cmds = []
+        w.reviews._launch_background = lambda cmd, sid: launched_cmds.append((cmd, sid))
+
+        # Run auto-review check
+        w.reviews.check_for_auto_review()
+
+        # Should launch a REVIEW session, not a coder session
+        assert len(launched_cmds) == 1, "Expected exactly one launch"
+        cmd, sid = launched_cmds[0]
+        assert sid == "review-abc123", f"Expected review session ID, got {sid}"
+        assert "--step" in cmd, "Expected --step in command"
+        step_idx = cmd.index("--step")
+        assert cmd[step_idx + 1] == "review", f"Expected step=review, got {cmd[step_idx + 1]}"
+
+
+# ---------------------------------------------------------------------------
 # check_for_auto_review tests
 # ---------------------------------------------------------------------------
 
