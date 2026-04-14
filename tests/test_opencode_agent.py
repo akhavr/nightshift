@@ -158,6 +158,21 @@ class TestParseToolUseEvent:
         assert ev.type == AgentEventType.TOOL_CALL
         assert "write_file" in ev.content
 
+    def test_parse_tool_use_part_wrapped(self):
+        """Extracts tool name and input from part.tool/part.state.input wrapper."""
+        agent = self._agent()
+        raw = json.dumps({
+            "type": "tool_use",
+            "part": {
+                "tool": "bash",
+                "state": {"input": {"command": "ls -la"}}
+            }
+        })
+        ev = agent._parse(raw)
+        assert ev.type == AgentEventType.TOOL_CALL
+        assert "bash" in ev.content
+        assert "ls -la" in ev.content
+
     def test_parse_tool_result(self):
         agent = self._agent()
         raw = _ev("tool_result", result="file contents here")
