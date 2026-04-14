@@ -25,6 +25,8 @@ _PASSTHROUGH_ENV_VARS = (
     # Codex uses CODEX_* env vars for independent provider configuration
     # OPENAI_API_KEY needed for Codex fallback chain (CODEX_API_KEY → OPENAI_API_KEY)
     "CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL", "OPENAI_API_KEY",
+    # OpenCode with OpenRouter models
+    "OPENROUTER_API_KEY",
 )
 
 
