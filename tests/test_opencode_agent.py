@@ -173,15 +173,30 @@ class TestParseStepFinish:
     def _agent(self):
         return OpenCodeAgent()
 
-    def test_parse_step_finish_emits_done(self):
+    def test_parse_step_finish_stop_emits_system(self):
+        """step_finish with reason='stop' emits SYSTEM, NOT @@DONE@@.
+
+        Note: reason='stop' just means current step finished without tool calls,
+        NOT that the agent completed its task. True completion is signaled by
+        process exit or file signals (/session/signal/done).
+        """
         agent = self._agent()
         raw = _ev("step_finish", reason="stop")
         ev = agent._parse(raw)
-        assert ev.type == AgentEventType.TEXT
-        assert "@@DONE@@" in ev.content
+        assert ev.type == AgentEventType.SYSTEM
+        assert "step_finish:stop" in ev.content
+        assert "@@DONE@@" not in ev.content
+
+    def test_parse_step_finish_tool_calls(self):
+        """step_finish with reason='tool-calls' emits SYSTEM event."""
+        agent = self._agent()
+        raw = _ev("step_finish", reason="tool-calls")
+        ev = agent._parse(raw)
+        assert ev.type == AgentEventType.SYSTEM
+        assert "step_finish:tool-calls" in ev.content
 
     def test_parse_step_finish_other_reason(self):
-        """step_finish with reason != 'stop' emits SYSTEM event."""
+        """step_finish with any reason emits SYSTEM event."""
         agent = self._agent()
         raw = _ev("step_finish", reason="tool_use")
         ev = agent._parse(raw)

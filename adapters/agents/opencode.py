@@ -127,13 +127,9 @@ class OpenCodeAgent(HeadlessAgentBase):
                     "cost_usd": tokens.get("cost_usd", tokens.get("cost", 0.0)),
                     "model": tokens.get("model", ev.get("model", "")),
                 }
-            if reason == "stop":
-                return AgentEvent(
-                    type=AgentEventType.TEXT,
-                    content="@@DONE@@",
-                    raw=raw,
-                    metadata=metadata,
-                )
+            # Note: reason='stop' just means current step finished without tool
+            # calls, NOT that the agent completed its task. True completion is
+            # signaled by process exit or file signals (/session/signal/done).
             return AgentEvent(
                 type=AgentEventType.SYSTEM,
                 content=f"step_finish:{reason}",
