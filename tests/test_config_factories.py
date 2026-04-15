@@ -25,6 +25,7 @@ from core.config.models import (
     WorkflowConfig,
     WorkspaceConfig,
 )
+from core.config.loader import load_workflow
 
 
 # ── helpers ───────────────────────────────────────────────────
@@ -336,3 +337,42 @@ class TestCreateNotifiers:
             result = create_notifiers(cfg)
 
         assert result == []
+
+
+# ── WorkspaceConfig parsing ──────────────────────────────────
+
+
+class TestWorkspaceConfigParsing:
+    def test_workspace_config_parses_test_timeout(self, tmp_path):
+        """WorkspaceConfig with test_timeout_s: 300 parses correctly."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+workspace:
+  kind: worktree
+  base_branch: master
+  test_command: ".venv/bin/python -m pytest tests/ -v"
+  test_timeout_s: 300
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.workspace.test_timeout_s == 300
+        assert config.workspace.test_command == ".venv/bin/python -m pytest tests/ -v"
+
+    def test_workspace_config_defaults_test_timeout(self, tmp_path):
+        """WorkspaceConfig without test_timeout_s defaults to 120."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+workspace:
+  kind: worktree
+  test_command: "pytest"
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.workspace.test_timeout_s == 120
+
+    def test_workspace_config_dataclass_default(self):
+        """WorkspaceConfig dataclass has correct default for test_timeout_s."""
+        config = WorkspaceConfig()
+        assert config.test_timeout_s == 120

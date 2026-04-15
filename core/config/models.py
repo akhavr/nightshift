@@ -25,6 +25,7 @@ class WorkspaceConfig:
     base_branch: str = "master"
     root: str = ".worktrees"
     test_command: str | None = None  # shell command to verify code after rebase
+    test_timeout_s: int = 120  # timeout for test command execution
 
 
 @dataclass

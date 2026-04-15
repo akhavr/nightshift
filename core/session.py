@@ -375,6 +375,7 @@ class SessionRunner:
             self._build_resume, self._commit_wip,
             base_branch=self.workspace_config.base_branch,
             test_command=self.workspace_config.test_command,
+            test_timeout_s=self.workspace_config.test_timeout_s,
             is_review=self.is_review)
 
     # ── Workspace helpers ─────────────────────────────────────

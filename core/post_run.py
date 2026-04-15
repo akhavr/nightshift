@@ -34,6 +34,7 @@ def post_run_action(
     commit_wip_fn,
     base_branch: str = "master",
     test_command: str | None = None,
+    test_timeout_s: int = 120,
     is_review: bool = False,
 ) -> str | None:
     """Determine what to do after an agent cycle. Returns resume prompt or None."""
@@ -43,7 +44,7 @@ def post_run_action(
         return resume_with_answer(state_mgr, st)
     if st.status == "done:pending-review":
         resume_prompt = attempt_pre_review_rebase(
-            workspace_mgr, workspace, base_branch, test_command)
+            workspace_mgr, workspace, base_branch, test_command, test_timeout_s)
         if resume_prompt is not None:
             tracker.add_comment(issue.id, "🔄 Rebase needed — resuming agent to fix...")
             state_mgr.update_status("working")

@@ -101,6 +101,22 @@ class TestRunTestCommand:
         assert result is not None
         assert "error" in result.lower()
 
+    def test_uses_configured_timeout(self, tmp_path):
+        """_run_test_command uses timeout from parameter, not hardcoded 120."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            _run_test_command(tmp_path, "true", timeout_s=300)
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["timeout"] == 300
+
+    def test_defaults_to_constant_timeout(self, tmp_path):
+        """When no timeout_s is provided, uses TEST_COMMAND_TIMEOUT_S default."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            _run_test_command(tmp_path, "true")
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["timeout"] == TEST_COMMAND_TIMEOUT_S
+
 
 class TestBuildPrompts:
     def test_conflict_prompt_includes_branch(self):

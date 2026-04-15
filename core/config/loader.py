@@ -95,6 +95,7 @@ def _parse_workspace(raw: dict, config: WorkflowConfig):
         base_branch=w.get("base_branch", "master"),
         root=w.get("root", ".worktrees"),
         test_command=w.get("test_command"),
+        test_timeout_s=int(w.get("test_timeout_s", 120)),
     )
 
 
