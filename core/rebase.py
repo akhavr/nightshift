@@ -22,6 +22,7 @@ def attempt_pre_review_rebase(
     workspace: Workspace | None,
     base_branch: str,
     test_command: str | None = None,
+    test_timeout_s: int = TEST_COMMAND_TIMEOUT_S,
 ) -> str | None:
     """Rebase onto latest base branch and re-run tests.
 
@@ -40,7 +41,7 @@ def attempt_pre_review_rebase(
         return _build_rebase_conflict_prompt(base_branch, result)
 
     if test_command:
-        test_failure = _run_test_command(workspace.path, test_command)
+        test_failure = _run_test_command(workspace.path, test_command, test_timeout_s)
         if test_failure:
             log.warning(f"Post-rebase tests failed: {test_failure}")
             return _build_test_failure_prompt(base_branch, test_failure)
@@ -49,14 +50,18 @@ def attempt_pre_review_rebase(
     return None
 
 
-def _run_test_command(workspace_path: Path, test_command: str) -> str | None:
+def _run_test_command(
+    workspace_path: Path,
+    test_command: str,
+    timeout_s: int = TEST_COMMAND_TIMEOUT_S,
+) -> str | None:
     """Run the test command in the workspace. Returns failure output or None."""
     try:
         result = subprocess.run(
             ["sh", "-c", test_command],
             cwd=str(workspace_path),
             capture_output=True, text=True,
-            timeout=TEST_COMMAND_TIMEOUT_S,
+            timeout=timeout_s,
         )
         if result.returncode == 0:
             return None
@@ -64,7 +69,7 @@ def _run_test_command(workspace_path: Path, test_command: str) -> str | None:
         stderr = result.stderr[-1000:] if len(result.stderr) > 1000 else result.stderr
         return f"Exit code {result.returncode}\nstdout:\n{output}\nstderr:\n{stderr}"
     except subprocess.TimeoutExpired:
-        return f"Test command timed out after {TEST_COMMAND_TIMEOUT_S}s"
+        return f"Test command timed out after {timeout_s}s"
     except Exception as e:
         return f"Test command error: {e}"
 
