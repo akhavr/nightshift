@@ -32,10 +32,12 @@ hooks:
   after_create: |
     echo "Workspace created"
   before_run: |
+    python3 -m venv /workspace/.venv 2>/dev/null || true
+    /workspace/.venv/bin/pip install -r /workspace/requirements.txt pytest --quiet 2>/dev/null || true
     echo "Starting agent run"
   after_run: |
     echo "Agent run finished"
-  timeout_s: 60
+  timeout_s: 900
 
 terminal_statuses:
   - closed
