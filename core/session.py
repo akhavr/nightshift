@@ -284,12 +284,7 @@ class SessionRunner:
         if isinstance(signal, tuple):
             kind, content = signal
             if kind == "CHECKPOINT":
-                step = self.state_mgr.increment_step()
-                commit = self._commit_checkpoint(content, step)
-                self.state_mgr.add_checkpoint(content, step, commit)
-                self._build_resume()
-                self.tracker.add_comment(
-                    self.issue.id, f"📌 Checkpoint {step}: {content}")
+                self._on_checkpoint(content)
             elif kind == "QUESTION":
                 self._on_question(content)
                 return "QUESTION_ASKED"
@@ -316,12 +311,7 @@ class SessionRunner:
             self.tracker.add_comment(self.issue.id, f"💭 {marker.content}")
             self.state_mgr.append_conversation("thought", marker.content)
         elif marker.type == MarkerType.CHECKPOINT:
-            step = self.state_mgr.increment_step()
-            commit = self._commit_checkpoint(marker.content, step)
-            self.state_mgr.add_checkpoint(marker.content, step, commit)
-            self._build_resume()
-            self.tracker.add_comment(
-                self.issue.id, f"📌 Checkpoint {step}: {marker.content}")
+            self._on_checkpoint(marker.content)
         elif marker.type == MarkerType.QUESTION:
             self._on_question(question_content or marker.content)
             return "QUESTION_ASKED"
@@ -359,6 +349,15 @@ class SessionRunner:
         handle_waiting(
             self.state_mgr, self.notifier, self.tracker,
             self.issue, self.agent, self._pending_questions)
+
+    def _on_checkpoint(self, content: str):
+        """Handle checkpoint: increment step, commit, save state, notify."""
+        step = self.state_mgr.increment_step()
+        commit = self._commit_checkpoint(content, step)
+        self.state_mgr.add_checkpoint(content, step, commit)
+        self._build_resume()
+        self.tracker.add_comment(
+            self.issue.id, f"📌 Checkpoint {step}: {content}")
 
     def _on_done(self):
         """Mark as done. Review/merge happens in _post_run after agent exits."""
