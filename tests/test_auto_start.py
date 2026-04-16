@@ -119,7 +119,7 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         watcher.monitor.check_new_issues()
 
@@ -142,7 +142,7 @@ class TestWatcherAutoStart:
         (sd / "state.json").write_text(json.dumps({"issue_id": "id-1", "status": "working"}))
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         watcher.monitor.check_new_issues()
 
@@ -169,7 +169,7 @@ class TestWatcherAutoStart:
         }))
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         watcher.monitor.check_new_issues()
 
@@ -194,7 +194,7 @@ class TestWatcherAutoStart:
         (sd / "state.json").write_text(json.dumps({"issue_id": "existing", "status": "working"}))
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         watcher.monitor.check_new_issues()
 
@@ -214,7 +214,7 @@ class TestWatcherAutoStart:
         watcher.monitor._known_issue_ids.add("id-1")
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         watcher.monitor.check_new_issues()
 
@@ -233,7 +233,7 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         # First poll succeeds
         watcher.monitor._last_auto_start_poll = 0
@@ -258,7 +258,7 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         watcher.monitor.check_new_issues()
 
@@ -274,7 +274,7 @@ class TestWatcherAutoStart:
         watcher._config = MagicMock()
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         # Should not raise
         watcher.monitor.check_new_issues()
@@ -290,7 +290,7 @@ class TestWatcherAutoStart:
         ]
         watcher._tracker = tracker
         watcher._config = MagicMock()
-        watcher.monitor._launch_background = lambda cmd, sid: None
+        watcher.monitor._launch_background = lambda cmd, sid: True
 
         tg_messages = []
         watcher.telegram.notify = lambda msg, **kw: tg_messages.append(msg)
@@ -405,7 +405,7 @@ class TestMaxConcurrentRace:
         watcher._config = MagicMock()
 
         launched = []
-        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
         # First iteration: launches id-1, skips id-2 (active_count incremented in-loop)
         watcher.monitor.check_new_issues()
