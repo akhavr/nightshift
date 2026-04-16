@@ -12,6 +12,8 @@ workspace:
   kind: worktree
   base_branch: master
   root: .worktrees
+  test_command: ".venv/bin/python -m pytest tests/ -v"
+  test_timeout_s: 300
 
 notifications:
   - kind: telegram
