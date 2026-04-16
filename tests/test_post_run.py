@@ -357,6 +357,43 @@ class TestScanConversationForVerdict:
         assert scan_conversation_for_verdict(sm) == "approve"
 
 
+class TestReviewSkipsRebase:
+    """Review sessions should skip pre-review rebase — reviewers can't fix conflicts."""
+
+    def test_review_done_skips_rebase(self, tmp_path):
+        """Review sessions should not attempt rebase when done — they can't fix conflicts."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        # Set up a conflict that would trigger resume for coder sessions
+        ws_mgr.rebase_result = RebaseResult(
+            success=False, conflict_details="conflict in main.py")
+        sm.update_status("done:pending-review")
+        result = post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None,
+            base_branch="master", is_review=True)
+        # Should proceed to waiting:review without trying to fix conflict
+        assert result is None
+        assert sm.load_state().status == "waiting:review"
+        # Rebase should NOT have been called for review sessions
+        assert len(ws_mgr.rebase_calls) == 0
+
+    def test_coder_done_attempts_rebase(self, tmp_path):
+        """Coder sessions should attempt rebase and resume on conflict."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        ws_mgr.rebase_result = RebaseResult(
+            success=False, conflict_details="conflict in main.py")
+        sm.update_status("done:pending-review")
+        result = post_run_action(
+            sm, ws_mgr, ws, tracker, notifier, issue, agent,
+            lambda **kw: None, lambda r: None,
+            base_branch="master", is_review=False)
+        # Coder should be resumed to fix the conflict
+        assert result is not None
+        assert "REBASE CONFLICT" in result
+        assert sm.load_state().status == "working"
+        assert len(ws_mgr.rebase_calls) == 1
+
+
 class TestReviewMaxTurns:
     """Review sessions should not auto-resume on max-turns."""
 

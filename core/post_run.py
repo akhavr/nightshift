@@ -43,12 +43,15 @@ def post_run_action(
     if st.status == "suspended:answer-ready":
         return resume_with_answer(state_mgr, st)
     if st.status == "done:pending-review":
-        resume_prompt = attempt_pre_review_rebase(
-            workspace_mgr, workspace, base_branch, test_command, test_timeout_s)
-        if resume_prompt is not None:
-            tracker.add_comment(issue.id, "🔄 Rebase needed — resuming agent to fix...")
-            state_mgr.update_status("working")
-            return resume_prompt
+        # Skip pre-review rebase for review sessions — reviewers don't make code
+        # changes and cannot fix rebase conflicts. Rebase is only for coder sessions.
+        if not is_review:
+            resume_prompt = attempt_pre_review_rebase(
+                workspace_mgr, workspace, base_branch, test_command, test_timeout_s)
+            if resume_prompt is not None:
+                tracker.add_comment(issue.id, "🔄 Rebase needed — resuming agent to fix...")
+                state_mgr.update_status("working")
+                return resume_prompt
         notify_done(state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st)
         return None
     if st.status in ("completed", "cancelled:review-rejected",
