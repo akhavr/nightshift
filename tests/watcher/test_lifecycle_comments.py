@@ -371,7 +371,7 @@ class TestSessionMonitorPostsStart:
         w.monitor.auto_start = True
         w.monitor._last_auto_start_poll = 0.0
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
 
         asc = MagicMock()
         asc.enabled = True
@@ -402,7 +402,7 @@ class TestSessionMonitorPostsResume:
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
+        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -479,7 +479,7 @@ class TestReviewOrchestratorPostsDone:
 
         # Human revise command clears _posted_done
         launched = []
-        w.reviews.commands._launch_background = lambda cmd, sid: launched.append(sid)
+        w.reviews.commands._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
         tracker.get_comments.return_value = [
             MagicMock(body="@nightshift revise", author="human")
         ]
@@ -530,7 +530,7 @@ class TestVerdictHandlerPostsRevise:
         (review_dir / "conversation.jsonl").write_text(json.dumps(conv) + "\n")
 
         launched = []
-        w.reviews.verdicts._launch_background = lambda cmd, sid: launched.append(sid)
+        w.reviews.verdicts._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
 
         w.reviews.verdicts.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
 

@@ -128,7 +128,7 @@ def test_watcher_detects_waiting_review_with_review_md(tmp_path):
 
     # Mock _launch_background to capture the command
     launched = []
-    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: (launched.append((cmd, sid)), True)[-1]
 
     watcher.reviews.check_for_auto_review()
 
@@ -169,7 +169,7 @@ def test_watcher_skips_review_without_review_md(tmp_path):
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
     launched = []
-    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: (launched.append((cmd, sid)), True)[-1]
 
     watcher.reviews.check_for_auto_review()
 
@@ -207,7 +207,7 @@ def test_watcher_max_rounds_escalation(tmp_path):
     watcher.reviews._rounds["abc123"] = 2  # Already at max
 
     launched = []
-    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: (launched.append((cmd, sid)), True)[-1]
     watcher.telegram.notify = MagicMock()
 
     watcher.reviews.check_for_auto_review()
@@ -245,7 +245,7 @@ def test_watcher_skips_review_sessions(tmp_path):
 
     watcher = HostWatcher(sessions, repo, auto_start=False)
     launched = []
-    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: (launched.append((cmd, sid)), True)[-1]
 
     watcher.reviews.check_for_auto_review()
 
@@ -372,7 +372,7 @@ def test_handle_reviewer_revise(tmp_path):
     watcher = HostWatcher(sessions, repo, auto_start=False)
     watcher.telegram.notify = MagicMock()
     launched = []
-    watcher.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid))
+    watcher.reviews._launch_background = lambda cmd, sid: (launched.append((cmd, sid)), True)[-1]
 
     watcher.reviews.handle_reviewer_revise("abc123", coder_dir, "issue-abc123456789", review_dir)
 
