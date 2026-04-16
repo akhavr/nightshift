@@ -161,8 +161,6 @@ class ReviewOrchestrator:
 
         _update_status(session_dir, "reviewing")
         review_sid = f"{REVIEW_SESSION_PREFIX}{sid}"
-        self._recently_launched[review_sid] = time.time()
-        self._rounds[sid] = rounds + 1
 
         log.info(f"[{sid}] Launching automated review (round {rounds + 1}/{max_rounds})")
         cmd = [
@@ -173,7 +171,16 @@ class ReviewOrchestrator:
             "--step", "review",
             "--coder-session", sid,
         ]
-        self._launch_background(cmd, review_sid)
+        try:
+            if self._launch_background(cmd, review_sid):
+                self._recently_launched[review_sid] = time.time()
+                self._rounds[sid] = rounds + 1
+            else:
+                log.warning(f"[{sid}] Review launch failed -- reverting to waiting:review")
+                _update_status(session_dir, "waiting:review")
+        except Exception as e:
+            log.error(f"[{sid}] Review launch error: {e} -- reverting to waiting:review")
+            _update_status(session_dir, "waiting:review")
 
     def _escalate_to_human(self, sid: str, session_dir: Path,
                            issue_id: str, max_rounds: int):
