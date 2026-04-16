@@ -39,7 +39,7 @@ class TestReviewVsCoderLaunch:
 
         # Track what gets launched
         launched_cmds = []
-        w.reviews._launch_background = lambda cmd, sid: (launched_cmds.append((cmd, sid)), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched_cmds.append((cmd, sid))
 
         # Run auto-review check
         w.reviews.check_for_auto_review()
@@ -67,7 +67,7 @@ class TestCheckForAutoReview:
         w = _make_watcher(tmp_path)
         _make_session(w.sessions_dir, "abc", status="waiting:review")
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
         w.reviews.check_for_auto_review()
         assert launched == []
 
@@ -76,7 +76,7 @@ class TestCheckForAutoReview:
         (w.repo_dir / "REVIEW.md").write_text("---\nagent:\n  kind: claude-code\n---\nReview\n")
         sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
         w.reviews.check_for_auto_review()
         assert "review-abc" in launched
 
@@ -85,7 +85,7 @@ class TestCheckForAutoReview:
         (w.repo_dir / "REVIEW.md").write_text("---\n---\nReview\n")
         _make_session(w.sessions_dir, "review-abc", status="waiting:review")
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
         w.reviews.check_for_auto_review()
         assert launched == []
 
@@ -94,7 +94,7 @@ class TestCheckForAutoReview:
         (w.repo_dir / "REVIEW.md").write_text("---\n---\nReview\n")
         _make_session(w.sessions_dir, "abc", status="working")
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
         w.reviews.check_for_auto_review()
         assert launched == []
 
@@ -109,7 +109,7 @@ class TestMaybeLaunchReview:
         (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
         sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
 
@@ -124,7 +124,7 @@ class TestMaybeLaunchReview:
         sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
         w.reviews._rounds["abc"] = 2
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
         w.telegram.notify = MagicMock()
 
         w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
@@ -140,7 +140,7 @@ class TestMaybeLaunchReview:
         sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
         w.reviews._rounds["abc"] = 1
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
 
@@ -353,7 +353,7 @@ class TestHandleReviewerRevise:
         w._tracker = MagicMock()
         w._tracker.get_comments.return_value = []
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.reviews.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
 
@@ -372,7 +372,7 @@ class TestHandleReviewerRevise:
         w.telegram.notify = lambda msg, **kw: tg_calls.append(msg)
         w._tracker = MagicMock()
         w._tracker.get_comments.return_value = []
-        w.reviews._launch_background = lambda cmd, sid: True
+        w.reviews._launch_background = lambda cmd, sid: None
 
         w.reviews.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
 
@@ -387,7 +387,7 @@ class TestHandleReviewerRevise:
         w.telegram.notify = MagicMock()
         w._tracker = MagicMock()
         w._tracker.get_comments.return_value = []
-        w.reviews._launch_background = lambda cmd, sid: True
+        w.reviews._launch_background = lambda cmd, sid: None
 
         w.reviews.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
 
@@ -462,7 +462,7 @@ class TestCheckReviewerDone:
         w._tracker = MagicMock()
         w._tracker.get_comments.return_value = []
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
         w.reviews.cleanup_review_session = MagicMock()
 
         w.reviews.check_reviewer_done()
@@ -632,7 +632,7 @@ class TestDoRevise:
         ]
         w._tracker = tracker
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.reviews.do_revise("abc", "issue-abc", sd)
 
@@ -648,7 +648,7 @@ class TestDoRevise:
         tracker.get_comments.return_value = []
         w._tracker = tracker
         launched = []
-        w.reviews._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.reviews.do_revise("abc", "issue-abc", sd)
 
@@ -661,7 +661,7 @@ class TestDoRevise:
         tracker.get_comments.return_value = [_make_comment("fix this")]
         w._tracker = tracker
         w.reviews._comment_counts["abc"] = 5
-        w.reviews._launch_background = lambda cmd, sid: True
+        w.reviews._launch_background = lambda cmd, sid: None
 
         w.reviews.do_revise("abc", "issue-abc", sd)
 

@@ -300,14 +300,11 @@ class HostWatcher:
         except Exception as e:
             log.warning(f"Tracker sync failed: {e}")
 
-    def _launch_background(self, cmd: list[str], sid: str) -> bool:
+    def _launch_background(self, cmd: list[str], sid: str):
         """Launch a subprocess in background, logging its output.
 
         Stores the Popen handle so check_background_launches() can detect
         early failures and revert session status.
-
-        Returns:
-            True if the subprocess was successfully started, False on failure.
         """
         log_file = self.sessions_dir.parent / "watcher.log"
         f = None
@@ -315,12 +312,10 @@ class HostWatcher:
             f = open(log_file, "a")
             proc = subprocess.Popen(cmd, cwd=str(self.repo_dir), stdout=f, stderr=f)
             self._background_procs[sid] = (proc, f, time.time())
-            return True
         except Exception as e:
             log.error(f"[{sid}] Failed to launch {cmd}: {e}")
             if f is not None:
                 f.close()
-            return False
 
     def check_background_launches(self):
         """Poll recently launched background processes for early exit.

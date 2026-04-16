@@ -151,16 +151,10 @@ class SessionMonitor:
 
         log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}, "
                  f"orphan_resume {orphan_resumes + 1}/{MAX_ORPHAN_RESUMES}). Auto-resuming.")
+        self._recently_launched[sid] = time.time()
 
         session_dir = self.sessions_dir / sid
-        success = self._resume_session(sid, issue_id, reason="orphaned (container gone)")
-        if success:
-            self._recently_launched[sid] = time.time()
-        else:
-            # Revert the orphan_resumes increment since we couldn't actually resume
-            state["orphan_resumes"] = orphan_resumes
-            write_state(session_dir, state)
-            log.warning(f"[{sid}] Orphan resume failed, will retry next cycle")
+        self._resume_session(sid, issue_id, reason="orphaned (container gone)")
 
     def _try_recover_review_verdict(self, coder_sid: str, coder_dir: Path,
                                     review_sid: str) -> bool:
@@ -268,12 +262,8 @@ class SessionMonitor:
             f"`nightshift accept/reject/revise {issue_id}`",
             level=NotificationLevel.ACTIONS)
 
-    def _resume_session(self, sid: str, issue_id: str, reason: str) -> bool:
-        """Post lifecycle comment and launch a resume for the given session.
-
-        Returns:
-            True if the subprocess was successfully started, False on failure.
-        """
+    def _resume_session(self, sid: str, issue_id: str, reason: str):
+        """Post lifecycle comment and launch a resume for the given session."""
         session_dir = self.sessions_dir / sid
         checkpoint_count = read_checkpoint_count(session_dir)
         post_resume(self._get_tracker, issue_id, sid,
@@ -292,7 +282,7 @@ class SessionMonitor:
             if review_md.exists():
                 workflow = review_md
         cmd += ["--workflow", str(workflow)]
-        return self._launch_background(cmd, sid)
+        self._launch_background(cmd, sid)
 
     def check_auth_failures(self):
         """Retry sessions suspended due to auth failure on a slow interval."""
@@ -341,16 +331,9 @@ class SessionMonitor:
             state["auth_retries"] = auth_retries + 1
             state["status"] = "working"
             write_state(session_dir, state)
+            self._recently_launched[sid] = time.time()
 
-            success = self._resume_session(sid, issue_id, reason="auth-failure retry")
-            if success:
-                self._recently_launched[sid] = time.time()
-            else:
-                # Revert state changes since launch failed
-                state["auth_retries"] = auth_retries
-                state["status"] = "suspended:auth-failure"
-                write_state(session_dir, state)
-                log.warning(f"[{sid}] Auth-failure retry launch failed, will retry next cycle")
+            self._resume_session(sid, issue_id, reason="auth-failure retry")
 
     def check_closed_issues(self):
         """Detect sessions whose issues have been closed -- clean up worktree + session."""
@@ -497,7 +480,10 @@ class SessionMonitor:
                          f"deferring {issue.identifier}")
                 break
 
+            self._known_issue_ids.add(issue.id)
             sid = issue.id[:SHORT_ID_LEN]
+            self._recently_launched[sid] = time.time()
+            active_count += 1
             log.info(f"Auto-start: launching {issue.identifier} -- {issue.title[:TITLE_TRUNCATE_LEN]}")
             self.telegram.notify(f"\U0001f680 Auto-starting `{issue.identifier}`: {issue.title[:TITLE_TRUNCATE_LEN]}",
                                 level=NotificationLevel.ALL)
@@ -510,10 +496,4 @@ class SessionMonitor:
                 issue.id,
                 "--workflow", str(self.workflow_path),
             ]
-            success = self._launch_background(cmd, sid)
-            if success:
-                self._known_issue_ids.add(issue.id)
-                self._recently_launched[sid] = time.time()
-                active_count += 1
-            else:
-                log.warning(f"Auto-start: launch failed for {issue.identifier}, will retry next poll")
+            self._launch_background(cmd, sid)

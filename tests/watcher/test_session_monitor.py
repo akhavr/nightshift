@@ -34,7 +34,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value="running"):
             w.monitor.check_orphaned_sessions()
@@ -46,7 +46,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -60,7 +60,7 @@ class TestCheckOrphanedSessions:
         _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         w._recently_launched["abc"] = time.time()  # just launched
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -72,7 +72,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value="paused"):
             w.monitor.check_orphaned_sessions()
@@ -84,7 +84,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -97,7 +97,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -110,7 +110,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -135,7 +135,7 @@ class TestCheckOrphanedSessions:
         (sd / "state.json").write_text(json.dumps(state))
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -148,7 +148,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -161,7 +161,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value="running"):
             w.monitor.check_orphaned_sessions()
@@ -175,7 +175,7 @@ class TestCheckOrphanedSessions:
         # Put in recently_launched but with old timestamp
         w._recently_launched["abc"] = time.time() - 9999  # way past grace period
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -189,7 +189,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -203,7 +203,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "review-abc", status="working", issue_id="issue-abc")
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -219,7 +219,7 @@ class TestCheckOrphanedSessions:
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -240,7 +240,7 @@ class TestCheckOrphanedSessions:
         (sd / "state.json").write_text(json.dumps(state))
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
         tracker = MagicMock()
         w._tracker = tracker
 
@@ -264,7 +264,7 @@ class TestCheckOrphanedSessions:
         (sd / "state.json").write_text(json.dumps(state))
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
         tracker = MagicMock()
         w._tracker = tracker
         notified = []
@@ -292,7 +292,7 @@ class TestCheckOrphanedSessions:
         (review_sd / "state.json").write_text(json.dumps(state))
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
         tracker = MagicMock()
         w._tracker = tracker
 
@@ -321,7 +321,7 @@ class TestCheckOrphanedSessions:
         (review_sd / "state.json").write_text(json.dumps(state))
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
         tracker = MagicMock()
         w._tracker = tracker
         notified = []
@@ -351,7 +351,7 @@ class TestCheckOrphanedSessions:
         (sd / "state.json").write_text(json.dumps(state))
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
         tracker = MagicMock()
         w._tracker = tracker
 
@@ -371,7 +371,7 @@ class TestCheckOrphanedSessions:
         review_md = w.monitor.repo_dir / "REVIEW.md"
         review_md.write_text("---\nagent:\n  kind: claude-code\n---\n")
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -392,7 +392,7 @@ class TestCheckAuthFailures:
         w.monitor._last_auth_retry_check = time.time()
         _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.monitor.check_auth_failures()
         assert launched == []
@@ -402,7 +402,7 @@ class TestCheckAuthFailures:
         w.monitor._last_auth_retry_check = 0.0
         sd = _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.monitor.check_auth_failures()
 
@@ -415,7 +415,7 @@ class TestCheckAuthFailures:
         w.monitor._last_auth_retry_check = 0.0
         _make_session(w.sessions_dir, "abc", status="suspended:stall", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.monitor.check_auth_failures()
         assert launched == []
@@ -424,7 +424,7 @@ class TestCheckAuthFailures:
         w = _make_watcher(tmp_path)
         w.monitor._last_auth_retry_check = 0.0
         _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
-        w.monitor._launch_background = lambda cmd, sid: True
+        w.monitor._launch_background = lambda cmd, sid: None
 
         w.monitor.check_auth_failures()
         assert "abc" in w._recently_launched
@@ -435,7 +435,7 @@ class TestCheckAuthFailures:
         w.monitor._last_auth_retry_check = 0.0
         _make_session(w.sessions_dir, "review-abc", status="suspended:auth-failure", issue_id="issue-abc")
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         w.monitor.check_auth_failures()
 
@@ -448,7 +448,7 @@ class TestCheckAuthFailures:
         w = _make_watcher(tmp_path)
         w.monitor._last_auth_retry_check = 0.0
         sd = _make_session(w.sessions_dir, "abc", status="suspended:auth-failure", issue_id="issue-abc")
-        w.monitor._launch_background = lambda cmd, sid: True
+        w.monitor._launch_background = lambda cmd, sid: None
 
         w.monitor.check_auth_failures()
 
@@ -466,7 +466,7 @@ class TestCheckAuthFailures:
         (sd / "state.json").write_text(json.dumps(state))
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         w.monitor.check_auth_failures()
 
@@ -485,7 +485,7 @@ class TestCheckAuthFailures:
 
         notified = []
         w.telegram.notify = lambda msg, **kw: notified.append(msg)
-        w.monitor._launch_background = lambda cmd, sid: True
+        w.monitor._launch_background = lambda cmd, sid: None
 
         w.monitor.check_auth_failures()
 
@@ -656,7 +656,7 @@ class TestWorkflowPassthrough:
         w.monitor._last_orphan_check = 0.0
         _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -681,7 +681,7 @@ class TestWorkflowPassthrough:
         w.monitor._last_orphan_check = 0.0
         _make_session(sessions, "abc", status="working", issue_id="issue-abc")
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -713,7 +713,7 @@ class TestWorkflowPassthrough:
         w._tracker = tracker
 
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         w.monitor.check_new_issues()
 
@@ -747,7 +747,7 @@ class TestWorkflowPassthrough:
         w._tracker = tracker
 
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         w.monitor.check_new_issues()
 
@@ -764,7 +764,7 @@ class TestWorkflowPassthrough:
         review_md = w.monitor.repo_dir / "REVIEW.md"
         review_md.write_text("---\nagent:\n  kind: claude-code\n---\n")
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -781,7 +781,7 @@ class TestWorkflowPassthrough:
         _make_session(w.sessions_dir, "review-abc", status="working", issue_id="issue-abc")
         # No REVIEW.md created
         launched_cmds = []
-        w.monitor._launch_background = lambda cmd, sid: (launched_cmds.append(cmd), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -805,7 +805,7 @@ class TestReviewingStatusRecovery:
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -821,7 +821,7 @@ class TestReviewingStatusRecovery:
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         def mock_status(container):
             if "review-" in container:
@@ -842,7 +842,7 @@ class TestReviewingStatusRecovery:
         sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
         w._recently_launched["review-abc"] = time.time()  # just launched
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -858,7 +858,7 @@ class TestReviewingStatusRecovery:
         sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
         w._recently_launched["review-abc"] = time.time() - 9999  # expired
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -872,7 +872,7 @@ class TestReviewingStatusRecovery:
         w.monitor._last_orphan_check = 0.0
         sd = _make_session(w.sessions_dir, "review-abc", status="reviewing", issue_id="issue-abc")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -924,7 +924,7 @@ class TestVerdictRecovery:
                                  issue_id="issue-abc")
         _make_completed_review_session(w.sessions_dir, "abc", verdict="approve")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -943,8 +943,8 @@ class TestVerdictRecovery:
         _make_completed_review_session(w.sessions_dir, "abc", verdict="revise")
         launched = []
         # VerdictHandler launches via ReviewOrchestrator's _launch_background
-        w.reviews.verdicts._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.reviews.verdicts._launch_background = lambda cmd, sid: launched.append(sid)
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -962,7 +962,7 @@ class TestVerdictRecovery:
                                  issue_id="issue-abc")
         _make_completed_review_session(w.sessions_dir, "abc", verdict="approve")
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         def mock_status(container):
             if "review-" in container:
@@ -1000,7 +1000,7 @@ class TestVerdictRecovery:
         (review_dir / "conversation.jsonl").write_text("")
 
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()
@@ -1018,7 +1018,7 @@ class TestVerdictRecovery:
                                  issue_id="issue-abc")
         # No review session dir at all
         launched = []
-        w.monitor._launch_background = lambda cmd, sid: (launched.append(sid), True)[-1]
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid)
 
         with patch("host.watcher.docker_container_status", return_value=None):
             w.monitor.check_orphaned_sessions()

@@ -159,7 +159,11 @@ class ReviewOrchestrator:
             self._escalate_to_human(sid, session_dir, issue_id, max_rounds)
             return
 
+        _update_status(session_dir, "reviewing")
         review_sid = f"{REVIEW_SESSION_PREFIX}{sid}"
+        self._recently_launched[review_sid] = time.time()
+        self._rounds[sid] = rounds + 1
+
         log.info(f"[{sid}] Launching automated review (round {rounds + 1}/{max_rounds})")
         cmd = [
             sys.executable,
@@ -169,19 +173,7 @@ class ReviewOrchestrator:
             "--step", "review",
             "--coder-session", sid,
         ]
-
-        # Update status BEFORE launch attempt (subprocess may take time)
-        _update_status(session_dir, "reviewing")
-
-        success = self._launch_background(cmd, review_sid)
-        if success:
-            # Only track as recently launched if subprocess actually started
-            self._recently_launched[review_sid] = time.time()
-            self._rounds[sid] = rounds + 1
-        else:
-            # Launch failed — revert coder session to waiting:review
-            log.warning(f"[{sid}] Review launch failed, reverting to waiting:review")
-            _update_status(session_dir, "waiting:review")
+        self._launch_background(cmd, review_sid)
 
     def _escalate_to_human(self, sid: str, session_dir: Path,
                            issue_id: str, max_rounds: int):
