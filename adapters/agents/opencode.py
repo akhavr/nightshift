@@ -21,6 +21,9 @@ TOOL_INPUT_PREVIEW_LEN = 300
 
 
 class OpenCodeAgent(HeadlessAgentBase):
+    # Patterns indicating authentication/authorization failures.
+    # Note: "rate limit", "rate_limit_exceeded" are handled as transient errors
+    # with retry in HeadlessAgentBase._maybe_retry_transient()
     AUTH_FAILURE_PATTERNS = (
         "invalid_api_key",
         "authentication_error",
@@ -31,8 +34,6 @@ class OpenCodeAgent(HeadlessAgentBase):
         "could not authenticate",
         "status 401",
         "status 403",
-        "rate limit",
-        "rate_limit_exceeded",
         "insufficient_quota",
     )
 
@@ -45,6 +46,7 @@ class OpenCodeAgent(HeadlessAgentBase):
         super().__init__(command, stall_timeout_s, extra_args)
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
+        self._store_start_params(prompt, workspace, max_turns)
         cmd = [
             self.command, "run",
             "--format", "json",

@@ -45,6 +45,7 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         self._extra_events: list[AgentEvent] = []
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
+        self._store_start_params(prompt, workspace, max_turns)
         cmd = [
             self.command, "--dangerously-skip-permissions",
             "--verbose", "--output-format", "stream-json",

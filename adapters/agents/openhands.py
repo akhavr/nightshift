@@ -24,9 +24,10 @@ CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
 class OpenHandsAgent(HeadlessAgentBase):
     # Patterns indicating LLM API authentication/authorization failures.
     # Checked against ObservationEvent content when is_error=true.
+    # Note: "429", "rate limit", "ratelimiterror" are handled as transient errors
+    # with retry in HeadlessAgentBase._maybe_retry_transient()
     AUTH_FAILURE_PATTERNS = (
         "error code: 401",
-        "error code: 429",
         "error code: 404",
         "invalid api key",
         "incorrect api key",
@@ -34,8 +35,6 @@ class OpenHandsAgent(HeadlessAgentBase):
         "authenticationerror",
         "authorization_error",
         "unauthorized",
-        "rate limit",
-        "ratelimiterror",
         "model not found",
         "connection error",
         "litellm.",
@@ -50,6 +49,7 @@ class OpenHandsAgent(HeadlessAgentBase):
         super().__init__(command, stall_timeout_s, extra_args)
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
+        self._store_start_params(prompt, workspace, max_turns)
         cmd = [
             self.command, "--headless", "--json", "--always-approve",
             "--override-with-envs",

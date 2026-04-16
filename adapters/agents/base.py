@@ -8,6 +8,7 @@ import logging
 import select
 import subprocess
 import time
+from pathlib import Path
 from typing import Iterator, Optional
 
 from core.protocols import AgentEvent, AgentEventType
@@ -18,6 +19,13 @@ READ_TIMEOUT_S = 10.0
 STALL_TIMEOUT_S = 300.0
 PROCESS_TERMINATE_TIMEOUT_S = 10
 TOOL_RESULT_PREVIEW_LEN = 500
+
+# Transient error retry configuration
+TRANSIENT_RETRY_DELAYS = [30, 60, 120]
+TRANSIENT_ERROR_PATTERNS = (
+    "500", "502", "503", "504", "429",
+    "rate limit", "overloaded", "service unavailable",
+)
 
 
 class HeadlessAgentBase:
@@ -37,6 +45,12 @@ class HeadlessAgentBase:
         lower = text.lower()
         return any(pattern in lower for pattern in cls.AUTH_FAILURE_PATTERNS)
 
+    @classmethod
+    def _is_transient_error(cls, text: str) -> bool:
+        """Check if text indicates a transient/retryable error (500s, rate limits)."""
+        lower = text.lower()
+        return any(pattern in lower for pattern in TRANSIENT_ERROR_PATTERNS)
+
     def __init__(
         self,
         command: str,
@@ -50,44 +64,90 @@ class HeadlessAgentBase:
         self._process: subprocess.Popen | None = None
         self._last_event: float = 0
         self._session_id: str | None = None
+        # Transient error retry state
+        self._transient_retry_count: int = 0
+        # Stored for restart capability
+        self._last_prompt: str | None = None
+        self._last_workspace: Path | None = None
+        self._last_max_turns: int = 50
 
     def stream_events(self) -> Iterator[AgentEvent]:
-        if not self._process:
-            return
-        self._before_stream()
-        stdout = self._process.stdout
-        while True:
-            yield from self._drain_extra()
-
-            if self._process.poll() is not None:
-                for line in stdout:
-                    ev = self._parse(line.rstrip("\n"))
-                    if ev:
-                        yield ev
-                    yield from self._drain_extra()
-                self._on_process_exit()
-                yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
+        while True:  # Outer loop for transient error retries
+            if not self._process:
                 return
+            self._before_stream()
+            stdout = self._process.stdout
+            restart_needed = False
 
-            ready, _, _ = select.select([stdout], [], [], READ_TIMEOUT_S)
-            if ready:
-                line = stdout.readline()
-                if not line:
+            while True:  # Inner loop for streaming
+                yield from self._drain_extra()
+
+                if self._process.poll() is not None:
+                    for line in stdout:
+                        ev = self._parse(line.rstrip("\n"))
+                        if ev:
+                            handled = self._maybe_retry_transient(ev)
+                            if handled:
+                                restart_needed = True
+                                break
+                            yield ev
+                        yield from self._drain_extra()
+                    if restart_needed:
+                        break
                     self._on_process_exit()
                     yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
                     return
-                self._last_event = time.monotonic()
-                ev = self._parse(line.rstrip("\n"))
-                if ev:
-                    yield ev
-            else:
-                elapsed = time.monotonic() - self._last_event
-                if self.stall_timeout_s > 0 and elapsed > self.stall_timeout_s:
-                    yield AgentEvent(
-                        type=AgentEventType.STALL,
-                        content=f"No output for {elapsed:.0f}s",
-                    )
-                    return
+
+                ready, _, _ = select.select([stdout], [], [], READ_TIMEOUT_S)
+                if ready:
+                    line = stdout.readline()
+                    if not line:
+                        self._on_process_exit()
+                        yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
+                        return
+                    self._last_event = time.monotonic()
+                    ev = self._parse(line.rstrip("\n"))
+                    if ev:
+                        handled = self._maybe_retry_transient(ev)
+                        if handled:
+                            restart_needed = True
+                            break
+                        yield ev
+                else:
+                    elapsed = time.monotonic() - self._last_event
+                    if self.stall_timeout_s > 0 and elapsed > self.stall_timeout_s:
+                        yield AgentEvent(
+                            type=AgentEventType.STALL,
+                            content=f"No output for {elapsed:.0f}s",
+                        )
+                        return
+
+            if not restart_needed:
+                return
+            # Outer loop continues after restart
+
+    def _maybe_retry_transient(self, ev: AgentEvent) -> bool:
+        """Handle transient error retry. Returns True if retry was triggered."""
+        if ev.type != AgentEventType.AUTH_FAILURE:
+            return False
+        if not self._is_transient_error(ev.content):
+            return False
+
+        self._transient_retry_count += 1
+        if self._transient_retry_count <= len(TRANSIENT_RETRY_DELAYS):
+            delay = TRANSIENT_RETRY_DELAYS[self._transient_retry_count - 1]
+            log.warning(
+                f"Transient error (attempt {self._transient_retry_count}/{len(TRANSIENT_RETRY_DELAYS)}): "
+                f"{ev.content[:100]}... retrying in {delay}s"
+            )
+            time.sleep(delay)
+            self._restart()
+            return True
+
+        # Max retries exceeded, reset counter and let the event through
+        log.warning(f"Transient error retry limit exceeded, yielding AUTH_FAILURE: {ev.content[:100]}...")
+        self._transient_retry_count = 0
+        return False
 
     def send_input(self, text: str) -> None:
         raise RuntimeError(
@@ -128,3 +188,20 @@ class HeadlessAgentBase:
 
     def _on_process_exit(self) -> None:
         """Hook called before PROCESS_EXIT event. Override for cleanup."""
+
+    def _store_start_params(self, prompt: str, workspace: Path, max_turns: int) -> None:
+        """Store start parameters for potential restart. Call at the start of start()."""
+        self._last_prompt = prompt
+        self._last_workspace = workspace
+        self._last_max_turns = max_turns
+
+    def _restart(self) -> None:
+        """Terminate and restart the agent with previously stored parameters."""
+        if self._last_prompt is None or self._last_workspace is None:
+            raise RuntimeError("Cannot restart: no stored start parameters")
+        self.terminate()
+        self.start(self._last_prompt, self._last_workspace, self._last_max_turns)
+
+    def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
+        """Start the agent. Subclasses must implement and call _store_start_params()."""
+        raise NotImplementedError

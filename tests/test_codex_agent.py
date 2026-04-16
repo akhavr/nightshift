@@ -265,11 +265,13 @@ class TestParseErrorEvents:
         assert ev.type == AgentEventType.SYSTEM
         assert "turn.failed" in ev.content
 
-    def test_error_rate_limit(self):
+    def test_error_rate_limit_not_auth_failure(self):
+        """Rate limit errors are handled as transient errors, not auth failures."""
         agent = self._agent()
         raw = _ev("error", message="status 429 rate limit exceeded")
         ev = agent._parse(raw)
-        assert ev.type == AgentEventType.AUTH_FAILURE
+        # Rate limit is now a transient error, not auth failure
+        assert ev.type == AgentEventType.SYSTEM
 
     def test_error_reconnecting_not_auth_failure(self):
         """Reconnecting messages are transient — not auth failures unless they match patterns."""
@@ -315,8 +317,10 @@ class TestIsAuthFailure:
     def test_detects_401(self):
         assert CodexAgent._is_auth_failure("unexpected status 401 Unauthorized")
 
-    def test_detects_429(self):
-        assert CodexAgent._is_auth_failure("status 429 rate limit")
+    def test_429_not_auth_failure(self):
+        """429 errors are handled as transient errors, not auth failures."""
+        # 429/rate limit are now handled by HeadlessAgentBase._is_transient_error()
+        assert not CodexAgent._is_auth_failure("status 429 rate limit")
 
     def test_detects_invalid_api_key(self):
         assert CodexAgent._is_auth_failure("Invalid API key provided")
