@@ -9,7 +9,7 @@ from host.constants import (
     COMMAND_BACKOFF_BASE_S, COMMAND_BACKOFF_CAP_S, COMMAND_BACKOFF_CAP_CYCLES,
     SHORT_ID_LEN,
 )
-from host.session_utils import update_status as _update_status
+from host.session_utils import update_status as _update_status, read_state
 from core.protocols import NotificationLevel
 from core.review import collect_review_feedback, build_revise_prompt
 from host.watcher.telegram_relay import TelegramRelay
@@ -63,10 +63,11 @@ class CommandExecutor:
             feedback = build_revise_prompt(review_comments)
             (session_dir / "resume-prompt.md").write_text(feedback)
 
+            # Read old status before changing it, in case we need to revert
+            old_status = read_state(session_dir).get("status", "waiting:review")
             _update_status(session_dir, "working")
 
             self._comment_counts.pop(sid, None)
-            self._recently_launched[sid] = time.time()
 
             log.info(f"[{sid}] Revising with {len(review_comments)} comment(s)")
 
@@ -75,7 +76,13 @@ class CommandExecutor:
                 str(_HOST_DIR / "launch.py"),
                 issue_id, "--resume",
             ]
-            self._launch_background(cmd, sid)
+            success = self._launch_background(cmd, sid)
+            if success:
+                self._recently_launched[sid] = time.time()
+            else:
+                # Launch failed — revert to old status
+                log.warning(f"[{sid}] Revise launch failed, reverting to {old_status}")
+                _update_status(session_dir, old_status)
 
         except Exception as e:
             log.error(f"[{sid}] Revise failed: {e}")

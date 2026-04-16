@@ -159,7 +159,6 @@ class VerdictHandler:
             (coder_dir / "resume-prompt.md").write_text(feedback)
 
             _update_status(coder_dir, "working")
-            self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")
             self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.",
                                 level=NotificationLevel.ALL)
@@ -172,6 +171,12 @@ class VerdictHandler:
                 str(_HOST_DIR / "launch.py"),
                 issue_id, "--resume",
             ]
-            self._launch_background(cmd, coder_sid)
+            success = self._launch_background(cmd, coder_sid)
+            if success:
+                self._recently_launched[coder_sid] = time.time()
+            else:
+                # Launch failed — revert to reviewing so auto-review can retry
+                log.warning(f"[{coder_sid}] Revise launch failed, reverting to reviewing")
+                _update_status(coder_dir, "reviewing")
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e}")
