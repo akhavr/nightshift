@@ -470,9 +470,11 @@ class TestIsAuthFailure:
         agent = self._agent()
         assert agent._is_auth_failure("AuthenticationError: Error code: 401 - Invalid API key")
 
-    def test_detects_429_rate_limit(self):
+    def test_429_rate_limit_not_auth_failure(self):
+        """429/rate limit errors are handled as transient errors, not auth failures."""
         agent = self._agent()
-        assert agent._is_auth_failure("Rate limit exceeded: Error code: 429")
+        # These are now handled by HeadlessAgentBase._is_transient_error()
+        assert not agent._is_auth_failure("Rate limit exceeded: Error code: 429")
 
     def test_detects_404_model_not_found(self):
         agent = self._agent()

@@ -29,14 +29,15 @@ def _in_docker() -> bool:
 
 
 class CodexAgent(HeadlessAgentBase):
+    # Patterns indicating authentication/authorization failures.
+    # Note: "status 429", "rate limit" are handled as transient errors
+    # with retry in HeadlessAgentBase._maybe_retry_transient()
     AUTH_FAILURE_PATTERNS = (
         "status 401",
-        "status 429",
         "unauthorized",
         "invalid api key",
         "incorrect api key",
         "authentication_error",
-        "rate limit",
         "insufficient_quota",
         "missing authentication",
     )
@@ -58,6 +59,7 @@ class CodexAgent(HeadlessAgentBase):
             yield self._extra_events.pop(0)
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
+        self._store_start_params(prompt, workspace, max_turns)
         if self._session_id:
             cmd = [
                 self.command, "exec", "resume",

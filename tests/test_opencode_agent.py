@@ -281,9 +281,11 @@ class TestAuthFailureDetection:
         assert OpenCodeAgent._is_auth_failure("status 401 Unauthorized")
         assert OpenCodeAgent._is_auth_failure("status 403 Forbidden")
 
-    def test_detects_rate_limit(self):
-        assert OpenCodeAgent._is_auth_failure("rate limit exceeded")
-        assert OpenCodeAgent._is_auth_failure("rate_limit_exceeded")
+    def test_rate_limit_not_auth_failure(self):
+        """Rate limit errors are handled as transient errors, not auth failures."""
+        # These are now handled by HeadlessAgentBase._is_transient_error()
+        assert not OpenCodeAgent._is_auth_failure("rate limit exceeded")
+        assert not OpenCodeAgent._is_auth_failure("rate_limit_exceeded")
 
     def test_detects_insufficient_quota(self):
         assert OpenCodeAgent._is_auth_failure("insufficient_quota for this request")
