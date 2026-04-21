@@ -25,15 +25,12 @@ class TestCodexMCPSignals:
     def test_codex_uses_mcp_for_done(self):
         """When codex completes, it should call nightshift_done MCP tool, not text marker.
 
-        This test verifies that:
-        1. An MCP tool call for nightshift_done produces the correct @@DONE@@ marker
-        2. Text in agent_message containing @@DONE@@ is just text, not a signal
-
-        The MCP tool call is the proper signal mechanism per REQ-028.
+        This test verifies that an MCP tool call for nightshift_done produces
+        the correct @@DONE@@ marker. MCP is the preferred signal mechanism per REQ-028.
         """
         agent = CodexAgent()
 
-        # Simulate codex calling the MCP tool (the CORRECT way to signal done)
+        # Simulate codex calling the MCP tool (the preferred way to signal done)
         mcp_done_event = _item_ev(
             "item.completed", "mcp_tool_call",
             server="nightshift-signals", tool="nightshift_done",
@@ -46,20 +43,72 @@ class TestCodexMCPSignals:
         assert ev.type == AgentEventType.TEXT
         assert ev.content == "@@DONE@@"
 
-        # Simulate codex printing @@DONE@@ as text (the WRONG way - just text output)
+    def test_codex_text_marker_fallback_done(self):
+        """Text markers in agent_message are detected as fallback (REQ-028).
+
+        When the agent prints @@DONE@@ as text instead of using MCP tools,
+        the adapter extracts and normalizes it to ensure consistent behavior.
+        """
+        agent = CodexAgent()
+
+        # Simulate codex printing @@DONE@@ as text (fallback mechanism)
         text_done_event = _item_ev(
             "item.completed", "agent_message",
             text="I have finished the task. @@DONE@@",
         )
         text_ev = agent._parse(text_done_event)
 
-        # Text output is just text - SessionRunner will see the marker in content,
-        # but the MCP approach is the proper signal mechanism that the prompt instructs
+        # Fallback detection extracts the marker
         assert text_ev is not None
         assert text_ev.type == AgentEventType.TEXT
-        assert "@@DONE@@" in text_ev.content
-        # The content includes the surrounding text, proving it's just agent output
-        assert "finished the task" in text_ev.content
+        assert text_ev.content == "@@DONE@@"
+
+    def test_codex_text_marker_fallback_checkpoint(self):
+        """Text checkpoint markers in agent_message are detected as fallback."""
+        agent = CodexAgent()
+
+        text_checkpoint = _item_ev(
+            "item.completed", "agent_message",
+            text="Progress update: @@CHECKPOINT@@ Finished writing tests",
+        )
+        ev = agent._parse(text_checkpoint)
+
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@CHECKPOINT@@ Finished writing tests"
+
+    def test_codex_text_marker_fallback_question(self):
+        """Text question markers in agent_message are detected as fallback."""
+        agent = CodexAgent()
+
+        text_question = _item_ev(
+            "item.completed", "agent_message",
+            text="I need help: @@QUESTION@@ Which database should I use?",
+        )
+        ev = agent._parse(text_question)
+
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@QUESTION@@ Which database should I use?"
+
+        # Should also queue @@WAITING@@
+        extras = list(agent._drain_extra())
+        assert len(extras) == 1
+        assert extras[0].content == "@@WAITING@@"
+
+    def test_codex_plain_text_no_markers(self):
+        """Regular agent_message text without markers is returned as-is."""
+        agent = CodexAgent()
+
+        plain_text = _item_ev(
+            "item.completed", "agent_message",
+            text="Here is my analysis of the code...",
+        )
+        ev = agent._parse(plain_text)
+
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "Here is my analysis of the code..."
 
     def test_codex_mcp_checkpoint_takes_precedence(self):
         """MCP checkpoint tool call produces proper marker with description."""
