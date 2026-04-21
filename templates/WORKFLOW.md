@@ -79,5 +79,13 @@ If you have a question, write /session/signal/question.json with {"question": "y
 For progress checkpoints, write /session/signal/checkpoint with a description.
 These signal files are REQUIRED in addition to using FinishAction.
 {% endif %}
+{% if agent_kind == "codex" %}
+## Signal Protocol
+Use MCP tools from the nightshift-signals server to signal lifecycle events:
+- Call `nightshift_done` with a summary when the task is complete.
+- Call `nightshift_checkpoint` with a description for progress updates.
+- Call `nightshift_question` with your question if you need human input.
+These MCP tools are REQUIRED. Do NOT print text markers directly.
+{% endif %}
 
 Begin by reading the codebase, then plan your approach.
