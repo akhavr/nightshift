@@ -7,6 +7,7 @@ Multi-turn uses `codex exec resume <thread_id> "prompt"`.
 
 import json
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -179,6 +180,10 @@ class CodexAgent(HeadlessAgentBase):
             text = item.get("text", "")
             if not text:
                 return None
+            # Fallback: detect text markers if MCP tools weren't used (REQ-028)
+            marker_event = self._parse_text_markers(text, raw)
+            if marker_event:
+                return marker_event
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=text,
@@ -248,3 +253,39 @@ class CodexAgent(HeadlessAgentBase):
             content=f"mcp_signal:{tool}",
             raw=raw,
         )
+
+    def _parse_text_markers(self, text: str, raw: str) -> Optional[AgentEvent]:
+        """Fallback: detect signal markers in agent_message text.
+
+        This handles the case where the agent prints markers as text instead of
+        using MCP tools. SessionRunner also detects markers, but explicit
+        adapter-level detection ensures consistent behavior per REQ-028.
+        """
+        # @@DONE@@ - task completion
+        if "@@DONE@@" in text:
+            return AgentEvent(type=AgentEventType.TEXT, content="@@DONE@@", raw=raw)
+
+        # @@CHECKPOINT@@ <description>
+        match = re.search(r"@@CHECKPOINT@@\s*(.*?)(?:@@|$)", text)
+        if match:
+            desc = match.group(1).strip()
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@CHECKPOINT@@ {desc}",
+                raw=raw,
+            )
+
+        # @@QUESTION@@ <question> - also queue @@WAITING@@
+        match = re.search(r"@@QUESTION@@\s*(.*?)(?:@@|$)", text)
+        if match:
+            question = match.group(1).strip()
+            self._extra_events.append(
+                AgentEvent(type=AgentEventType.TEXT, content="@@WAITING@@", raw=raw)
+            )
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content=f"@@QUESTION@@ {question}",
+                raw=raw,
+            )
+
+        return None
