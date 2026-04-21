@@ -1089,12 +1089,11 @@ def _provider_overload_event(content: str = "provider overloaded") -> AgentEvent
 class TestProviderOverload:
     """Tests for provider overload detection and handling."""
 
-    def test_provider_overload_status_reported(self, tmp_path):
-        """PROVIDER_OVERLOAD event sets suspended:provider-overload status."""
-        events = [_provider_overload_event("high demand error after retries")]
-        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
-            tmp_path, events=events)
-        runner.run()
+    def test_provider_overload_status_set_by_dispatch(self, tmp_path):
+        """_dispatch_event sets suspended:provider-overload for PROVIDER_OVERLOAD event."""
+        runner, *_, state_mgr = _make_runner(tmp_path)
+        runner._workspace = Workspace(path=tmp_path, branch="test")
+        runner._dispatch_event(_provider_overload_event("high demand"))
         st = state_mgr.load_state()
         assert st.status == "suspended:provider-overload"
 

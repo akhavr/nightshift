@@ -546,8 +546,8 @@ class TestParseAuthFailure:
         assert ev is not None
         assert ev.type == AgentEventType.AUTH_FAILURE
 
-    def test_observation_error_non_auth_stays_tool_result(self):
-        """ObservationEvent with is_error=true but non-auth content stays TOOL_RESULT."""
+    def test_observation_error_transient_emits_auth_failure(self):
+        """ObservationEvent with is_error=true and transient error emits AUTH_FAILURE for retry."""
         agent = self._agent()
         raw = _observation_event(
             "ErrorObservation",
@@ -556,7 +556,8 @@ class TestParseAuthFailure:
         )
         ev = agent._parse(raw)
         assert ev is not None
-        assert ev.type == AgentEventType.TOOL_RESULT
+        # Transient errors (500) emit AUTH_FAILURE for retry handling
+        assert ev.type == AgentEventType.AUTH_FAILURE
 
     def test_observation_without_error_flag_not_auth_failure(self):
         """ObservationEvent without is_error=true is never AUTH_FAILURE."""

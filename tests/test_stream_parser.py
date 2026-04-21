@@ -159,7 +159,10 @@ def test_parse_result_success():
 
 
 def test_parse_result_success_with_is_error_no_done():
-    """result with subtype=success but is_error=True should NOT inject @@DONE@@."""
+    """result with subtype=success but is_error=True should NOT inject @@DONE@@.
+
+    When the error is transient (like 500), it emits AUTH_FAILURE for retry handling.
+    """
     agent = make_agent()
     line = json.dumps({
         "type": "result",
@@ -170,8 +173,9 @@ def test_parse_result_success_with_is_error_no_done():
     })
     ev = agent._parse(line)
     assert ev is not None
-    assert ev.type == AgentEventType.SYSTEM
-    assert "API Error" in ev.content
+    # Transient errors (500) emit AUTH_FAILURE for retry handling
+    assert ev.type == AgentEventType.AUTH_FAILURE
+    assert "500" in ev.content
     # Should NOT inject @@DONE@@ when is_error is True
     assert len(agent._extra_events) == 0
 
@@ -277,8 +281,8 @@ class TestAuthFailureDetection:
         assert ev is not None
         assert ev.type == AgentEventType.AUTH_FAILURE
 
-    def test_non_auth_error_stays_system(self):
-        """A regular error event should NOT be flagged as auth failure."""
+    def test_transient_error_emits_auth_failure_for_retry(self):
+        """Transient errors (rate limit) emit AUTH_FAILURE for retry handling."""
         agent = make_agent()
         line = json.dumps({
             "type": "error",
@@ -286,8 +290,9 @@ class TestAuthFailureDetection:
         })
         ev = agent._parse(line)
         assert ev is not None
-        assert ev.type == AgentEventType.SYSTEM
-        assert "error:" in ev.content
+        # Transient errors emit AUTH_FAILURE so _maybe_retry_transient can handle them
+        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert "Rate limit" in ev.content
 
     def test_non_auth_result_stays_system(self):
         agent = make_agent()
