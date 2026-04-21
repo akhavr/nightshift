@@ -43,12 +43,24 @@ terminal_statuses:
   - closed
 
 overflow:
-  agent_kind: codex
+  agent_kind: openhands
   extra_args: []
   env:
-    CODEX_API_KEY: $OVERFLOW_API_KEY
-    CODEX_BASE_URL: https://openrouter.ai/api/v1
-    CODEX_MODEL: openai/gpt-5.4-mini
+    # OpenHands uses LLM_* env vars (litellm under the hood)
+    LLM_API_KEY: $OVERFLOW_API_KEY
+    LLM_MODEL: $OVERFLOW_MODEL
+    LLM_BASE_URL: $OVERFLOW_BASE_URL
+    # Claude Code uses ANTHROPIC_* env vars
+    ANTHROPIC_BASE_URL: $OVERFLOW_BASE_URL
+    ANTHROPIC_AUTH_TOKEN: $OVERFLOW_API_KEY
+    ANTHROPIC_API_KEY: $OVERFLOW_API_KEY
+    ANTHROPIC_MODEL: $OVERFLOW_MODEL
+    ANTHROPIC_SMALL_FAST_MODEL: $OVERFLOW_MODEL
+    ANTHROPIC_DEFAULT_SONNET_MODEL: $OVERFLOW_MODEL
+    ANTHROPIC_DEFAULT_OPUS_MODEL: $OVERFLOW_MODEL
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: $OVERFLOW_MODEL
+    API_TIMEOUT_MS: "3000000"
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
 
 auto_start:
   enabled: true
