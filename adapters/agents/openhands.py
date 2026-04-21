@@ -103,7 +103,7 @@ class OpenHandsAgent(HeadlessAgentBase):
 
         if kind == "ObservationEvent":
             content = str(ev.get("content", ""))[:TOOL_RESULT_PREVIEW_LEN]
-            if ev.get("is_error") and self._is_auth_failure(content):
+            if ev.get("is_error") and (self._is_auth_failure(content) or self._is_transient_error(content)):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
                     content=content,

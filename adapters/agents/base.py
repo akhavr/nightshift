@@ -25,6 +25,7 @@ TRANSIENT_RETRY_DELAYS = [30, 60, 120]
 TRANSIENT_ERROR_PATTERNS = (
     "500", "502", "503", "504", "429",
     "rate limit", "overloaded", "service unavailable",
+    "high demand", "reconnecting",
 )
 
 
@@ -144,9 +145,10 @@ class HeadlessAgentBase:
             self._restart()
             return True
 
-        # Max retries exceeded, reset counter and let the event through
-        log.warning(f"Transient error retry limit exceeded, yielding AUTH_FAILURE: {ev.content[:100]}...")
+        # Max retries exceeded — convert to PROVIDER_OVERLOAD instead of AUTH_FAILURE
+        log.warning(f"Transient error retry limit exceeded, yielding PROVIDER_OVERLOAD: {ev.content[:100]}...")
         self._transient_retry_count = 0
+        ev.type = AgentEventType.PROVIDER_OVERLOAD
         return False
 
     def send_input(self, text: str) -> None:

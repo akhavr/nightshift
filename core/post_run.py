@@ -5,6 +5,7 @@ Extracted from SessionRunner to keep session.py focused on the event loop.
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from core.protocols import (
@@ -20,6 +21,10 @@ log = logging.getLogger(__name__)
 
 CHECKPOINT_SUMMARIZE_THRESHOLD = 10
 CHECKPOINT_SUMMARY_COUNT = 5
+
+# Backoff delays (seconds) for provider overload retries
+OVERLOAD_BACKOFF_DELAYS = [30, 60, 120, 240]
+MAX_OVERLOAD_RESUMES = len(OVERLOAD_BACKOFF_DELAYS)
 
 
 def post_run_action(
@@ -57,6 +62,9 @@ def post_run_action(
     if st.status in ("completed", "cancelled:review-rejected",
                       "suspended:auth-failure", "suspended:auth-failure-permanent"):
         return None
+    if st.status == "suspended:provider-overload":
+        return resume_with_overload_backoff(
+            state_mgr, tracker, notifier, issue, agent, workspace, build_resume_fn)
     if st.status == "cancelled:external":
         tracker.add_comment(issue.id, "🛑 Stopped: closed externally.")
         notifier.notify(f"🛑 {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — stopped.",
@@ -208,6 +216,47 @@ def resume_with_answer(state_mgr: StateManager, st) -> str:
     state_mgr.append_conversation("human_answer_sent", answer)
     log.info("Restarting agent with answer via --resume")
     return answer
+
+
+def resume_with_overload_backoff(
+    state_mgr: StateManager,
+    tracker: IssueTracker,
+    notifier: Notifier,
+    issue: TrackerIssue,
+    agent: CodingAgent,
+    workspace: Workspace | None,
+    build_resume_fn,
+) -> str | None:
+    """Resume after provider overload with exponential backoff.
+
+    Returns resume prompt if within retry limit, None if max retries exceeded.
+    """
+    st = state_mgr.load_state()
+    resume_count = st.overload_resumes
+
+    if resume_count >= MAX_OVERLOAD_RESUMES:
+        log.error(f"Provider overload: exceeded max retries ({MAX_OVERLOAD_RESUMES})")
+        state_mgr.update_status("suspended:provider-overload-max")
+        notifier.notify(
+            f"⚠️ {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}: "
+            f"provider overload persisted after {MAX_OVERLOAD_RESUMES} retries. Manual resume needed.",
+            level=NotificationLevel.ACTIONS)
+        return None
+
+    # Get backoff delay for this attempt
+    delay = OVERLOAD_BACKOFF_DELAYS[resume_count]
+    state_mgr.increment_overload_resumes()
+
+    log.info(f"Provider overload: backoff {delay}s before retry {resume_count + 1}/{MAX_OVERLOAD_RESUMES}")
+    tracker.add_comment(
+        issue.id,
+        f"⏳ Provider overloaded — waiting {delay}s before retry {resume_count + 1}/{MAX_OVERLOAD_RESUMES}..."
+    )
+    time.sleep(delay)
+
+    build_resume_fn()
+    state_mgr.update_status("working")
+    return state_mgr.read_resume_prompt()
 
 
 def prepare_resume(

@@ -79,6 +79,7 @@ class AgentEventType(Enum):
     PROCESS_EXIT = auto()
     STALL = auto()
     AUTH_FAILURE = auto()
+    PROVIDER_OVERLOAD = auto()  # Provider rate limit/overload after retries exhausted
     UNKNOWN = auto()
 
 

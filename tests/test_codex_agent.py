@@ -265,20 +265,29 @@ class TestParseErrorEvents:
         assert ev.type == AgentEventType.SYSTEM
         assert "turn.failed" in ev.content
 
-    def test_error_rate_limit_not_auth_failure(self):
-        """Rate limit errors are handled as transient errors, not auth failures."""
+    def test_error_rate_limit_emits_auth_failure_for_retry(self):
+        """Rate limit errors emit AUTH_FAILURE so _maybe_retry_transient can handle them."""
         agent = self._agent()
         raw = _ev("error", message="status 429 rate limit exceeded")
         ev = agent._parse(raw)
-        # Rate limit is now a transient error, not auth failure
-        assert ev.type == AgentEventType.SYSTEM
+        # Transient errors emit AUTH_FAILURE so retry logic can catch them
+        assert ev.type == AgentEventType.AUTH_FAILURE
 
-    def test_error_reconnecting_not_auth_failure(self):
-        """Reconnecting messages are transient — not auth failures unless they match patterns."""
+    def test_error_reconnecting_emits_auth_failure_for_retry(self):
+        """Reconnecting messages emit AUTH_FAILURE for retry handling."""
         agent = self._agent()
         raw = _ev("error", message="Reconnecting... 1/5 (timeout)")
         ev = agent._parse(raw)
-        assert ev.type == AgentEventType.SYSTEM
+        assert ev.type == AgentEventType.AUTH_FAILURE
+
+    def test_high_demand_detected_as_overload(self):
+        """High demand errors emit AUTH_FAILURE for transient retry handling."""
+        agent = self._agent()
+        raw = _ev("error", message="Reconnecting... 5/5 (We're currently experiencing high demand)")
+        ev = agent._parse(raw)
+        # High demand is a transient error, emits AUTH_FAILURE for retry handling
+        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert "high demand" in ev.content
 
 
 # ── _parse() — edge cases ────────────────────────────────

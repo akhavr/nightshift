@@ -138,7 +138,7 @@ class CodexAgent(HeadlessAgentBase):
         if event_type == "turn.failed":
             error = ev.get("error", {})
             msg = error.get("message", "") if isinstance(error, dict) else str(error)
-            if self._is_auth_failure(msg):
+            if self._is_auth_failure(msg) or self._is_transient_error(msg):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
                     content=msg,
@@ -152,7 +152,7 @@ class CodexAgent(HeadlessAgentBase):
 
         if event_type == "error":
             msg = ev.get("message", "")
-            if self._is_auth_failure(msg):
+            if self._is_auth_failure(msg) or self._is_transient_error(msg):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
                     content=msg,

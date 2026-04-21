@@ -34,6 +34,7 @@ class SessionState:
     step: int = 0
     started_at: str = ""
     orphan_resumes: int = 0
+    overload_resumes: int = 0  # tracks provider overload retry count for backoff
     completed_at: str = ""
     checkpoints: list[Checkpoint] = field(default_factory=list)
     human_answers: list[QAExchange] = field(default_factory=list)
@@ -73,6 +74,19 @@ class StateManager:
 
     def increment_step(self) -> int:
         st = self.load_state(); st.step += 1; self._write(st); return st.step
+
+    def increment_overload_resumes(self) -> int:
+        """Increment and return the overload resume count for backoff tracking."""
+        st = self.load_state()
+        st.overload_resumes += 1
+        self._write(st)
+        return st.overload_resumes
+
+    def reset_overload_resumes(self):
+        """Reset overload resume count after successful run."""
+        st = self.load_state()
+        st.overload_resumes = 0
+        self._write(st)
 
     def add_checkpoint(self, desc: str, step: int, commit: str = "none"):
         st = self.load_state()

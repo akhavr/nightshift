@@ -1077,3 +1077,125 @@ class TestFileSignals:
         state = state_mgr.load_state()
         assert state.step == 1
         assert any("tests green" in cp.description for cp in state.checkpoints)
+
+
+# ── Provider overload tests ────────────────────────────────
+
+
+def _provider_overload_event(content: str = "provider overloaded") -> AgentEvent:
+    return AgentEvent(type=AgentEventType.PROVIDER_OVERLOAD, content=content, raw=content)
+
+
+class TestProviderOverload:
+    """Tests for provider overload detection and handling."""
+
+    def test_provider_overload_status_reported(self, tmp_path):
+        """PROVIDER_OVERLOAD event sets suspended:provider-overload status."""
+        events = [_provider_overload_event("high demand error after retries")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.status == "suspended:provider-overload"
+
+    def test_provider_overload_notifies(self, tmp_path):
+        """Provider overload should notify about the situation."""
+        events = [_provider_overload_event()]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        assert any("provider overloaded" in n for n in notifier.notifications)
+
+    def test_provider_overload_commits_wip(self, tmp_path):
+        """Provider overload should commit WIP before suspending."""
+        events = [_provider_overload_event()]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
+        assert any("provider overload" in c for c in ws_mgr.commits)
+
+    def test_dispatch_provider_overload_returns_stop(self, tmp_path):
+        """_dispatch_event returns STOP for PROVIDER_OVERLOAD."""
+        runner, *_ = _make_runner(tmp_path)
+        runner._workspace = Workspace(path=tmp_path, branch="test")
+        result = runner._dispatch_event(_provider_overload_event())
+        assert result == "STOP"
+
+    def test_backoff_on_provider_overload(self, tmp_path):
+        """Provider overload should trigger auto-resume with backoff.
+
+        First overload triggers backoff (30s) and resume. Mocked to skip delay.
+        """
+        from unittest.mock import patch
+        from core.post_run import OVERLOAD_BACKOFF_DELAYS
+
+        # First run: PROVIDER_OVERLOAD
+        # Second run: complete successfully
+        agent = ScriptedAgent([
+            [_provider_overload_event("high demand")],
+            [_text_event("@@DONE@@ complete")],
+        ])
+        runner, _, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, agent=agent)
+
+        # Patch time.sleep to avoid waiting during test
+        with patch("core.post_run.time.sleep") as mock_sleep:
+            runner.run()
+
+        # Should have slept with the first backoff delay
+        mock_sleep.assert_called_once_with(OVERLOAD_BACKOFF_DELAYS[0])
+
+        st = state_mgr.load_state()
+        # Should have resumed and completed
+        assert st.status == "waiting:review"
+
+    def test_overload_max_retries_exceeded(self, tmp_path):
+        """After MAX_OVERLOAD_RESUMES, session should be suspended permanently."""
+        from unittest.mock import patch
+        from core.post_run import MAX_OVERLOAD_RESUMES
+
+        # All runs produce PROVIDER_OVERLOAD
+        agent = ScriptedAgent([
+            [_provider_overload_event()] for _ in range(MAX_OVERLOAD_RESUMES + 1)
+        ])
+        runner, _, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, agent=agent)
+
+        with patch("core.post_run.time.sleep"):
+            runner.run()
+
+        st = state_mgr.load_state()
+        assert st.status == "suspended:provider-overload-max"
+        assert st.overload_resumes == MAX_OVERLOAD_RESUMES
+
+    def test_checkpoint_resets_overload_counter(self, tmp_path):
+        """Checkpoint should reset overload_resumes counter."""
+        events = [_text_event("@@CHECKPOINT@@ tests passing")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+
+        # Set overload_resumes to non-zero
+        st = state_mgr.load_state()
+        st.overload_resumes = 2
+        state_mgr._write(st)
+
+        runner.run()
+
+        st = state_mgr.load_state()
+        assert st.overload_resumes == 0
+
+    def test_done_resets_overload_counter(self, tmp_path):
+        """@@DONE@@ should reset overload_resumes counter."""
+        events = [_text_event("@@DONE@@ complete")]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+
+        # Set overload_resumes to non-zero
+        st = state_mgr.load_state()
+        st.overload_resumes = 2
+        state_mgr._write(st)
+
+        runner.run()
+
+        st = state_mgr.load_state()
+        assert st.overload_resumes == 0
