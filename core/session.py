@@ -184,6 +184,15 @@ class SessionRunner:
                 f"🔑 {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]}: auth failure — token may be expired. Refresh and resume.",
                 level=NotificationLevel.ACTIONS)
             return "STOP"
+        elif event.type == AgentEventType.PROVIDER_OVERLOAD:
+            log.warning(f"Provider overload: {event.content}")
+            self._commit_wip("provider overload")
+            self.state_mgr.increment_overload_resumes()
+            self.state_mgr.update_status("suspended:provider-overload")
+            self.notifier.notify(
+                f"⏳ {self.issue.identifier} {self.issue.title[:TITLE_TRUNCATE_LEN]}: provider overload — will retry with backoff.",
+                level=NotificationLevel.ACTIONS)
+            return "STOP"
         elif event.type == AgentEventType.STALL:
             log.warning(f"Stall: {event.content}")
             self._commit_wip("stalled")
@@ -355,6 +364,7 @@ class SessionRunner:
         step = self.state_mgr.increment_step()
         commit = self._commit_checkpoint(content, step)
         self.state_mgr.add_checkpoint(content, step, commit)
+        self.state_mgr.reset_overload_resumes()  # Progress made, reset backoff
         self._build_resume()
         self.tracker.add_comment(
             self.issue.id, f"📌 Checkpoint {step}: {content}")

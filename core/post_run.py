@@ -5,6 +5,7 @@ Extracted from SessionRunner to keep session.py focused on the event loop.
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from core.protocols import (
@@ -20,6 +21,22 @@ log = logging.getLogger(__name__)
 
 CHECKPOINT_SUMMARIZE_THRESHOLD = 10
 CHECKPOINT_SUMMARY_COUNT = 5
+OVERLOAD_BACKOFF_DELAYS = [30, 60, 120, 240]  # seconds
+
+
+def should_resume(state_mgr: StateManager, step: str) -> int | None:
+    """Check if session should resume, returning backoff delay or None.
+
+    For provider overload, returns the next backoff delay based on overload_resumes counter.
+    Returns None if we've exhausted all retry attempts.
+    """
+    st = state_mgr.load_state()
+    if st.status == "suspended:provider-overload":
+        idx = st.overload_resumes - 1  # Counter already incremented
+        if idx >= len(OVERLOAD_BACKOFF_DELAYS):
+            return None  # Exhausted retries
+        return OVERLOAD_BACKOFF_DELAYS[idx]
+    return 0  # No delay for other statuses
 
 
 def post_run_action(
@@ -67,6 +84,19 @@ def post_run_action(
         return prepare_resume(
             state_mgr, tracker, notifier, issue, agent, workspace,
             build_resume_fn, reason)
+    if st.status == "suspended:provider-overload":
+        delay = should_resume(state_mgr, "coder")
+        if delay is None:
+            # Max overload retries reached — don't auto-resume
+            log.error("Provider overload retry limit reached. Stopping.")
+            state_mgr.update_status("suspended:provider-overload-permanent")
+            notifier.notify(
+                f"⏳ {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}: provider overload retry limit reached.",
+                level=NotificationLevel.ACTIONS)
+            return None
+        return prepare_resume(
+            state_mgr, tracker, notifier, issue, agent, workspace,
+            build_resume_fn, "provider-overload", backoff_delay=delay)
     if st.status == "working" and is_review:
         commit_wip_fn("max-turns")
         return _handle_review_max_turns(
@@ -219,8 +249,15 @@ def prepare_resume(
     workspace: Workspace | None,
     build_resume_fn,
     reason: str,
+    backoff_delay: int | None = None,
 ) -> str:
-    """Build resume prompt and notify. Returns the prompt for the loop."""
+    """Build resume prompt and notify. Returns the prompt for the loop.
+
+    If backoff_delay is set (for provider overload), sleeps before resuming.
+    """
+    if backoff_delay:
+        log.info(f"Backoff delay: sleeping {backoff_delay}s before resume...")
+        time.sleep(backoff_delay)
     build_resume_fn()
     maybe_summarize_checkpoints(state_mgr, agent, workspace, build_resume_fn)
     tracker.add_comment(issue.id, f"🔄 {reason} — auto-resuming...")

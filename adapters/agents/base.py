@@ -24,7 +24,7 @@ TOOL_RESULT_PREVIEW_LEN = 500
 TRANSIENT_RETRY_DELAYS = [30, 60, 120]
 TRANSIENT_ERROR_PATTERNS = (
     "500", "502", "503", "504", "429",
-    "rate limit", "overloaded", "service unavailable",
+    "rate limit", "overloaded", "service unavailable", "high demand",
 )
 
 

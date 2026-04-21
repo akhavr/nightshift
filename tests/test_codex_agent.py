@@ -280,6 +280,22 @@ class TestParseErrorEvents:
         ev = agent._parse(raw)
         assert ev.type == AgentEventType.SYSTEM
 
+    def test_high_demand_detected_as_overload(self):
+        """High demand errors at retry limit (5/5) should emit PROVIDER_OVERLOAD."""
+        agent = self._agent()
+        raw = _ev("error", message="Reconnecting... 5/5 (We're currently experiencing high demand, which may cause temporary errors.)")
+        ev = agent._parse(raw)
+        assert ev.type == AgentEventType.PROVIDER_OVERLOAD
+        assert "high demand" in ev.content
+
+    def test_high_demand_early_retries_not_overload(self):
+        """High demand errors before retry limit should be SYSTEM (transient)."""
+        agent = self._agent()
+        raw = _ev("error", message="Reconnecting... 3/5 (high demand)")
+        ev = agent._parse(raw)
+        # Early retries are transient, not overload
+        assert ev.type == AgentEventType.SYSTEM
+
 
 # ── _parse() — edge cases ────────────────────────────────
 
