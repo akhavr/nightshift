@@ -159,8 +159,14 @@ class ReviewOrchestrator:
             self._escalate_to_human(sid, session_dir, issue_id, max_rounds)
             return
 
-        _update_status(session_dir, "reviewing")
         review_sid = f"{REVIEW_SESSION_PREFIX}{sid}"
+
+        # Clean up stale review session if it exists with completed_at set
+        # This handles the race condition where the watcher restarts after
+        # a review container exits but before cleanup_review_session() is called.
+        self._maybe_cleanup_stale_review(review_sid)
+
+        _update_status(session_dir, "reviewing")
 
         log.info(f"[{sid}] Launching automated review (round {rounds + 1}/{max_rounds})")
         cmd = [
@@ -192,6 +198,31 @@ class ReviewOrchestrator:
             f"Escalating to human review.\n"
             f"`nightshift accept/reject/revise {issue_id}`",
             level=NotificationLevel.ACTIONS)
+
+    def _maybe_cleanup_stale_review(self, review_sid: str):
+        """Clean up a stale review session if it exists with completed_at set.
+
+        This handles the race condition where the watcher restarts after a review
+        container exits (setting completed_at) but before cleanup_review_session()
+        is called. Without this cleanup, launching a new review fails with
+        'session already exists'.
+        """
+        review_dir = self.sessions_dir / review_sid
+        if not review_dir.exists() or not (review_dir / "state.json").exists():
+            return
+
+        try:
+            state = read_state(review_dir)
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{review_sid}] Failed to read state for stale check: {e}")
+            return
+
+        # Only clean up if completed_at is set (review finished normally)
+        if not state.get("completed_at"):
+            return
+
+        log.info(f"[{review_sid}] Cleaning up stale review session before relaunch")
+        self.cleanup_review_session(review_sid, review_dir)
 
     def check_reviewer_done(self):
         """Check if reviewer sessions have finished, handle verdict."""

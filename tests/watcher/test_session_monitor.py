@@ -1027,3 +1027,89 @@ class TestVerdictRecovery:
         # No review session -> falls back to reverting
         assert state["status"] == "waiting:review"
         assert launched == []
+
+
+# ---------------------------------------------------------------------------
+# Stale review session cleanup tests
+# ---------------------------------------------------------------------------
+
+class TestStaleReviewSessionCleanup:
+    """Startup cleanup for review sessions with completed_at set but not yet cleaned up."""
+
+    def test_startup_cleans_stale_review_sessions(self, tmp_path):
+        """On startup, review sessions with completed_at set should be cleaned up.
+
+        This is the fix for the race condition where the watcher restarts after
+        a review container exits but before cleanup_review_session() is called.
+        Without this fix, the watcher loops trying to launch a new review and
+        fails with 'session already exists'.
+        """
+        w = _make_watcher(tmp_path)
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+
+        # Set completed_at to simulate a review that finished but wasn't cleaned up
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        # The review session should be cleaned up on startup
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            w.monitor.cleanup_stale_review_sessions()
+
+        # Review session should be removed
+        mock_rmtree.assert_called()
+        assert any(str(review_sd) in str(call) for call in mock_rmtree.call_args_list)
+
+    def test_startup_does_not_clean_incomplete_review_sessions(self, tmp_path):
+        """Review sessions without completed_at should NOT be cleaned up on startup."""
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="waiting:review",
+                      issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        # No completed_at set
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            w.monitor.cleanup_stale_review_sessions()
+
+        # Review session should NOT be removed
+        mock_rmtree.assert_not_called()
+        assert review_sd.exists()
+
+    def test_startup_does_not_clean_coder_sessions(self, tmp_path):
+        """Coder sessions (non-review) should NOT be cleaned even with completed_at."""
+        w = _make_watcher(tmp_path)
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        # Set completed_at on coder session (unusual but possible)
+        state = json.loads((coder_sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
+        (coder_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            w.monitor.cleanup_stale_review_sessions()
+
+        # Coder session should NOT be removed
+        mock_rmtree.assert_not_called()
+        assert coder_sd.exists()

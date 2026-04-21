@@ -862,3 +862,87 @@ class TestReviewNoVerdict:
         coder_state = json.loads(
             (w.sessions_dir / "abc" / "state.json").read_text())
         assert coder_state["status"] == "waiting:human-review"
+
+
+# ---------------------------------------------------------------------------
+# Stale review session cleanup before launch tests
+# ---------------------------------------------------------------------------
+
+class TestStaleReviewCleanupBeforeLaunch:
+    """Pre-launch cleanup for stale review sessions with completed_at set."""
+
+    def test_launch_review_cleans_stale_session_first(self, tmp_path):
+        """maybe_launch_review() cleans up stale review sessions before launching.
+
+        This is the fix for the race condition where:
+        1. Review container sets completed_at and exits
+        2. Watcher restarts before cleanup_review_session() is called
+        3. Watcher tries to launch new review, fails with 'session already exists'
+
+        The fix: check for stale review session and clean it up before launching.
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+
+        # Create coder session in waiting:review
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        # Create STALE review session (completed_at set but not cleaned up)
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            cfg.review.max_rounds = 3
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Stale review session should be cleaned up first
+        assert any("review-abc" in str(call) for call in mock_rmtree.call_args_list)
+        # New review should be launched
+        assert "review-abc" in launched
+
+    def test_launch_review_does_not_clean_incomplete_session(self, tmp_path):
+        """maybe_launch_review() does NOT clean up review sessions without completed_at."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+
+        # Create coder session in waiting:review
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        # Create review session WITHOUT completed_at (still running or crashed)
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="working",
+                                  issue_id="issue-abc")
+        # No completed_at set
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            cfg.review.max_rounds = 3
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Incomplete review session should NOT be cleaned up
+        # Note: the launch may fail because session exists, but that's OK for this test
+        # The point is that we don't delete an active review session
+        assert not any("review-abc" in str(call) for call in mock_rmtree.call_args_list)

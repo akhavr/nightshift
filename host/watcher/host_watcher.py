@@ -228,6 +228,10 @@ class HostWatcher:
                                                    self._shutdown)
         self._socket_server.start()
 
+        # Clean up stale review sessions left over from previous watcher crash
+        # (race condition: review container exits but watcher restarts before cleanup)
+        self.monitor.cleanup_stale_review_sessions()
+
         log.info(f"Watching {self.sessions_dir}")
         if self.telegram.enabled:
             log.info("Telegram polling enabled")

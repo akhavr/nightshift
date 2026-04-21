@@ -57,6 +57,43 @@ class SessionMonitor:
         self._last_auth_retry_check = 0.0
         self._known_issue_ids: set[str] = set()
 
+    def cleanup_stale_review_sessions(self):
+        """Clean up review sessions with completed_at set but not yet cleaned up.
+
+        This handles the race condition where the watcher restarts after a review
+        container exits (setting completed_at) but before cleanup_review_session()
+        is called. Without this cleanup, the watcher loops trying to launch a new
+        review and fails with 'session already exists'.
+
+        Called on watcher startup.
+        """
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            # Only clean up review sessions
+            if not sid.startswith(REVIEW_SESSION_PREFIX):
+                continue
+            if not (session_dir / "state.json").exists():
+                continue
+
+            try:
+                state = read_state(session_dir)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"[{sid}] Failed to read state for stale review cleanup: {e}")
+                continue
+
+            # Only clean up if completed_at is set (review finished normally)
+            if not state.get("completed_at"):
+                continue
+
+            log.info(f"[{sid}] Cleaning up stale review session (completed_at set)")
+            if self._review_orchestrator:
+                self._review_orchestrator.cleanup_review_session(sid, session_dir)
+
     def check_orphaned_sessions(self):
         """Detect sessions with status 'working' but no running container -- auto-resume."""
         now = time.time()

@@ -247,3 +247,36 @@ class TestCheckBackgroundLaunches:
         # Status should remain unchanged since it wasn't "reviewing"
         state = json.loads((sd / "state.json").read_text())
         assert state["status"] == "waiting:review"
+
+
+# ---------------------------------------------------------------------------
+# Startup cleanup tests
+# ---------------------------------------------------------------------------
+
+class TestStartupCleanup:
+    """Verify stale review sessions are cleaned up on watcher startup."""
+
+    def test_run_calls_cleanup_stale_review_sessions(self, tmp_path):
+        """HostWatcher.run() should call cleanup_stale_review_sessions() on startup."""
+        import threading
+
+        w = _make_watcher(tmp_path)
+        w.telegram.enabled = False
+
+        # Mock the cleanup method to track if it's called
+        cleanup_called = []
+        original_cleanup = w.monitor.cleanup_stale_review_sessions
+        def mock_cleanup():
+            cleanup_called.append(True)
+            original_cleanup()
+        w.monitor.cleanup_stale_review_sessions = mock_cleanup
+
+        # Create a shutdown event that triggers immediately
+        shutdown = threading.Event()
+        shutdown.set()
+
+        # Run the watcher - it should call cleanup then exit
+        with patch("adapters.trackers.git_bug.repair_lamport_clocks"):
+            w.run(shutdown_event=shutdown)
+
+        assert len(cleanup_called) == 1, "cleanup_stale_review_sessions should be called once on startup"
