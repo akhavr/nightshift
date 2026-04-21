@@ -167,3 +167,19 @@ class TestSignalInstructions:
 
         result = render_template(prompt_body, issue, agent_kind="claude-code")
         assert "/session/signal/" not in result
+
+    def test_codex_prompt_includes_mcp_signal_instructions(self):
+        """When agent_kind is 'codex', the rendered prompt contains MCP tool signal instructions."""
+        issue = make_test_issue(title="Fix bug", body="It's broken")
+        template = Path(__file__).parent.parent / "templates" / "WORKFLOW.md"
+        content = template.read_text()
+        parts = content.split("---", 2)
+        prompt_body = parts[2] if len(parts) >= 3 else content
+
+        result = render_template(prompt_body, issue, agent_kind="codex")
+        # Should mention MCP tool names for signaling
+        assert "nightshift_done" in result
+        assert "nightshift_checkpoint" in result
+        assert "nightshift_question" in result
+        # Should NOT contain file-based signal paths (that's for OpenHands)
+        assert "/session/signal/" not in result
