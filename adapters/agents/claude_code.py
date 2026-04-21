@@ -129,7 +129,7 @@ class ClaudeCodeAgent(HeadlessAgentBase):
 
         if t == "result":
             result_text = ev.get("result", "")
-            if self._is_auth_failure(result_text) or self._is_transient_error(result_text):
+            if self._is_auth_failure(result_text):
                 return AgentEvent(type=AgentEventType.AUTH_FAILURE,
                                   content=result_text, raw=raw)
             if ev.get("subtype") == "success" and not ev.get("is_error"):
@@ -159,7 +159,7 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         if t == "error":
             error_msg = ev.get("error", {})
             error_text = error_msg.get("message", "") if isinstance(error_msg, dict) else str(error_msg)
-            if self._is_auth_failure(error_text) or self._is_transient_error(error_text):
+            if self._is_auth_failure(error_text):
                 return AgentEvent(type=AgentEventType.AUTH_FAILURE,
                                   content=error_text, raw=raw)
             return AgentEvent(type=AgentEventType.SYSTEM,
@@ -170,7 +170,7 @@ class ClaudeCodeAgent(HeadlessAgentBase):
 
         if t == "system":
             msg_text = ev.get("message", "")
-            if self._is_auth_failure(msg_text) or self._is_transient_error(msg_text):
+            if self._is_auth_failure(msg_text):
                 return AgentEvent(type=AgentEventType.AUTH_FAILURE,
                                   content=msg_text, raw=raw)
             return AgentEvent(type=AgentEventType.SYSTEM,

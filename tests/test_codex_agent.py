@@ -265,29 +265,36 @@ class TestParseErrorEvents:
         assert ev.type == AgentEventType.SYSTEM
         assert "turn.failed" in ev.content
 
-    def test_error_rate_limit_emits_auth_failure_for_retry(self):
-        """Rate limit errors emit AUTH_FAILURE so _maybe_retry_transient can handle them."""
+    def test_error_rate_limit_not_auth_failure(self):
+        """Rate limit errors are handled as transient errors, not auth failures."""
         agent = self._agent()
         raw = _ev("error", message="status 429 rate limit exceeded")
         ev = agent._parse(raw)
-        # Transient errors emit AUTH_FAILURE so retry logic can catch them
-        assert ev.type == AgentEventType.AUTH_FAILURE
+        # Rate limit is now a transient error, not auth failure
+        assert ev.type == AgentEventType.SYSTEM
 
-    def test_error_reconnecting_emits_auth_failure_for_retry(self):
-        """Reconnecting messages emit AUTH_FAILURE for retry handling."""
+    def test_error_reconnecting_not_auth_failure(self):
+        """Reconnecting messages are transient — not auth failures unless they match patterns."""
         agent = self._agent()
         raw = _ev("error", message="Reconnecting... 1/5 (timeout)")
         ev = agent._parse(raw)
-        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert ev.type == AgentEventType.SYSTEM
 
     def test_high_demand_detected_as_overload(self):
-        """High demand errors emit AUTH_FAILURE for transient retry handling."""
+        """High demand errors at retry limit (5/5) should emit PROVIDER_OVERLOAD."""
         agent = self._agent()
-        raw = _ev("error", message="Reconnecting... 5/5 (We're currently experiencing high demand)")
+        raw = _ev("error", message="Reconnecting... 5/5 (We're currently experiencing high demand, which may cause temporary errors.)")
         ev = agent._parse(raw)
-        # High demand is a transient error, emits AUTH_FAILURE for retry handling
-        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert ev.type == AgentEventType.PROVIDER_OVERLOAD
         assert "high demand" in ev.content
+
+    def test_high_demand_early_retries_not_overload(self):
+        """High demand errors before retry limit should be SYSTEM (transient)."""
+        agent = self._agent()
+        raw = _ev("error", message="Reconnecting... 3/5 (high demand)")
+        ev = agent._parse(raw)
+        # Early retries are transient, not overload
+        assert ev.type == AgentEventType.SYSTEM
 
 
 # ── _parse() — edge cases ────────────────────────────────

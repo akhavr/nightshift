@@ -139,7 +139,7 @@ class CodexAgent(HeadlessAgentBase):
         if event_type == "turn.failed":
             error = ev.get("error", {})
             msg = error.get("message", "") if isinstance(error, dict) else str(error)
-            if self._is_auth_failure(msg) or self._is_transient_error(msg):
+            if self._is_auth_failure(msg):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
                     content=msg,
@@ -153,9 +153,16 @@ class CodexAgent(HeadlessAgentBase):
 
         if event_type == "error":
             msg = ev.get("message", "")
-            if self._is_auth_failure(msg) or self._is_transient_error(msg):
+            if self._is_auth_failure(msg):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
+                    content=msg,
+                    raw=raw,
+                )
+            # Detect provider overload at retry limit (5/5)
+            if self._is_overload_exhausted(msg):
+                return AgentEvent(
+                    type=AgentEventType.PROVIDER_OVERLOAD,
                     content=msg,
                     raw=raw,
                 )
@@ -253,6 +260,13 @@ class CodexAgent(HeadlessAgentBase):
             content=f"mcp_signal:{tool}",
             raw=raw,
         )
+
+    def _is_overload_exhausted(self, text: str) -> bool:
+        """Detect provider overload at retry limit (5/5 reconnect with high demand)."""
+        # Pattern: "Reconnecting... 5/5 (high demand...)"
+        if "5/5" not in text:
+            return False
+        return self._is_transient_error(text)
 
     def _parse_text_markers(self, text: str, raw: str) -> Optional[AgentEvent]:
         """Fallback: detect signal markers in agent_message text.

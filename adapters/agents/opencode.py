@@ -146,7 +146,7 @@ class OpenCodeAgent(HeadlessAgentBase):
             msg = ev.get("message", ev.get("error", ""))
             if isinstance(msg, dict):
                 msg = msg.get("message", str(msg))
-            if self._is_auth_failure(str(msg)) or self._is_transient_error(str(msg)):
+            if self._is_auth_failure(str(msg)):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
                     content=str(msg),
