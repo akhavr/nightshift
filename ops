@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1775018895,"nonce":"oOwcd53I/geEaI8JO6v1xjf2yaQ=","message":"🔄 Rebase needed — resuming agent to fix...","files":null}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1775019025,"nonce":"pKcQkq5q0txVr7s+c0QkMV/KxGg=","message":"💭 Rebase blocked by read-only mount; review verdict unchanged — wrong feature implemented","files":null}]}
