@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1775249974,"nonce":"gAenk7tDH/BeDPZJz7drRRM4DOc=","message":"🏁 **Work complete — awaiting review**\n\n**Summary:**\nNo checkpoints recorded.\n\n**Q\u0026A exchanges:** 0\n**Changes:**\n```\nNo changes\n```","files":null}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":5,"timestamp":1775249981,"nonce":"HEgyUUVqwNpfje/1c6wiNDTzDHc=","added":["agent-in-progress"],"removed":null}]}
