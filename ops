@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":4,"timestamp":1773593249,"nonce":"HQ9Tn5BBpZpRaf277lp4cMy3lyk=","status":2}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1773593249,"nonce":"biHtxGoiX4sxTPyvn8jCZ92TQSo=","message":"Fixed in workspace_setup.py — merge_base_into_worktree() runs on every resume.","files":null}]}
