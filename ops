@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":4,"timestamp":1773591844,"nonce":"eC/ZIdpxO8NyVYDv5lNF9U+wBLQ=","status":2}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1773591844,"nonce":"RapvPubkWw3gnaqx9sHwpT/rO5U=","message":"Fixed — host/docker_cmd.py now saves and restores the .git file around container runs.","files":null}]}
