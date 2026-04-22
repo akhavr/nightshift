@@ -251,9 +251,10 @@ class GitBugTracker:
             return None
 
     def list_issues(self, status=None) -> list[TrackerIssue]:
+        # Use "bug" not "bug ls" - ls has buggy default filter in v0.10.1
         args = ["bug", "-f", "json"]
         if isinstance(status, str):
-            args.extend(["--status", status])
+            args.append(f"status:{status}")
         raw = self._run(*args)
         if not raw: return []
         try:
