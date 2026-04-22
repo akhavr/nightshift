@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":1,"timestamp":1774994761,"nonce":"2h2J6Bgb3xqa0JHclb03u1fOB+k=","title":"Test: overflow v12 auth-token","message":"Say hello. @@DONE@@","files":null}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":5,"timestamp":1774994867,"nonce":"5ddUj+7+aJrmx6rSLE7wgfU9Iy8=","added":["agent-in-progress"],"removed":null}]}
