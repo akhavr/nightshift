@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1773786300,"nonce":"AG7YsGtt/NWyCYCzb7HpRmtop8s=","message":"⚠️ Accept failed: Cannot merge: working tree on `master` is not clean.\n```\nM CLAUDE.md\n M adapters/agents/claude_code.py\n M tests/test_stream_parser.py\n```\nCommit or stash changes first.","files":null}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":4,"timestamp":1773788743,"nonce":"XPCw/OcI/oK7eWyRuH/cVBWFnNg=","status":2}]}
