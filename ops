@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1775208665,"nonce":"gdJFoK372qO5J/RWO4/BcfQFrqo=","message":"Session `03b1818` complete. Checkpoints: 0.\n\nView logs: `nightshift logs 03b1818` / `nightshift history 03b1818`","files":null}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1775208668,"nonce":"qGWX0KSiqHUnw+0UVJrU9wC30ek=","message":"🤖 Resuming from step 0...","files":null}]}
