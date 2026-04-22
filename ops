@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1774961608,"nonce":"VvpxRASdY3YkPumkiGmQI7BIfJ4=","message":"🔄 Rebase needed — resuming agent to fix...","files":null}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1774961622,"nonce":"XF4+b8Z2JgPFfq7YGG3YVmf9Egw=","message":"💭 Review session in infinite rebase loop — 5th identical instruction received. Review verdict issued. Session should be terminated externally.","files":null}]}
