@@ -1,1 +1,1 @@
-{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":3,"timestamp":1774996651,"nonce":"F5ZV2MJ5uzn3CBPYkCpO5jTICfk=","message":"Session `29c7791` resumed — reason: orphaned (container gone). Checkpoint count: 0.\n\nView progress: `nightshift logs 29c7791` / `nightshift history 29c7791`","files":null}]}
+{"author":{"id":"2462ded6f56967dde059994c39a506c79e39e5dfd10c5a07f07a23a5652a8353"},"ops":[{"type":5,"timestamp":1774996686,"nonce":"oubDEPQZiumjUs/CzejXtNLCpl0=","added":["agent-in-progress"],"removed":null}]}
