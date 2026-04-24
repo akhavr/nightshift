@@ -66,11 +66,6 @@ class SessionMonitor:
         is called. Without this cleanup, the watcher loops trying to launch a new
         review and fails with 'session already exists'.
 
-        IMPORTANT: Before cleanup, this method extracts and processes the verdict
-        from the review session to ensure the coder session state is updated.
-        Otherwise, the coder remains in waiting:review status, triggering an
-        infinite relaunch cycle.
-
         Called on watcher startup.
         """
         if not self.sessions_dir.exists():
@@ -97,26 +92,7 @@ class SessionMonitor:
                 continue
 
             log.info(f"[{sid}] Cleaning up stale review session (completed_at set)")
-
-            # Process verdict BEFORE cleanup to prevent infinite relaunch loop
             if self._review_orchestrator:
-                coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
-                coder_dir = self.sessions_dir / coder_sid
-                issue_id = state.get("issue_id", "")
-
-                if coder_dir.exists() and issue_id:
-                    conv_log = session_dir / "conversation.jsonl"
-                    verdict = self._review_orchestrator.extract_reviewer_verdict(
-                        conv_log, issue_id)
-                    if verdict:
-                        log.info(f"[{sid}] Processing stale verdict: {verdict}")
-                        if verdict == "approve":
-                            self._review_orchestrator.handle_reviewer_approve(
-                                coder_sid, coder_dir, issue_id)
-                        elif verdict == "revise":
-                            self._review_orchestrator.handle_reviewer_revise(
-                                coder_sid, coder_dir, issue_id, session_dir)
-
                 self._review_orchestrator.cleanup_review_session(sid, session_dir)
 
     def check_orphaned_sessions(self):
