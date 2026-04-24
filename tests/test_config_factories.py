@@ -188,10 +188,27 @@ class TestCreateTracker:
 
         mock_cls.assert_called_once_with(repo="/override", verbose=True)
 
+    def test_passes_sync_only_when_enabled(self):
+        cfg = WorkflowConfig(
+            tracker=TrackerConfig(kind="git-bug", sync=True, extra={"repo": "/r"})
+        )
+        mod, mock_cls = _make_mock_module("GitBugTracker")
+
+        with patch("core.config.factories.importlib.import_module", return_value=mod):
+            create_tracker(cfg)
+
+        mock_cls.assert_called_once_with(repo="/r", sync=True)
+
     def test_unknown_tracker_kind_raises(self):
         cfg = WorkflowConfig(tracker=TrackerConfig(kind="jira"))
         with pytest.raises(ValueError, match="Unknown adapter kind 'jira'"):
             create_tracker(cfg)
+
+    def test_gitbug_graphql_registered(self):
+        assert TRACKER_REGISTRY["git-bug-graphql"] == (
+            "adapters.trackers.git_bug_graphql",
+            "GitBugGraphQLTracker",
+        )
 
 
 # ── create_workspace_mgr ─────────────────────────────────────
@@ -343,6 +360,21 @@ class TestCreateNotifiers:
 
 
 class TestWorkspaceConfigParsing:
+    def test_tracker_config_parses_sync(self, tmp_path):
+        """TrackerConfig parses sync as a typed field, not extra config."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+tracker:
+  kind: git-bug
+  sync: true
+  repo: /tmp/repo
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.tracker.sync is True
+        assert config.tracker.extra == {"repo": "/tmp/repo"}
+
     def test_workspace_config_parses_test_timeout(self, tmp_path):
         """WorkspaceConfig with test_timeout_s: 300 parses correctly."""
         workflow_md = tmp_path / "WORKFLOW.md"

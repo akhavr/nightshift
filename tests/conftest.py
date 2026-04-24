@@ -56,6 +56,18 @@ class MockTracker:
     def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
         return self.issues.get(issue_id)
 
+    def create_issue(self, title: str, body: str) -> str:
+        issue_id = "new-issue-id"
+        self.issues[issue_id] = TrackerIssue(
+            id=issue_id,
+            identifier=issue_id,
+            title=title,
+            body=body,
+            status="open",
+            labels=[],
+        )
+        return issue_id
+
     def list_issues(self, status=None) -> list[TrackerIssue]:
         issues = list(self.issues.values())
         if isinstance(status, str):

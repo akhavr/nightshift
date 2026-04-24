@@ -19,7 +19,7 @@ if [ "$AGENT_KIND" = "codex" ]; then
     elif [ -n "$CODEX_BASE_URL" ]; then
         export CODEX_API_KEY="$CODEX_KEY"
         cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${CODEX_MODEL:-o3}"
+model = "${CODEX_MODEL:-gpt-5.4}"
 model_provider = "custom"
 
 [model_providers.custom]
@@ -31,6 +31,49 @@ CODEXCFG
         export OPENAI_API_KEY="$CODEX_KEY"
         # Echo exported var so tests can verify
         echo "OPENAI_API_KEY=$OPENAI_API_KEY"
+    fi
+fi
+"""
+
+
+# Script that covers the combined OAuth + config-generation flow from docker-entrypoint.sh.
+_CODEX_OAUTH_SCRIPT = """\
+#!/bin/sh
+CODEX_OAUTH_PRESENT=0
+if [ -d /codex-auth ]; then
+    mkdir -p "$HOME/.codex"
+    cp /codex-auth/auth.json "$HOME/.codex/" 2>/dev/null || true
+    cp /codex-auth/config.toml "$HOME/.codex/" 2>/dev/null || true
+    if [ -f "$HOME/.codex/auth.json" ]; then
+        CODEX_OAUTH_PRESENT=1
+    fi
+fi
+mkdir -p "$HOME/.codex" 2>/dev/null || true
+if [ "$AGENT_KIND" = "codex" ]; then
+    if [ "$CODEX_OAUTH_PRESENT" = "1" ]; then
+        :
+    else
+        CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
+        if [ -z "$CODEX_KEY" ]; then
+            echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
+        elif [ -n "$CODEX_BASE_URL" ]; then
+            export CODEX_API_KEY="$CODEX_KEY"
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL:-gpt-5.4}"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "Custom"
+base_url = "${CODEX_BASE_URL}"
+env_key = "CODEX_API_KEY"
+CODEXCFG
+        else
+            export OPENAI_API_KEY="$CODEX_KEY"
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL:-gpt-4o-mini}"
+model_provider = "openai"
+CODEXCFG
+        fi
     fi
 fi
 """
@@ -98,7 +141,7 @@ class TestCodexConfigGeneration:
         assert "qwen/qwen3-coder" in content
 
     def test_codex_model_default(self, tmp_path):
-        """Without CODEX_MODEL, default model is o3."""
+        """Without CODEX_MODEL, default model is gpt-5.4."""
         config_path, _, _ = _run_config_script(tmp_path, {
             "AGENT_KIND": "codex",
             "CODEX_API_KEY": "sk-test",
@@ -106,7 +149,7 @@ class TestCodexConfigGeneration:
         })
 
         content = config_path.read_text()
-        assert 'model = "o3"' in content
+        assert 'model = "gpt-5.4"' in content
 
     def test_codex_api_key_fallback_to_openai(self, tmp_path):
         """Without CODEX_API_KEY, OPENAI_API_KEY is used."""
@@ -308,6 +351,71 @@ class TestCodexAuthCopy:
         assert result.returncode == 0
         assert (fake_home / ".codex" / "auth.json").exists()
         assert not (fake_home / ".codex" / "config.toml").exists()
+
+
+class TestCodexOAuth:
+
+    def test_codex_oauth_skips_config_generation(self, tmp_path):
+        """OAuth auth.json suppresses config.toml generation inside the container."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        (codex_auth / "auth.json").write_text('{"auth_mode": "oauth", "refresh_token": "token"}')
+
+        script_text = _CODEX_OAUTH_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "oauth_test.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(fake_home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-test",
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert (fake_home / ".codex" / "auth.json").exists()
+        assert not (fake_home / ".codex" / "config.toml").exists()
+
+    def test_codex_oauth_fallback_to_api_key(self, tmp_path):
+        """Without OAuth auth.json, Codex falls back to API-key config generation."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+
+        script_text = _CODEX_OAUTH_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "oauth_test.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(fake_home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-test",
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        config_path = fake_home / ".codex" / "config.toml"
+        assert config_path.exists()
+        assert 'model_provider = "openai"' in config_path.read_text()
 
 
 # Script that tests the plugins copy block from docker-entrypoint.sh.

@@ -253,6 +253,51 @@ class TestCheckOrphanedSessions:
         tracker.add_comment.assert_called_once()
         assert "too complex" in tracker.add_comment.call_args[0][1].lower()
 
+    def test_coder_session_with_completed_at_not_orphan(self, tmp_path):
+        """Coder sessions with completed_at set should not be orphan-resumed."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-23T00:00:00+00:00"
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "working"
+        assert state.get("orphan_resumes", 0) == 0
+
+    def test_coder_session_completed_at_race_condition(self, tmp_path):
+        """A completed coder session should not hit the orphan limit during status-update race."""
+        from host.constants import MAX_ORPHAN_RESUMES
+
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-23T00:00:00+00:00"
+        state["orphan_resumes"] = MAX_ORPHAN_RESUMES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "working"
+        tracker.add_comment.assert_not_called()
+
     def test_orphan_resume_limit_posts_telegram(self, tmp_path):
         """When limit is hit, a Telegram notification should be sent."""
         from host.constants import MAX_ORPHAN_RESUMES
@@ -490,6 +535,120 @@ class TestCheckAuthFailures:
         w.monitor.check_auth_failures()
 
         assert any("giving up" in n.lower() for n in notified)
+
+
+# ---------------------------------------------------------------------------
+# check_provider_outages tests
+# ---------------------------------------------------------------------------
+
+class TestCheckProviderOutages:
+    """Tests for watcher-based provider outage retry (suspended:provider-overload)."""
+
+    def test_skipped_within_retry_interval(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_provider_outage_check = time.time()
+        _make_session(w.sessions_dir, "abc", status="suspended:provider-overload", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        w.monitor.check_provider_outages()
+        assert launched == []
+
+    def test_provider_outage_session_retried(self, tmp_path):
+        """Provider-overload session should be retried after interval."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_provider_outage_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:provider-overload", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        w.monitor.check_provider_outages()
+
+        assert "abc" in launched
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "working"
+
+    def test_non_provider_overload_not_retried(self, tmp_path):
+        """Sessions with other suspended statuses should not be retried."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_provider_outage_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="suspended:stall", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        w.monitor.check_provider_outages()
+        assert launched == []
+
+    def test_provider_outage_retry_sets_recently_launched(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_provider_outage_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="suspended:provider-overload", issue_id="issue-abc")
+        w.monitor._launch_background = lambda cmd, sid: True
+
+        w.monitor.check_provider_outages()
+        assert "abc" in w._recently_launched
+
+    def test_provider_outage_retry_increments_counter(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        w.monitor._last_provider_outage_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:provider-overload", issue_id="issue-abc")
+        w.monitor._launch_background = lambda cmd, sid: True
+
+        w.monitor.check_provider_outages()
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["overload_resumes"] == 1
+
+    def test_provider_outage_retry_limit_stops_retrying(self, tmp_path):
+        """After MAX_PROVIDER_OUTAGE_RETRIES, session becomes suspended:provider-overload-permanent."""
+        from host.constants import MAX_PROVIDER_OUTAGE_RETRIES
+        w = _make_watcher(tmp_path)
+        w.monitor._last_provider_outage_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:provider-overload", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["overload_resumes"] = MAX_PROVIDER_OUTAGE_RETRIES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        w.monitor.check_provider_outages()
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "suspended:provider-overload-permanent"
+
+    def test_provider_outage_retry_limit_notifies_telegram(self, tmp_path):
+        from host.constants import MAX_PROVIDER_OUTAGE_RETRIES
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        w.monitor._last_provider_outage_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="suspended:provider-overload", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["overload_resumes"] = MAX_PROVIDER_OUTAGE_RETRIES
+        (sd / "state.json").write_text(json.dumps(state))
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+        w.monitor._launch_background = lambda cmd, sid: True
+
+        w.monitor.check_provider_outages()
+
+        assert any("giving up" in n.lower() for n in notified)
+
+    def test_provider_outage_review_session_includes_step(self, tmp_path):
+        """Review sessions should get --step review on provider outage retry."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_provider_outage_check = 0.0
+        _make_session(w.sessions_dir, "review-abc", status="suspended:provider-overload", issue_id="issue-abc")
+        launched_cmds = []
+        w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
+
+        w.monitor.check_provider_outages()
+
+        assert len(launched_cmds) == 1
+        cmd = launched_cmds[0]
+        step_idx = cmd.index("--step")
+        assert cmd[step_idx + 1] == "review"
 
 
 # ---------------------------------------------------------------------------

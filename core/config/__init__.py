@@ -7,12 +7,14 @@ from core.config.models import (
     MergeConfig,
     NotifierConfig,
     OverflowConfig,
+    OverflowProfile,
+    PricingConfig,
     ReviewConfig,
     TrackerConfig,
     WorkflowConfig,
     WorkspaceConfig,
 )
-from core.config.loader import load_workflow, split_front_matter
+from core.config.loader import load_workflow, resolve_overflow_config, split_front_matter
 from core.config.factories import (
     AGENT_REGISTRY,
     NOTIFIER_REGISTRY,
@@ -31,11 +33,14 @@ __all__ = [
     "MergeConfig",
     "NotifierConfig",
     "OverflowConfig",
+    "OverflowProfile",
+    "PricingConfig",
     "ReviewConfig",
     "TrackerConfig",
     "WorkflowConfig",
     "WorkspaceConfig",
     "load_workflow",
+    "resolve_overflow_config",
     "split_front_matter",
     "AGENT_REGISTRY",
     "NOTIFIER_REGISTRY",

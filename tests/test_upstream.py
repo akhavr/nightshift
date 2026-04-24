@@ -546,6 +546,46 @@ class TestCmdUpstream:
         assert "tracker sync failed" in out.err
         assert "network error" in out.err
 
+    def test_uses_create_issue_when_available(self, tmp_path, capsys):
+        from host.cli import cmd_upstream
+
+        workflow = tmp_path / "WORKFLOW.md"
+        workflow.write_text("---\ntemplate_version: 1\n---\nnew improved prompt")
+
+        canonical = tmp_path / "canonical.md"
+        canonical.write_text("---\ntemplate_version: 1\n---\nold prompt")
+
+        args = MagicMock()
+        args.dry_run = False
+        args.project_name = "test-proj"
+        args.workflow = str(workflow)
+
+        class CreateIssueTracker:
+            def __init__(self):
+                self.create_issue = MagicMock(return_value="abc123")
+                self.run_raw = MagicMock(return_value="")
+                self.add_label = MagicMock()
+                self.sync = MagicMock()
+
+        mock_tracker = CreateIssueTracker()
+
+        with patch("host.cli.repo_root", return_value=tmp_path), \
+             patch("host.cli._resolve_workflow", return_value=workflow), \
+             patch("host.cli.CANONICAL_TEMPLATE", canonical), \
+             patch("host.cli.load_workflow"), \
+             patch("host.cli.get_tracker_with_fallback",
+                   return_value=mock_tracker), \
+             patch("core.upstream.load_blocklist", return_value=[]), \
+             patch("builtins.input", return_value="y"):
+            cmd_upstream(args)
+
+        out = capsys.readouterr().out
+        assert "Filed upstream proposal" in out
+        mock_tracker.create_issue.assert_called_once()
+        mock_tracker.run_raw.assert_not_called()
+        mock_tracker.add_label.assert_called_once_with("abc123", "upstream")
+        mock_tracker.sync.assert_called_once()
+
     def test_review_md_upstream_proposal(self, tmp_path, capsys):
         """REVIEW.md changes should also generate an upstream proposal."""
         from host.cli import cmd_upstream

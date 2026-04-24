@@ -71,6 +71,8 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
     overflow_mounts: list[str] = []
     if overflow:
         overflow_env += ["-e", "OVERFLOW_ACTIVE=1"]
+        if overflow.profile_name:
+            overflow_env += ["-e", f"OVERFLOW_PROFILE={overflow.profile_name}"]
         for key, val in overflow.env.items():
             overflow_env += ["-e", f"{key}={val}"]
         if overflow.extra_args:

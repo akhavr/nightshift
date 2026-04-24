@@ -202,8 +202,8 @@ class TestWatcherAutoStart:
         assert len(launched) == 1
         assert launched == ["id-1"]
 
-    def test_known_issue_ids_prevents_relaunch(self, tmp_path):
-        """Issues already in _known_issue_ids are not re-launched."""
+    def test_existing_session_dir_prevents_relaunch(self, tmp_path):
+        """Existing session state is the authoritative guard against re-launch."""
         watcher = self._make_watcher(tmp_path, label="nightshift")
         tracker = MagicMock()
         tracker.list_issues.return_value = [
@@ -211,7 +211,10 @@ class TestWatcherAutoStart:
         ]
         watcher._tracker = tracker
         watcher._config = MagicMock()
-        watcher.monitor._known_issue_ids.add("id-1")
+
+        sd = tmp_path / "sessions" / "id-1"
+        sd.mkdir()
+        (sd / "state.json").write_text(json.dumps({"issue_id": "id-1", "status": "working"}))
 
         launched = []
         watcher.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
@@ -242,7 +245,6 @@ class TestWatcherAutoStart:
 
         # Second poll within interval is skipped
         launched.clear()
-        watcher.monitor._known_issue_ids.clear()
         watcher.monitor.check_new_issues()
         assert len(launched) == 0
 
