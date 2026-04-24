@@ -493,8 +493,8 @@ class TestRunContainerStaleCleanup:
 
     @patch("host.docker_cmd.docker_remove")
     @patch("host.docker_cmd.subprocess.run")
-    def test_runs_even_if_remove_fails(self, mock_run, mock_remove, tmp_path):
-        """docker run should proceed even if docker_remove returns False."""
+    def test_launch_fails_if_container_removal_fails(self, mock_run, mock_remove, tmp_path):
+        """If docker_remove returns False, run_container raises RuntimeError."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / ".git").write_text("gitdir: /repo-git/worktrees/agent-abc")
@@ -511,18 +511,19 @@ class TestRunContainerStaleCleanup:
         }
 
         with patch("host.docker_cmd.Path.home", return_value=tmp_path):
-            rc = run_container(
-                repo=tmp_path, workspace_mount=str(workspace),
-                session_dir=session_dir, names=names,
-                issue_id="abc123def456", max_turns=30,
-                step="coder", is_resume=False,
-                workflow_path=str(tmp_path / "WORKFLOW.md"),
-                image="nightshift:latest",
-            )
+            with pytest.raises(RuntimeError) as exc_info:
+                run_container(
+                    repo=tmp_path, workspace_mount=str(workspace),
+                    session_dir=session_dir, names=names,
+                    issue_id="abc123def456", max_turns=30,
+                    step="coder", is_resume=False,
+                    workflow_path=str(tmp_path / "WORKFLOW.md"),
+                    image="nightshift:latest",
+                )
 
-        assert rc == 0
+        assert "Failed to remove stale container nightshift-abc123" in str(exc_info.value)
         mock_remove.assert_called_once()
-        mock_run.assert_called_once()
+        mock_run.assert_not_called()
 
     @patch("host.docker_cmd.docker_remove")
     @patch("host.docker_cmd.subprocess.run")
