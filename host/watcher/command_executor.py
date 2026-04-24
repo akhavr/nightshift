@@ -75,7 +75,9 @@ class CommandExecutor:
                 str(_HOST_DIR / "launch.py"),
                 issue_id, "--resume",
             ]
-            self._launch_background(cmd, sid)
+            if not self._launch_background(cmd, sid):
+                log.warning(f"[{sid}] Revise launch failed -- reverting to waiting:review")
+                _update_status(session_dir, "waiting:review")
 
         except Exception as e:
             log.error(f"[{sid}] Revise failed: {e}")

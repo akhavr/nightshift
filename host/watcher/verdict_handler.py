@@ -172,6 +172,9 @@ class VerdictHandler:
                 str(_HOST_DIR / "launch.py"),
                 issue_id, "--resume",
             ]
-            self._launch_background(cmd, coder_sid)
+            if not self._launch_background(cmd, coder_sid):
+                log.warning(f"[{coder_sid}] Reviewer revise launch failed -- reverting to reviewing")
+                _update_status(coder_dir, "reviewing")
         except Exception as e:
-            log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e}")
+            log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e} -- reverting to reviewing")
+            _update_status(coder_dir, "reviewing")
