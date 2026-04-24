@@ -448,12 +448,14 @@ class TestPostRun:
 
     def test_completed_status_returns_none(self, tmp_path):
         runner, *_, state_mgr = _make_runner(tmp_path)
-        state_mgr.update_status("completed")
+        state_mgr.update_status("waiting:review")
+        state_mgr.update_status("accepted")
         assert runner._post_run() is None
 
     def test_cancelled_review_rejected_returns_none(self, tmp_path):
         runner, *_, state_mgr = _make_runner(tmp_path)
-        state_mgr.update_status("cancelled:review-rejected")
+        state_mgr.update_status("waiting:review")
+        state_mgr.update_status("rejected")
         assert runner._post_run() is None
 
     def test_answer_ready_restarts_with_answer(self, tmp_path):
@@ -474,7 +476,8 @@ class TestPostRun:
     def test_unexpected_status(self, tmp_path):
         runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(tmp_path)
         runner._workspace = Workspace(path=tmp_path, branch="test")
-        state_mgr.update_status("some-weird-status")
+        # Use a valid but unhandled state to test the fallback branch
+        state_mgr.update_status("suspended:hook-failure")
         result = runner._post_run()
         assert result is None
         st = state_mgr.load_state()
@@ -486,7 +489,8 @@ class TestPostRun:
         runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
             tmp_path, issue=issue)
         runner._workspace = Workspace(path=tmp_path, branch="test")
-        state_mgr.update_status("some-weird-status")
+        # Use a valid but unhandled state to test the fallback branch
+        state_mgr.update_status("suspended:hook-failure")
         runner._post_run()
         assert any("Fix the widget" in n for n in notifier.notifications)
 

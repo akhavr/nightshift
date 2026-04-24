@@ -57,7 +57,8 @@ class TestPostRunAction:
 
     def test_completed_returns_none(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("completed")
+        sm.update_status("waiting:review")
+        sm.update_status("accepted")
         result = post_run_action(
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
             lambda **kw: None, lambda r: None)
@@ -116,7 +117,8 @@ class TestPostRunAction:
 
     def test_unexpected_status(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("some-weird-status")
+        # Use a valid but unhandled state to test the fallback branch
+        sm.update_status("suspended:hook-failure")
         build_called = []
         result = post_run_action(
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
@@ -135,7 +137,8 @@ class TestPostRunAction:
 
     def test_unexpected_status_includes_title(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("some-weird-status")
+        # Use a valid but unhandled state to test the fallback branch
+        sm.update_status("suspended:hook-failure")
         post_run_action(
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
             lambda **kw: None, lambda r: None)
@@ -265,9 +268,15 @@ class TestMaybeSummarizeCheckpoints:
 
 
 class TestPostRunRebase:
-    """Tests for pre-review rebase integration in post_run_action."""
+    """Tests for pre-review rebase behavior in post_run_action.
 
-    def test_successful_rebase_proceeds_to_review(self, tmp_path):
+    Pre-review rebase now runs on the HOST side (review_orchestrator) to avoid
+    bind-mount issues where git cannot unlink mounted files like WORKFLOW.md.
+    The container-side post_run_action should NOT call rebase.
+    """
+
+    def test_done_pending_review_transitions_without_rebase(self, tmp_path):
+        """Container should transition to waiting:review without calling rebase."""
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
         sm.update_status("done:pending-review")
         result = post_run_action(
@@ -276,10 +285,13 @@ class TestPostRunRebase:
             base_branch="master")
         assert result is None
         assert sm.load_state().status == "waiting:review"
-        assert len(ws_mgr.rebase_calls) == 1
+        # Rebase should NOT be called from container side
+        assert len(ws_mgr.rebase_calls) == 0
 
-    def test_rebase_conflict_resumes_agent(self, tmp_path):
+    def test_rebase_not_called_in_container(self, tmp_path):
+        """Verify rebase is not called from container regardless of config."""
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        # Even with rebase result configured to fail, it should not be called
         ws_mgr.rebase_result = RebaseResult(
             success=False, conflict_details="conflict in main.py")
         sm.update_status("done:pending-review")
@@ -287,33 +299,10 @@ class TestPostRunRebase:
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
             lambda **kw: None, lambda r: None,
             base_branch="master")
-        assert result is not None
-        assert "REBASE CONFLICT" in result
-        assert sm.load_state().status == "working"
-        comments = tracker.get_comments(issue.id)
-        assert any("Rebase needed" in c.body for c in comments)
-
-    def test_rebase_passes_base_branch(self, tmp_path):
-        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("done:pending-review")
-        post_run_action(
-            sm, ws_mgr, ws, tracker, notifier, issue, agent,
-            lambda **kw: None, lambda r: None,
-            base_branch="main")
-        assert ws_mgr.rebase_calls[0][1] == "main"
-
-    def test_rebase_with_test_failure_resumes(self, tmp_path):
-        from unittest.mock import patch
-        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("done:pending-review")
-        with patch("core.post_run.attempt_pre_review_rebase",
-                    return_value="POST-REBASE TEST FAILURE: tests failed"):
-            result = post_run_action(
-                sm, ws_mgr, ws, tracker, notifier, issue, agent,
-                lambda **kw: None, lambda r: None)
-        assert result is not None
-        assert "TEST FAILURE" in result
-        assert sm.load_state().status == "working"
+        # Should still succeed because rebase is not called
+        assert result is None
+        assert sm.load_state().status == "waiting:review"
+        assert len(ws_mgr.rebase_calls) == 0
 
     def test_non_done_status_ignores_rebase(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
@@ -377,8 +366,8 @@ class TestReviewSkipsRebase:
         # Rebase should NOT have been called for review sessions
         assert len(ws_mgr.rebase_calls) == 0
 
-    def test_coder_done_attempts_rebase(self, tmp_path):
-        """Coder sessions should attempt rebase and resume on conflict."""
+    def test_coder_done_transitions_without_rebase(self, tmp_path):
+        """Coder sessions also skip rebase in container (done on host side)."""
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
         ws_mgr.rebase_result = RebaseResult(
             success=False, conflict_details="conflict in main.py")
@@ -387,11 +376,10 @@ class TestReviewSkipsRebase:
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
             lambda **kw: None, lambda r: None,
             base_branch="master", is_review=False)
-        # Coder should be resumed to fix the conflict
-        assert result is not None
-        assert "REBASE CONFLICT" in result
-        assert sm.load_state().status == "working"
-        assert len(ws_mgr.rebase_calls) == 1
+        # Rebase is now done on host side, so container just transitions
+        assert result is None
+        assert sm.load_state().status == "waiting:review"
+        assert len(ws_mgr.rebase_calls) == 0
 
 
 class TestReviewMaxTurns:

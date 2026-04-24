@@ -1,5 +1,5 @@
 ---
-template_version: 2
+template_version: 3
 
 agent:
   kind: claude-code
@@ -8,7 +8,7 @@ agent:
   extra_args: []
 
 tracker:
-  kind: git-bug
+  kind: git-bug-graphql
 
 workspace:
   kind: worktree
@@ -46,9 +46,15 @@ overflow:
   agent_kind: codex
   extra_args: []
   env:
-    CODEX_API_KEY: $OVERFLOW_API_KEY
-    CODEX_BASE_URL: https://openrouter.ai/api/v1
-    CODEX_MODEL: openai/gpt-5.4-mini
+    CODEX_MODEL: gpt-5.4-mini
+
+overflow_profiles:
+  openhands-qwen:
+    agent_kind: openhands
+    env:
+      LLM_MODEL: openrouter/qwen/qwen3.6-plus
+      LLM_API_KEY: $OPENROUTER_API_KEY
+      LLM_BASE_URL: https://openrouter.ai/api/v1
 
 auto_start:
   enabled: true
