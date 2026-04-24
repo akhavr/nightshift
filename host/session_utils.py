@@ -21,11 +21,17 @@ ARCHIVE_FILES = ("conversation.jsonl", "state.json", "raw-output.log")
 # ── Path helpers ─────────────────────────────────────────
 
 def get_repo_root() -> Path:
-    """Return the git repository root."""
-    return Path(subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
+    """Return the git repository root (main repo, not worktree).
+
+    Uses --git-common-dir which returns the same path for both the main
+    repo and all its worktrees, ensuring socket paths resolve correctly
+    when CLI commands are run from worktrees.
+    """
+    git_common = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
         capture_output=True, text=True, check=True,
-    ).stdout.strip())
+    ).stdout.strip()
+    return Path(git_common).resolve().parent
 
 
 def sessions_dir(repo: Path | None = None) -> Path:
