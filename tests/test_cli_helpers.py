@@ -589,6 +589,17 @@ class TestBuildParser:
         args = p.parse_args(["cleanup", "issue-1", "--keep-session"])
         assert args.keep_session is True
 
+    def test_overflow_on(self):
+        p = _build_parser()
+        args = p.parse_args(["overflow", "on"])
+        assert args.state == "on"
+
+    def test_overflow_profile(self):
+        p = _build_parser()
+        args = p.parse_args(["overflow", "profile", "openrouter-qwen"])
+        assert args.state == "profile"
+        assert args.profile_name == "openrouter-qwen"
+
 
 # ── _scaffold_file ───────────────────────────────────────────────────────────
 

@@ -63,13 +63,16 @@ class TestGetTrackerWithFallback:
         finally:
             server.close()
 
-    def test_falls_back_to_direct_tracker(self, tmp_path):
+    def test_falls_back_to_gitbug_tracker(self, tmp_path):
+        """Fallback always uses GitBugTracker, even if GraphQL configured."""
         config = MagicMock()
-        mock_tracker = MagicMock()
 
-        with patch("host.tracker_client.create_tracker", return_value=mock_tracker):
+        with patch("adapters.trackers.git_bug.GitBugTracker") as mock_cls:
+            mock_tracker = MagicMock()
+            mock_cls.return_value = mock_tracker
             result = get_tracker_with_fallback(config, tmp_path)
             assert result is mock_tracker
+            mock_cls.assert_called_once_with(repo_dir=str(tmp_path))
 
     def test_falls_back_when_socket_stale(self, tmp_path):
         sock_path = tmp_path / ".nightshift" / TRACKER_SOCKET_FILENAME
@@ -80,9 +83,10 @@ class TestGetTrackerWithFallback:
         server.close()
 
         config = MagicMock()
-        mock_tracker = MagicMock()
 
-        with patch("host.tracker_client.create_tracker", return_value=mock_tracker):
+        with patch("adapters.trackers.git_bug.GitBugTracker") as mock_cls:
+            mock_tracker = MagicMock()
+            mock_cls.return_value = mock_tracker
             result = get_tracker_with_fallback(config, tmp_path)
             assert result is mock_tracker
 
@@ -146,10 +150,11 @@ class TestDeadSocketDetection:
         t.start()
 
         config = MagicMock()
-        mock_tracker = MagicMock()
 
         start = time.monotonic()
-        with patch("host.tracker_client.create_tracker", return_value=mock_tracker):
+        with patch("adapters.trackers.git_bug.GitBugTracker") as mock_cls:
+            mock_tracker = MagicMock()
+            mock_cls.return_value = mock_tracker
             result = get_tracker_with_fallback(config, tmp_path)
         elapsed = time.monotonic() - start
 

@@ -27,6 +27,9 @@ TRANSIENT_ERROR_PATTERNS = (
     "rate limit", "overloaded", "service unavailable", "high demand",
 )
 
+# Provider overload retry configuration (longer delays since provider is under load)
+OVERLOAD_RETRY_DELAYS = [60, 120, 300]
+
 
 class HeadlessAgentBase:
     """Base for agents that run as a subprocess in fire-and-forget mode.
@@ -66,6 +69,8 @@ class HeadlessAgentBase:
         self._session_id: str | None = None
         # Transient error retry state
         self._transient_retry_count: int = 0
+        # Provider overload retry state (separate from transient)
+        self._overload_retry_count: int = 0
         # Stored for restart capability
         self._last_prompt: str | None = None
         self._last_workspace: Path | None = None
@@ -127,7 +132,12 @@ class HeadlessAgentBase:
             # Outer loop continues after restart
 
     def _maybe_retry_transient(self, ev: AgentEvent) -> bool:
-        """Handle transient error retry. Returns True if retry was triggered."""
+        """Handle transient/overload error retry. Returns True if retry was triggered."""
+        # Handle PROVIDER_OVERLOAD events with longer delays
+        if ev.type == AgentEventType.PROVIDER_OVERLOAD:
+            return self._retry_overload(ev)
+
+        # Handle transient AUTH_FAILURE events (500s, rate limits)
         if ev.type != AgentEventType.AUTH_FAILURE:
             return False
         if not self._is_transient_error(ev.content):
@@ -147,6 +157,24 @@ class HeadlessAgentBase:
         # Max retries exceeded, reset counter and let the event through
         log.warning(f"Transient error retry limit exceeded, yielding AUTH_FAILURE: {ev.content[:100]}...")
         self._transient_retry_count = 0
+        return False
+
+    def _retry_overload(self, ev: AgentEvent) -> bool:
+        """Handle PROVIDER_OVERLOAD retry with longer delays. Returns True if retry was triggered."""
+        self._overload_retry_count += 1
+        if self._overload_retry_count <= len(OVERLOAD_RETRY_DELAYS):
+            delay = OVERLOAD_RETRY_DELAYS[self._overload_retry_count - 1]
+            log.warning(
+                f"Provider overload (attempt {self._overload_retry_count}/{len(OVERLOAD_RETRY_DELAYS)}): "
+                f"{ev.content[:100]}... retrying in {delay}s"
+            )
+            time.sleep(delay)
+            self._restart()
+            return True
+
+        # Max retries exceeded, reset counter and let the event through
+        log.warning(f"Provider overload retry limit exceeded, yielding PROVIDER_OVERLOAD: {ev.content[:100]}...")
+        self._overload_retry_count = 0
         return False
 
     def send_input(self, text: str) -> None:

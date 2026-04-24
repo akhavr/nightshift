@@ -171,17 +171,22 @@ class HostWatcher:
         # Temporarily disable proxy so _get_tracker creates a direct tracker
         saved_proxy = self._proxy
         self._proxy = None
-        new_tracker = self._get_tracker()
-        self._proxy = saved_proxy
-        # Propagate shutdown event to new tracker
-        if hasattr(new_tracker, '_shutdown') and hasattr(self, '_shutdown'):
-            new_tracker._shutdown = self._shutdown
-        # Swap the writer's underlying tracker instance
-        if self._writer:
-            self._writer.tracker = new_tracker
-        # Terminate old tracker's in-flight subprocess if present
-        if old_tracker and hasattr(old_tracker, 'terminate_current'):
-            old_tracker.terminate_current()
+        try:
+            new_tracker = self._get_tracker()
+            self._proxy = saved_proxy
+            # Propagate shutdown event to new tracker
+            if hasattr(new_tracker, '_shutdown') and hasattr(self, '_shutdown'):
+                new_tracker._shutdown = self._shutdown
+            # Swap the writer's underlying tracker instance
+            if self._writer:
+                self._writer.tracker = new_tracker
+            # Terminate old tracker's in-flight subprocess now that swap succeeded
+            if old_tracker and hasattr(old_tracker, 'terminate_current'):
+                old_tracker.terminate_current()
+        except Exception as e:
+            log.error(f"Tracker creation failed, restoring previous tracker: {e}")
+            self._tracker = old_tracker
+            self._proxy = saved_proxy
 
         if changes:
             log.info(f"Reloaded config -- changes: {', '.join(changes)}")
@@ -266,6 +271,7 @@ class HostWatcher:
             self.check_background_launches()
             self.monitor.check_orphaned_sessions()
             self.monitor.check_auth_failures()
+            self.monitor.check_provider_outages()
             self.monitor.check_closed_issues()
             if self.auto_start:
                 self.monitor.check_new_issues()
@@ -296,6 +302,10 @@ class HostWatcher:
 
     def _maybe_sync_tracker(self):
         """Sync tracker at most once per review poll interval."""
+        if self._config is None:
+            self._config = load_workflow(self.workflow_path)
+        if not self._config.tracker.sync:
+            return
         now = time.time()
         if now - self.reviews._last_poll < REVIEW_POLL_INTERVAL_S:
             return

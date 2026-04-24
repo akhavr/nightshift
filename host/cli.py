@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -88,6 +89,194 @@ def _resolve_workflow(a) -> Path:
     return _discover_workflow(repo_root(), getattr(a, "workflow", None))
 
 
+def _parse_bug_new_args(tracker_args: list[str]) -> tuple[str, str] | None:
+    """Extract title/body from `bug new` args or return None for fallback."""
+    if tracker_args[:2] != ["bug", "new"]:
+        return None
+
+    title = None
+    body = None
+    idx = 2
+    while idx < len(tracker_args):
+        arg = tracker_args[idx]
+        if arg in ("-t", "--title") and idx + 1 < len(tracker_args):
+            title = tracker_args[idx + 1]
+            idx += 2
+            continue
+        if arg in ("-m", "--message") and idx + 1 < len(tracker_args):
+            body = tracker_args[idx + 1]
+            idx += 2
+            continue
+        if arg == "--non-interactive":
+            idx += 1
+            continue
+        return None
+    if title is None or body is None:
+        return None
+    return title, body
+
+
+def _create_issue_via_tracker(tracker, title: str, body: str) -> str:
+    """Use a first-class tracker method when available, else fall back to CLI."""
+    create_issue = vars(tracker).get("create_issue")
+    if not callable(create_issue):
+        create_issue = getattr(type(tracker), "create_issue", None)
+    if callable(create_issue):
+        if getattr(type(tracker), "create_issue", None) is create_issue:
+            return create_issue(tracker, title, body)
+        return create_issue(title, body)
+    return tracker.run_raw("bug", "new", "-t", title, "-m", body)
+
+
+ISSUE_STATUS_WIDTH = 6
+ISSUE_TITLE_MAX_LEN = 60
+
+
+def _is_tty() -> bool:
+    """Return whether stdout is an interactive terminal."""
+    return sys.stdout.isatty()
+
+
+def _format_issue_human(issue) -> str:
+    """Render a tracker issue as a single human-readable line."""
+    short_id = issue.id[:SHORT_ID_LEN]
+    title = issue.title[:ISSUE_TITLE_MAX_LEN]
+    return f"{short_id} {issue.status:<{ISSUE_STATUS_WIDTH}} {title}"
+
+
+def _format_issue_list_human(issues: list) -> str:
+    """Render tracker issue lists as human-readable lines."""
+    return "\n".join(_format_issue_human(issue) for issue in issues)
+
+
+def _format_issue_output(issue) -> str:
+    """Render a tracker issue for CLI output."""
+    if issue is None:
+        return ""
+    if _is_tty():
+        return _format_issue_human(issue)
+    return json.dumps(asdict(issue), indent=2)
+
+
+def _format_issue_list_output(issues: list) -> str:
+    """Render tracker issue lists for CLI output."""
+    if _is_tty():
+        return _format_issue_list_human(issues)
+    return json.dumps([asdict(issue) for issue in issues], indent=2)
+
+
+def _parse_bug_status_filter(tracker_args: list[str]) -> str | None:
+    """Extract a status filter from `bug` and `bug ls` forms."""
+    if not tracker_args or tracker_args[0] != "bug":
+        return None
+
+    args = tracker_args[1:]
+    if args and args[0] == "ls":
+        args = args[1:]
+
+    if len(args) != 2:
+        return None
+
+    flag, status = args
+    if flag not in ("-s", "--status"):
+        return None
+    return status
+
+
+def _parse_bug_list_filters(tracker_args: list[str]) -> dict | None:
+    """Extract filters from `bug` and `bug ls` forms.
+
+    Returns a dict with keys: status (str|None), label (str|None), all (bool).
+    Returns None if args don't match a list command pattern.
+    """
+    if not tracker_args or tracker_args[0] != "bug":
+        return None
+
+    args = tracker_args[1:]
+    if args and args[0] == "ls":
+        args = args[1:]
+
+    filters = {"status": None, "label": None, "all": False}
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg in ("-s", "--status") and idx + 1 < len(args):
+            filters["status"] = args[idx + 1]
+            idx += 2
+            continue
+        if arg in ("-l", "--label") and idx + 1 < len(args):
+            filters["label"] = args[idx + 1]
+            idx += 2
+            continue
+        if arg in ("-a", "--all"):
+            filters["all"] = True
+            idx += 1
+            continue
+        return None
+
+    return filters
+
+
+def _dispatch_bug_command(tracker, tracker_args: list[str]) -> str | None:
+    """Route common bug commands to tracker methods when possible."""
+    if tracker_args == ["bug"] or tracker_args == ["bug", "ls"]:
+        return _format_issue_list_output(tracker.list_issues())
+
+    filters = _parse_bug_list_filters(tracker_args)
+    if filters is not None:
+        issues = tracker.list_issues(status=filters["status"])
+        if filters["label"]:
+            issues = [i for i in issues if filters["label"] in (i.labels or [])]
+        return _format_issue_list_output(issues)
+
+    if len(tracker_args) == 3 and tracker_args[:2] == ["bug", "show"]:
+        return _format_issue_output(tracker.get_issue(tracker_args[2]))
+
+    if len(tracker_args) == 5 and tracker_args[:3] == ["bug", "label", "new"]:
+        tracker.add_label(tracker_args[3], tracker_args[4])
+        return ""
+
+    if len(tracker_args) == 5 and tracker_args[:3] == ["bug", "label", "rm"]:
+        tracker.remove_label(tracker_args[3], tracker_args[4])
+        return ""
+
+    if len(tracker_args) == 4 and tracker_args[:2] == ["bug", "status"]:
+        status_map = {"open": "open", "close": "closed"}
+        status = status_map.get(tracker_args[2])
+        if status is None:
+            return None
+        tracker.set_status(tracker_args[3], status)
+        return ""
+
+    if len(tracker_args) >= 5 and tracker_args[:3] == ["bug", "comment", "new"]:
+        issue_id = tracker_args[3]
+        rest = tracker_args[4:]
+        if rest and rest[0] in ("-m", "--message") and len(rest) >= 2:
+            message = rest[1]
+        else:
+            message = " ".join(rest)
+        tracker.add_comment(issue_id, message)
+        return ""
+
+    return None
+
+
+def _build_resume_launch_cmd(issue_id: str, workflow_override: str | None = None) -> list[str]:
+    """Build the launch.py resume command for coder and review sessions."""
+    sid = resolve_session(issue_id)
+    is_review = sid.startswith(REVIEW_SESSION_PREFIX)
+    launch_issue_id = sid[len(REVIEW_SESSION_PREFIX):] if is_review else sid
+    wf = (repo_root() / "REVIEW.md").resolve() if is_review else _discover_workflow(
+        repo_root(), workflow_override
+    )
+
+    cmd = [sys.executable, str(Path(__file__).parent / "launch.py"), launch_issue_id, "--resume"]
+    if is_review:
+        cmd += ["--step", "review"]
+    cmd += ["--workflow", str(wf)]
+    return cmd
+
+
 def cmd_start(a):
     wf = _resolve_workflow(a)
     cmd = [sys.executable, str(Path(__file__).parent / "launch.py"), a.issue_id]
@@ -98,11 +287,7 @@ def cmd_start(a):
 
 
 def cmd_resume(a):
-    wf = _resolve_workflow(a)
-    cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
-           a.issue_id, "--resume"]
-    cmd += ["--workflow", str(wf)]
-    subprocess.run(cmd)
+    subprocess.run(_build_resume_launch_cmd(a.issue_id, getattr(a, "workflow", None)))
 
 
 def cmd_answer(a):
@@ -114,6 +299,40 @@ def cmd_answer(a):
         print(f"Answer written for {sid}")
     else:
         print(f"No session found for {sid}", file=sys.stderr)
+
+
+def _build_review_launch_cmd(sid: str) -> list[str]:
+    """Build the launch.py command for a manual review session."""
+    review_md = (repo_root() / "REVIEW.md").resolve()
+    return [
+        sys.executable,
+        str(Path(__file__).parent / "launch.py"),
+        sid,
+        "--workflow",
+        str(review_md),
+        "--step",
+        "review",
+        "--coder-session",
+        sid,
+    ]
+
+
+def cmd_review(a):
+    """Manually launch a review session for a coder waiting on review."""
+    sid = resolve_session(a.issue_id)
+    sd = sessions_dir() / sid
+    if not sd.exists() or not (sd / "state.json").exists():
+        print(f"No session found for {sid}", file=sys.stderr)
+        sys.exit(1)
+
+    state = read_state(sd)
+    status = state.get("status")
+    if status != "waiting:review":
+        print(f"Session {sid} is not waiting:review (status: {status})",
+              file=sys.stderr)
+        sys.exit(1)
+
+    subprocess.run(_build_review_launch_cmd(sid))
 
 
 def cmd_watcher(a):
@@ -168,9 +387,14 @@ def _truncate_title(title: str, max_len: int = TITLE_MAX_LEN) -> str:
 
 def cmd_status(a):
     sd = sessions_dir()
-    overflow_active = _overflow_flag_path().exists()
+    overflow_flag = _overflow_flag_path()
+    overflow_active = overflow_flag.exists()
     if overflow_active:
-        print("Overflow: ON")
+        profile_name = _read_overflow_profile_name(overflow_flag)
+        if profile_name:
+            print(f"Overflow: ON (profile: {profile_name})")
+        else:
+            print("Overflow: ON")
     if not sd.exists():
         print("No sessions."); return
     print(f"{'SESSION':<14} {'STATUS':<26} {'STEP':>5} {'CPS':>4}  {'TITLE'}")
@@ -182,7 +406,8 @@ def cmd_status(a):
             print(f"{sid:<14} {s.get('status','?'):<26} "
                   f"{s.get('step',0):>5} {len(s.get('checkpoints',[])):>4}"
                   f"  {title}")
-        except Exception:
+        except Exception as e:
+            logging.error("Failed reading session status from %s: %s", f, e)
             print(f"{sid:<14} {'<error>':<26}")
 
 
@@ -607,7 +832,7 @@ def cmd_upstream(a):
                  f"{proposal.template_label} from {proposal.project_name}")
         body = proposal.format_issue_body()
         try:
-            output = tracker.run_raw("bug", "new", "-t", title, "-m", body)
+            output = _create_issue_via_tracker(tracker, title, body)
             issue_id = output.strip() if output else "unknown"
             tracker.add_label(issue_id, "upstream")
             filed = True
@@ -827,10 +1052,7 @@ def cmd_revise(a):
     (sd / "resume-prompt.md").write_text(feedback)
     update_status(sd, "working")
 
-    cmd = [sys.executable, str(Path(__file__).parent / "launch.py"),
-           a.issue_id, "--resume"]
-    cmd += ["--workflow", str(wf)]
-    subprocess.run(cmd)
+    subprocess.run(_build_resume_launch_cmd(a.issue_id, getattr(a, "workflow", None)))
 
 
 def cmd_issue(a):
@@ -840,7 +1062,13 @@ def cmd_issue(a):
     config = load_workflow(wf)
     tracker = get_tracker_with_fallback(config, r)
     try:
-        output = tracker.run_raw(*a.tracker_args)
+        create_args = _parse_bug_new_args(a.tracker_args)
+        if create_args is not None:
+            output = _create_issue_via_tracker(tracker, *create_args)
+        else:
+            output = _dispatch_bug_command(tracker, a.tracker_args)
+            if output is None:
+                output = tracker.run_raw(*a.tracker_args)
     except NotImplementedError as e:
         print(f"Tracker '{config.tracker.kind}' does not support raw CLI passthrough: {e}",
               file=sys.stderr)
@@ -869,17 +1097,46 @@ def _overflow_flag_path() -> Path:
     return repo_root() / ".nightshift" / OVERFLOW_FLAG_FILENAME
 
 
+def _read_overflow_profile_name(flag: Path) -> str | None:
+    """Read the selected overflow profile name from the overflow flag file."""
+    if not flag.exists():
+        return None
+    try:
+        profile_name = flag.read_text().strip()
+    except OSError as e:
+        logging.error("Failed reading overflow flag %s: %s", flag, e)
+        return None
+    return profile_name or None
+
+
 def cmd_overflow(a):
     """Toggle overflow mode (alternate LLM provider) on or off."""
     flag = _overflow_flag_path()
     flag.parent.mkdir(parents=True, exist_ok=True)
     if a.state == "on":
-        flag.touch()
-        print("Overflow ON -- new container launches will use the alternate provider.")
+        existing_profile = _read_overflow_profile_name(flag)
+        if existing_profile:
+            flag.write_text(f"{existing_profile}\n")
+            print("Overflow ON -- new container launches will use the alternate "
+                  f"provider profile '{existing_profile}'.")
+        else:
+            flag.touch()
+            print("Overflow ON -- new container launches will use the alternate provider.")
     elif a.state == "off":
         if flag.exists():
             flag.unlink()
         print("Overflow OFF -- new container launches will use the primary provider.")
+    elif a.state == "profile":
+        workflow_path = _resolve_workflow(a)
+        config = load_workflow(workflow_path)
+        profile_name = a.profile_name
+        if profile_name not in config.overflow.profiles:
+            print(f"Unknown overflow profile '{profile_name}' in {workflow_path}",
+                  file=sys.stderr)
+            sys.exit(1)
+        flag.write_text(f"{profile_name}\n")
+        print("Overflow ON -- new container launches will use the alternate "
+              f"provider profile '{profile_name}'.")
 
 
 def cmd_export_training_data(a):
@@ -1083,6 +1340,10 @@ def _register_session_commands(s):
     sp.add_argument("issue_id")
     sp.set_defaults(func=cmd_resume)
 
+    sp = s.add_parser("review")
+    sp.add_argument("issue_id")
+    sp.set_defaults(func=cmd_review)
+
     sp = s.add_parser("answer")
     sp.add_argument("issue_id")
     sp.add_argument("message")
@@ -1160,9 +1421,19 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_upstream)
 
     sp = s.add_parser("overflow", help="Switch new launches to alternate LLM provider")
-    sp.add_argument("state", choices=["on", "off"],
-                    help="Turn overflow on or off")
-    sp.set_defaults(func=cmd_overflow)
+    overflow_sub = sp.add_subparsers(dest="state", required=True)
+
+    sp_on = overflow_sub.add_parser("on", help="Enable overflow mode")
+    sp_on.set_defaults(func=cmd_overflow, state="on")
+
+    sp_off = overflow_sub.add_parser("off", help="Disable overflow mode")
+    sp_off.set_defaults(func=cmd_overflow, state="off")
+
+    sp_profile = overflow_sub.add_parser(
+        "profile", help="Enable overflow mode with a named profile"
+    )
+    sp_profile.add_argument("profile_name", help="Overflow profile name from WORKFLOW.md")
+    sp_profile.set_defaults(func=cmd_overflow, state="profile")
 
     sp = s.add_parser("usage", help="Show token usage and cost from completed sessions")
     sp.add_argument("issue_id", nargs="?", default=None,

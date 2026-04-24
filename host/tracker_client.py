@@ -95,4 +95,9 @@ def get_tracker_with_fallback(config: WorkflowConfig, repo_dir: str | Path):
     # When the watcher is running (socket path above), it already repairs
     # on startup, so this only runs in the fallback path.
     repair_lamport_clocks(repo_dir)
-    return create_tracker(config, repo_dir=str(repo_dir))
+    # Always use GitBugTracker CLI for fallback, even if git-bug-graphql is
+    # configured. The GraphQL tracker requires lifecycle management (persistent
+    # webui subprocess) which only the watcher can provide. CLI commands are
+    # short-lived and can't properly manage webui lifecycle.
+    from adapters.trackers.git_bug import GitBugTracker
+    return GitBugTracker(repo_dir=str(repo_dir))

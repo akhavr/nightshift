@@ -7,8 +7,8 @@ import json
 import logging
 import time
 
-from core.config import MergeConfig, WorkspaceConfig
-from core.constants import SIGNAL_DIR_NAME, TITLE_TRUNCATE_LEN
+from core.config import MergeConfig, PricingConfig, WorkspaceConfig
+from core.constants import SIGNAL_DIR_NAME, TITLE_TRUNCATE_LEN, TOKEN_PRICING_UNIT
 from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
 from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
@@ -38,6 +38,7 @@ class SessionRunner:
         merge_config: "MergeConfig | None" = None,
         hooks_config: "HooksConfig | None" = None,
         workspace_config: "WorkspaceConfig | None" = None,
+        pricing: "PricingConfig | None" = None,
         is_review: bool = False,
     ):
         self.agent = agent
@@ -49,6 +50,7 @@ class SessionRunner:
         self.prompt = prompt
         self.max_turns = max_turns
         self.terminal_statuses = terminal_statuses
+        self.pricing = pricing
         self.is_review = is_review
         self._workspace: Workspace | None = None
         self._pending_questions: list[str] = []  # OQ-7: queue, not overwrite
@@ -206,10 +208,16 @@ class SessionRunner:
         """If the event carries usage metadata, accumulate it in state."""
         usage = event.metadata.get("usage")
         if usage:
+            cost_usd = usage.get("cost_usd", 0.0)
+            if self.pricing and cost_usd == 0:
+                cost_usd = (
+                    usage.get("input_tokens", 0) * self.pricing.input_per_1m
+                    + usage.get("output_tokens", 0) * self.pricing.output_per_1m
+                ) / TOKEN_PRICING_UNIT
             self.state_mgr.update_usage(
                 input_tokens=usage.get("input_tokens", 0),
                 output_tokens=usage.get("output_tokens", 0),
-                cost_usd=usage.get("cost_usd", 0.0),
+                cost_usd=cost_usd,
                 model=usage.get("model", ""),
             )
 
