@@ -57,7 +57,8 @@ class TestPostRunAction:
 
     def test_completed_returns_none(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("completed")
+        sm.update_status("waiting:review")
+        sm.update_status("accepted")
         result = post_run_action(
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
             lambda **kw: None, lambda r: None)
@@ -116,7 +117,8 @@ class TestPostRunAction:
 
     def test_unexpected_status(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("some-weird-status")
+        # Use a valid but unhandled state to test the fallback branch
+        sm.update_status("suspended:hook-failure")
         build_called = []
         result = post_run_action(
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
@@ -135,7 +137,8 @@ class TestPostRunAction:
 
     def test_unexpected_status_includes_title(self, tmp_path):
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
-        sm.update_status("some-weird-status")
+        # Use a valid but unhandled state to test the fallback branch
+        sm.update_status("suspended:hook-failure")
         post_run_action(
             sm, ws_mgr, ws, tracker, notifier, issue, agent,
             lambda **kw: None, lambda r: None)

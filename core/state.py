@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.protocols import UsageData
+from core.state_machine import SessionStateMachine, STATES
 
 RECENT_CONVERSATION_DEFAULT = 50
 CONVERSATION_PREVIEW_LEN = 500
@@ -35,6 +36,7 @@ class SessionState:
     started_at: str = ""
     orphan_resumes: int = 0
     overload_resumes: int = 0
+    auth_retries: int = 0
     completed_at: str = ""
     checkpoints: list[Checkpoint] = field(default_factory=list)
     human_answers: list[QAExchange] = field(default_factory=list)
@@ -59,16 +61,44 @@ class StateManager:
         self.waiting_signal = self.session_dir / "waiting.json"
         self.answer_file = self.session_dir / "answer.txt"
         self.session_dir.mkdir(parents=True, exist_ok=True)
+        self._ssm: SessionStateMachine | None = None
 
     def load_state(self) -> SessionState:
-        with open(self.state_file) as f: return SessionState(**json.load(f))
+        with open(self.state_file) as f:
+            st = SessionState(**json.load(f))
+        if self._ssm is None:
+            self._ssm = SessionStateMachine(initial_state=st.status)
+        return st
+
+    @property
+    def status(self) -> str:
+        if self._ssm is None:
+            return self.load_state().status
+        return self._ssm.state
 
     def update_status(self, s: str):
-        st = self.load_state(); st.status = s; self._write(st)
+        if self._ssm is None:
+            self.load_state()  # initializes _ssm
+        self._ssm.transition(s)  # validates transition
+        st = self.load_state()
+        st.status = self._ssm.state
+        self._write(st)
 
     def mark_completed(self):
         """Set completed_at timestamp to indicate a normal session completion."""
         st = self.load_state()
+        st.completed_at = datetime.now(timezone.utc).isoformat()
+        self._write(st)
+
+    def mark_done(self, status: str):
+        """Atomically set status and completed_at in a single load-modify-write cycle.
+
+        This prevents race conditions where a concurrent reader (e.g., the watcher)
+        could read state between separate update_status() and mark_completed() calls
+        and overwrite one of the changes.
+        """
+        st = self.load_state()
+        st.status = status
         st.completed_at = datetime.now(timezone.utc).isoformat()
         self._write(st)
 
