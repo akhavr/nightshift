@@ -408,3 +408,51 @@ Prompt body
         """WorkspaceConfig dataclass has correct default for test_timeout_s."""
         config = WorkspaceConfig()
         assert config.test_timeout_s == 120
+
+
+class TestSignalMethodConfig:
+    """Tests for signal_method configuration parsing (REQ-001)."""
+
+    def test_signal_method_config(self, tmp_path):
+        """AgentConfig parses signal_method from YAML."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+agent:
+  kind: claude-code
+  signal_method: file
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.agent.signal_method == "file"
+
+    def test_signal_method_defaults_to_auto(self, tmp_path):
+        """AgentConfig defaults signal_method to 'auto' when not specified."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+agent:
+  kind: claude-code
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.agent.signal_method == "auto"
+
+    def test_signal_method_dataclass_default(self):
+        """AgentConfig dataclass has correct default for signal_method."""
+        config = AgentConfig()
+        assert config.signal_method == "auto"
+
+    def test_signal_method_all_values(self, tmp_path):
+        """All valid signal_method values are parsed correctly."""
+        for method in ["auto", "mcp", "text", "file"]:
+            workflow_md = tmp_path / "WORKFLOW.md"
+            workflow_md.write_text(f"""---
+agent:
+  kind: claude-code
+  signal_method: {method}
+---
+Prompt body
+""")
+            config = load_workflow(workflow_md)
+            assert config.agent.signal_method == method

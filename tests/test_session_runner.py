@@ -62,6 +62,7 @@ def _make_runner(
     merge_config: MergeConfig | None = None,
     max_turns: int = 50,
     agent: MockAgent | None = None,
+    signal_method: str = "auto",
 ) -> tuple[SessionRunner, MockAgent, MockTracker, MockNotifier, MockWorkspaceManager, StateManager]:
     issue = issue or make_test_issue()
     if agent is None:
@@ -78,6 +79,7 @@ def _make_runner(
         workspace_mgr=ws_mgr, state_mgr=state_mgr, issue=issue,
         prompt="Fix the widget", max_turns=max_turns,
         merge_config=merge_config, hooks_config=hooks_config,
+        signal_method=signal_method,
     )
     return runner, agent, tracker, notifier, ws_mgr, state_mgr
 
@@ -1229,3 +1231,109 @@ class TestFileSignals:
         state = state_mgr.load_state()
         assert state.step == 1
         assert any("tests green" in cp.description for cp in state.checkpoints)
+
+
+class TestSignalMethodConfig:
+    """Tests for signal_method configuration (REQ-001)."""
+
+    def test_signal_method_file_only(self, tmp_path):
+        """When signal_method='file', only file signals are processed (text markers ignored)."""
+        events = [
+            _text_event("working on it..."),
+            _text_event("@@DONE@@"),  # This should be ignored
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events, signal_method="file"
+        )
+        signal_dir = tmp_path / "session" / "signal"
+
+        runner.run()
+        state = state_mgr.load_state()
+        # @@DONE@@ marker was ignored, so status should NOT be done:pending-review
+        assert state.status != "done:pending-review"
+        assert state.status != "waiting:review"
+
+    def test_signal_method_file_only_processes_file_signals(self, tmp_path):
+        """When signal_method='file', file signals are still processed."""
+        events = [
+            _text_event("working on it..."),
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events, signal_method="file"
+        )
+        signal_dir = tmp_path / "session" / "signal"
+        (signal_dir / "done").write_text("")
+
+        runner.run()
+        state = state_mgr.load_state()
+        # File signal should be processed
+        assert state.status in ("done:pending-review", "waiting:review")
+
+    def test_signal_method_text_only(self, tmp_path):
+        """When signal_method='text', only text markers are processed (file signals ignored)."""
+        events = [
+            _text_event("working on it..."),
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events, signal_method="text"
+        )
+        signal_dir = tmp_path / "session" / "signal"
+        (signal_dir / "done").write_text("")  # This should be ignored
+
+        runner.run()
+        state = state_mgr.load_state()
+        # File signal was ignored, so status should NOT be done:pending-review
+        assert state.status != "done:pending-review"
+        assert state.status != "waiting:review"
+
+    def test_signal_method_text_only_processes_text_markers(self, tmp_path):
+        """When signal_method='text', text markers are still processed."""
+        events = [
+            _text_event("working on it..."),
+            _text_event("@@DONE@@"),
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events, signal_method="text"
+        )
+
+        runner.run()
+        state = state_mgr.load_state()
+        # Text marker should be processed
+        assert state.status in ("done:pending-review", "waiting:review")
+
+    def test_signal_method_auto_processes_both(self, tmp_path):
+        """When signal_method='auto' (default), both signals are processed."""
+        events = [
+            _text_event("working on it..."),
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events, signal_method="auto"
+        )
+        signal_dir = tmp_path / "session" / "signal"
+        (signal_dir / "done").write_text("")
+
+        runner.run()
+        state = state_mgr.load_state()
+        # File signal should be processed in auto mode
+        assert state.status in ("done:pending-review", "waiting:review")
+
+    def test_signal_method_mcp_same_as_text(self, tmp_path):
+        """signal_method='mcp' behaves like 'text' (MCP signals are converted to text markers)."""
+        events = [
+            _text_event("working on it..."),
+            _text_event("@@DONE@@"),
+            _exit_event(),
+        ]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events, signal_method="mcp"
+        )
+
+        runner.run()
+        state = state_mgr.load_state()
+        # MCP mode processes text markers (since MCP signals are converted to text markers)
+        assert state.status in ("done:pending-review", "waiting:review")

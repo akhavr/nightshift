@@ -199,6 +199,7 @@ def main():
         workspace_config=config.workspace,
         pricing=overflow_config.pricing if overflow_config else None,
         is_review=(step == "review"),
+        signal_method=config.agent.signal_method,
     )
 
     try:

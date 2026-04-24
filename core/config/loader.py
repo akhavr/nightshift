@@ -69,12 +69,13 @@ def _parse_agent(raw: dict, config: WorkflowConfig):
     if "agent" not in raw:
         return
     a = raw["agent"]
-    known = {"kind", "max_turns", "stall_timeout_s", "extra_args"}
+    known = {"kind", "max_turns", "stall_timeout_s", "extra_args", "signal_method"}
     config.agent = AgentConfig(
         kind=a.get("kind", "claude-code"),
         max_turns=int(a.get("max_turns", 50)),
         stall_timeout_s=int(a.get("stall_timeout_s", 300)),
         extra_args=a.get("extra_args", []),
+        signal_method=str(a.get("signal_method", "auto")),
         extra={k: v for k, v in a.items() if k not in known},
     )
 
