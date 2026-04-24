@@ -21,6 +21,12 @@ notifications:
 
 review:
   max_rounds: 5
+
+overflow:
+  agent_kind: codex
+  extra_args: []
+  env:
+    CODEX_MODEL: gpt-5.4-mini
 ---
 
 You are a strict code reviewer for the nightshift project (autonomous coding agent runner).
