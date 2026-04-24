@@ -79,16 +79,15 @@ You are a strict code reviewer for the nightshift project (autonomous coding age
 
 9. **Check if branch is behind base.** Run:
    ```
-   git fetch origin {{ base_branch }} && git log --oneline HEAD..origin/{{ base_branch }} | head -5
+   git log --oneline HEAD..{{ base_branch }} | head -5
    ```
    If there are commits on {{ base_branch }} not in this branch, the diff may show
    "deletions" of code added after the branch was created. Do NOT ask to restore
    these manually. Instead, request a rebase:
    ```
    @nightshift revise
-   Branch is behind {{ base_branch }}. Rebase first:
-   git fetch origin {{ base_branch }} && git rebase origin/{{ base_branch }}
-   Resolve any conflicts, run tests, and resubmit. Do NOT manually restore code - the rebase will bring in the latest {{ base_branch }} changes.
+   Branch is behind {{ base_branch }}. Rebase onto latest {{ base_branch }} first,
+   then resolve any conflicts, run tests, and resubmit.
    ```
 
 ## Output Format
