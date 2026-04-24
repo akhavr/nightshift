@@ -417,6 +417,8 @@ class HostWatcher:
             if rc != 0:
                 log.error(f"[{sid}] Background launch failed (exit code {rc})")
                 self._revert_failed_launch(sid)
+            else:
+                self._handle_successful_completion(sid)
 
         for sid in done_sids:
             self._background_procs.pop(sid, None)
@@ -443,3 +445,44 @@ class HostWatcher:
                          f"'waiting:review' after review launch failure")
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to revert status after launch failure: {e}")
+
+    def _handle_successful_completion(self, sid: str):
+        """Handle post-completion actions for successful background launches.
+
+        For review sessions: extract verdict from conversation, process it
+        (approve -> waiting:human-review, revise -> resume coder), and clean up.
+
+        For coder sessions: no action needed (container sets its own status).
+        """
+        if not sid.startswith(REVIEW_SESSION_PREFIX):
+            return
+
+        review_dir = self.sessions_dir / sid
+        if not review_dir.exists() or not (review_dir / "state.json").exists():
+            return
+
+        coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
+        coder_dir = self.sessions_dir / coder_sid
+
+        try:
+            state = read_state(review_dir)
+            issue_id = state.get("issue_id", "")
+
+            # Extract verdict from conversation log
+            conv_log = review_dir / "conversation.jsonl"
+            verdict = self.reviews.verdicts.extract_reviewer_verdict(conv_log, issue_id)
+
+            if verdict and coder_dir.exists():
+                log.info(f"[{sid}] Processing verdict: {verdict}")
+                if verdict == "approve":
+                    self.reviews.verdicts.handle_reviewer_approve(
+                        coder_sid, coder_dir, issue_id)
+                elif verdict == "revise":
+                    self.reviews._posted_done.discard(coder_sid)
+                    self.reviews.verdicts.handle_reviewer_revise(
+                        coder_sid, coder_dir, issue_id, review_dir)
+
+            # Clean up review session
+            self.reviews.cleanup_review_session(sid, review_dir)
+        except Exception as e:
+            log.error(f"[{sid}] Failed to handle successful completion: {e}")
