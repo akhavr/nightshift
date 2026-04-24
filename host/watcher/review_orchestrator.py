@@ -171,7 +171,9 @@ class ReviewOrchestrator:
         # Clean up stale review session if it exists with completed_at set
         # This handles the race condition where the watcher restarts after
         # a review container exits but before cleanup_review_session() is called.
-        self._maybe_cleanup_stale_review(review_sid)
+        # If a verdict was processed, don't launch a new review.
+        if self._maybe_cleanup_stale_review(review_sid):
+            return
 
         _update_status(session_dir, "reviewing")
 
@@ -267,30 +269,60 @@ class ReviewOrchestrator:
             f"`nightshift accept/reject/revise {issue_id}`",
             level=NotificationLevel.ACTIONS)
 
-    def _maybe_cleanup_stale_review(self, review_sid: str):
+    def _maybe_cleanup_stale_review(self, review_sid: str) -> bool:
         """Clean up a stale review session if it exists with completed_at set.
 
         This handles the race condition where the watcher restarts after a review
         container exits (setting completed_at) but before cleanup_review_session()
         is called. Without this cleanup, launching a new review fails with
         'session already exists'.
+
+        IMPORTANT: Before cleanup, this method extracts and processes the verdict
+        from the review session to ensure the coder session state is updated.
+        Otherwise, the coder remains in waiting:review status, triggering an
+        infinite relaunch cycle.
+
+        Returns True if a verdict was processed (caller should not launch review).
         """
         review_dir = self.sessions_dir / review_sid
         if not review_dir.exists() or not (review_dir / "state.json").exists():
-            return
+            return False
 
         try:
             state = read_state(review_dir)
         except (json.JSONDecodeError, OSError) as e:
             log.warning(f"[{review_sid}] Failed to read state for stale check: {e}")
-            return
+            return False
 
         # Only clean up if completed_at is set (review finished normally)
         if not state.get("completed_at"):
-            return
+            return False
 
         log.info(f"[{review_sid}] Cleaning up stale review session before relaunch")
+
+        # Extract coder session info
+        coder_sid = review_sid[len(REVIEW_SESSION_PREFIX):]
+        coder_dir = self.sessions_dir / coder_sid
+        issue_id = state.get("issue_id", "")
+
+        # Process verdict BEFORE cleanup to prevent infinite relaunch loop
+        verdict_processed = False
+        if coder_dir.exists() and issue_id:
+            conv_log = review_dir / "conversation.jsonl"
+            verdict = self.verdicts.extract_reviewer_verdict(conv_log, issue_id)
+            if verdict:
+                log.info(f"[{review_sid}] Processing stale verdict: {verdict}")
+                if verdict == "approve":
+                    self.verdicts.handle_reviewer_approve(coder_sid, coder_dir, issue_id)
+                    verdict_processed = True
+                elif verdict == "revise":
+                    self._posted_done.discard(coder_sid)
+                    self.verdicts.handle_reviewer_revise(
+                        coder_sid, coder_dir, issue_id, review_dir)
+                    verdict_processed = True
+
         self.cleanup_review_session(review_sid, review_dir)
+        return verdict_processed
 
     def check_reviewer_done(self):
         """Check if reviewer sessions have finished, handle verdict."""

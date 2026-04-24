@@ -1180,3 +1180,158 @@ class TestHostSideRebase:
         mock_rebase.assert_not_called()
         # Review should still launch
         assert "review-abc" in launched
+
+
+# ---------------------------------------------------------------------------
+# Stale review cleanup processes verdict first (REQ-036)
+# ---------------------------------------------------------------------------
+
+class TestStaleCleanupProcessesVerdictFirst:
+    """Stale review cleanup must process verdict before cleanup to avoid infinite loop.
+
+    Bug scenario:
+    1. Review session completes (@@DONE@@), sets completed_at
+    2. Watcher's _maybe_cleanup_stale_review() sees completed_at -> cleans up review
+    3. Coder session is still waiting:review (verdict not yet processed)
+    4. maybe_launch_review() sees coder in waiting:review with no review -> launches NEW review
+    5. Repeat from step 1 (infinite loop)
+
+    Fix: Process the verdict BEFORE cleanup in _maybe_cleanup_stale_review().
+    """
+
+    def test_stale_cleanup_processes_verdict_first(self, tmp_path):
+        """Stale review cleanup processes verdict before cleanup to prevent relaunch loop."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+
+        # Create coder session in waiting:review (simulating state when review completes)
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        # Create STALE review session with completed_at AND an approve verdict
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
+        (review_sd / "state.json").write_text(json.dumps(state))
+        # Write verdict to conversation log
+        (review_sd / "conversation.jsonl").write_text(
+            json.dumps({"role": "assistant", "content": "LGTM. @nightshift approve"}) + "\n"
+        )
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree"):
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            cfg.review.max_rounds = 3
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # KEY ASSERTION: Coder should be transitioned to waiting:human-review
+        # (because verdict was "approve") BEFORE new review was launched
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "waiting:human-review", (
+            f"Expected status 'waiting:human-review' after approve verdict processed, "
+            f"got '{coder_state['status']}'"
+        )
+
+        # No new review should be launched (coder is no longer in waiting:review)
+        # If _maybe_cleanup_stale_review() didn't process verdict, coder would still be
+        # waiting:review and a new review would be launched -> infinite loop
+        assert "review-abc" not in launched, (
+            "New review should NOT be launched after approve verdict processed"
+        )
+
+    def test_stale_cleanup_processes_revise_verdict(self, tmp_path):
+        """Stale review cleanup handles revise verdict - resumes coder."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+
+        # Create coder session in waiting:review
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        # Create STALE review session with completed_at AND a revise verdict
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
+        (review_sd / "state.json").write_text(json.dumps(state))
+        (review_sd / "conversation.jsonl").write_text(
+            json.dumps({"role": "assistant", "content": "Fix error handling. @nightshift revise"}) + "\n"
+        )
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree"):
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            cfg.review.max_rounds = 3
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Coder should be resumed (status=working) after revise verdict
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "working", (
+            f"Expected status 'working' after revise verdict processed, "
+            f"got '{coder_state['status']}'"
+        )
+
+        # Coder should be relaunched (not review)
+        assert "abc" in launched, "Coder should be relaunched after revise verdict"
+        assert "review-abc" not in launched, "New review should NOT be launched"
+
+    def test_stale_cleanup_no_verdict_still_cleans_up(self, tmp_path):
+        """If stale review has no verdict in log, it's still cleaned up and review relaunches."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        # Create STALE review session with completed_at but NO verdict
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
+        (review_sd / "state.json").write_text(json.dumps(state))
+        # Empty conversation log - no verdict
+        (review_sd / "conversation.jsonl").write_text("")
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            cfg.review.max_rounds = 3
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # With no verdict, stale session should still be cleaned up
+        # and a new review should be launched
+        assert any("review-abc" in str(call) for call in mock_rmtree.call_args_list)
+        assert "review-abc" in launched
