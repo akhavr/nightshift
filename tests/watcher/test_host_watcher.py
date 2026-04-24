@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import host.watcher as wmod
 from host.watcher import HostWatcher
+from host.watcher.host_watcher import RecentlyLaunchedDict
+from host.constants import RECENTLY_LAUNCHED_FILENAME, ORPHAN_GRACE_PERIOD_S
 from core.config.models import TrackerConfig, WorkflowConfig
 from core.protocols import TrackerIssue, TrackerComment
 
@@ -457,3 +459,142 @@ class TestReloadConfigTrackerLifecycle:
         old_tracker.terminate_current.assert_not_called()
         # Old tracker should be restored
         assert w._tracker is old_tracker
+
+
+# ---------------------------------------------------------------------------
+# _recently_launched persistence tests
+# ---------------------------------------------------------------------------
+
+class TestRecentlyLaunchedPersistence:
+    """Test that _recently_launched dict survives watcher restarts."""
+
+    def test_recently_launched_persisted_on_add(self, tmp_path):
+        """Adding to _recently_launched writes to recently_launched.json."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        nightshift_dir = sessions.parent  # .nightshift is parent of sessions
+
+        w = HostWatcher(sessions, repo)
+        persist_file = nightshift_dir / RECENTLY_LAUNCHED_FILENAME
+
+        # Initially, file may not exist or be empty
+        w._recently_launched["test-session"] = time.time()
+
+        # File should now exist with the entry
+        assert persist_file.exists()
+        data = json.loads(persist_file.read_text())
+        assert "test-session" in data
+
+    def test_recently_launched_loaded_on_startup(self, tmp_path):
+        """Watcher startup loads recently_launched.json."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        nightshift_dir = sessions.parent
+
+        # Pre-create the persistence file with a recent entry
+        now = time.time()
+        persist_file = nightshift_dir / RECENTLY_LAUNCHED_FILENAME
+        persist_file.write_text(json.dumps({"preloaded-session": now}))
+
+        # Create watcher - should load existing entries
+        w = HostWatcher(sessions, repo)
+
+        assert "preloaded-session" in w._recently_launched
+        assert w._recently_launched["preloaded-session"] == now
+
+    def test_recently_launched_pruned_on_load(self, tmp_path):
+        """Entries older than ORPHAN_GRACE_PERIOD_S are removed on load."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        nightshift_dir = sessions.parent
+
+        now = time.time()
+        # One recent entry, one stale entry
+        persist_file = nightshift_dir / RECENTLY_LAUNCHED_FILENAME
+        persist_file.write_text(json.dumps({
+            "recent-session": now - 10,  # 10s ago - should survive
+            "stale-session": now - ORPHAN_GRACE_PERIOD_S - 100,  # Way past grace period
+        }))
+
+        # Create watcher - should prune stale entries
+        w = HostWatcher(sessions, repo)
+
+        assert "recent-session" in w._recently_launched
+        assert "stale-session" not in w._recently_launched
+
+        # Pruned state should be persisted
+        data = json.loads(persist_file.read_text())
+        assert "recent-session" in data
+        assert "stale-session" not in data
+
+    def test_recently_launched_pop_persists(self, tmp_path):
+        """Removing entries via pop() persists the change."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        nightshift_dir = sessions.parent
+
+        w = HostWatcher(sessions, repo)
+        persist_file = nightshift_dir / RECENTLY_LAUNCHED_FILENAME
+
+        w._recently_launched["session-a"] = time.time()
+        w._recently_launched["session-b"] = time.time()
+
+        # Pop one entry
+        w._recently_launched.pop("session-a", None)
+
+        # File should reflect the removal
+        data = json.loads(persist_file.read_text())
+        assert "session-a" not in data
+        assert "session-b" in data
+
+    def test_recently_launched_del_persists(self, tmp_path):
+        """Removing entries via del persists the change."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        nightshift_dir = sessions.parent
+
+        w = HostWatcher(sessions, repo)
+        persist_file = nightshift_dir / RECENTLY_LAUNCHED_FILENAME
+
+        w._recently_launched["session-x"] = time.time()
+
+        del w._recently_launched["session-x"]
+
+        data = json.loads(persist_file.read_text())
+        assert "session-x" not in data
+
+    def test_recently_launched_handles_corrupt_file(self, tmp_path):
+        """Watcher should handle corrupt JSON file gracefully."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        nightshift_dir = sessions.parent
+
+        persist_file = nightshift_dir / RECENTLY_LAUNCHED_FILENAME
+        persist_file.write_text("not valid json {{{")
+
+        # Should not crash - starts with empty dict
+        w = HostWatcher(sessions, repo)
+        assert w._recently_launched == {}
+
+    def test_recently_launched_handles_missing_file(self, tmp_path):
+        """Watcher should work when no persistence file exists."""
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        # No pre-existing file
+        w = HostWatcher(sessions, repo)
+        assert w._recently_launched == {}
