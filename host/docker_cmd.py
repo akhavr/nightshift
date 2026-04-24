@@ -142,7 +142,8 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
     # previous run that exited without cleanup). docker rm -f is a no-op if
     # the container doesn't exist.
     container_name = names["container_name"]
-    docker_remove(container_name)
+    if not docker_remove(container_name):
+        raise RuntimeError(f"Failed to remove stale container {container_name}")
 
     # Save the worktree .git file — the container rewrites it to /repo-git/...
     # which is invalid on the host. Restore after container exits.
