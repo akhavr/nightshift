@@ -1272,3 +1272,115 @@ class TestStaleReviewSessionCleanup:
         # Coder session should NOT be removed
         mock_rmtree.assert_not_called()
         assert coder_sd.exists()
+
+
+# ---------------------------------------------------------------------------
+# Orphan with @@DONE@@ marker tests
+# ---------------------------------------------------------------------------
+
+class TestOrphanWithDoneMarker:
+    """When an orphan has @@DONE@@ in conversation but no completed_at,
+    it should transition to done:pending-review instead of resuming."""
+
+    def test_orphan_with_done_marker_transitions_to_review(self, tmp_path):
+        """Session with @@DONE@@ in conversation but no completed_at transitions to done:pending-review."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create conversation.jsonl with @@DONE@@ marker
+        conv_entry = {"role": "assistant", "content": "Task complete @@DONE@@"}
+        (sd / "conversation.jsonl").write_text(json.dumps(conv_entry) + "\n")
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        # Should NOT resume
+        assert launched == []
+        # Should transition to done:pending-review
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "done:pending-review"
+
+    def test_orphan_without_done_marker_resumes_normally(self, tmp_path):
+        """Session without @@DONE@@ in conversation should be resumed as before."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create conversation.jsonl without @@DONE@@ marker
+        conv_entry = {"role": "assistant", "content": "Still working on it..."}
+        (sd / "conversation.jsonl").write_text(json.dumps(conv_entry) + "\n")
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        # Should resume normally
+        assert "abc" in launched
+        # Status should NOT change to done:pending-review
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] != "done:pending-review"
+
+    def test_orphan_with_done_marker_and_signal_file_transitions(self, tmp_path):
+        """Session with signal/done file should also transition to done:pending-review."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create signal/done file (alternative signal mechanism)
+        (sd / "signal").mkdir()
+        (sd / "signal" / "done").write_text("")
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        # Should NOT resume
+        assert launched == []
+        # Should transition to done:pending-review
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "done:pending-review"
+
+    def test_orphan_no_conversation_file_resumes_normally(self, tmp_path):
+        """Session without conversation.jsonl should be resumed as before."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # No conversation.jsonl file
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        # Should resume normally
+        assert "abc" in launched
+
+    def test_orphan_done_marker_logs_transition(self, tmp_path, caplog):
+        """When transitioning to done:pending-review, it should log the action."""
+        import logging
+        caplog.set_level(logging.INFO)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create conversation.jsonl with @@DONE@@ marker
+        conv_entry = {"role": "assistant", "content": "Task complete @@DONE@@"}
+        (sd / "conversation.jsonl").write_text(json.dumps(conv_entry) + "\n")
+
+        w.monitor._launch_background = lambda cmd, sid: True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        # Should log the transition
+        assert any("@@DONE@@" in record.message and "done:pending-review" in record.message
+                   for record in caplog.records)

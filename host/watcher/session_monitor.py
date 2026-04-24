@@ -179,6 +179,13 @@ class SessionMonitor:
         if not issue_id:
             return
 
+        # Check if session actually completed (@@DONE@@ in conversation or
+        # signal/done file exists). If so, transition to done:pending-review
+        # instead of resuming — the container crashed after completing but
+        # before persisting completed_at.
+        if self._check_done_signals(session_dir, sid):
+            return
+
         orphan_resumes = state.get("orphan_resumes", 0)
         if orphan_resumes >= MAX_ORPHAN_RESUMES:
             if is_review_session:
@@ -196,6 +203,39 @@ class SessionMonitor:
 
         session_dir = self.sessions_dir / sid
         self._resume_session(sid, issue_id, reason="orphaned (container gone)")
+
+    def _check_done_signals(self, session_dir: Path, sid: str) -> bool:
+        """Check if session completed via @@DONE@@ marker or signal file.
+
+        When the container exits after outputting @@DONE@@ but before persisting
+        completed_at to state.json, the orphan detector would incorrectly resume
+        the session. This method checks for completion signals and transitions
+        to done:pending-review instead.
+
+        Returns True if a done signal was found and the session was transitioned.
+        """
+        # Check conversation.jsonl for @@DONE@@ marker
+        conv_file = session_dir / "conversation.jsonl"
+        if conv_file.exists():
+            try:
+                content = conv_file.read_text()
+                if "@@DONE@@" in content:
+                    log.info(f"[{sid}] Orphan has @@DONE@@ in conversation — "
+                             f"transitioning to done:pending-review")
+                    update_status(session_dir, "done:pending-review")
+                    return True
+            except OSError as e:
+                log.warning(f"[{sid}] Failed to read conversation.jsonl: {e}")
+
+        # Check for signal/done file (alternative signal mechanism)
+        signal_done = session_dir / "signal" / "done"
+        if signal_done.exists():
+            log.info(f"[{sid}] Orphan has signal/done file — "
+                     f"transitioning to done:pending-review")
+            update_status(session_dir, "done:pending-review")
+            return True
+
+        return False
 
     def _try_recover_review_verdict(self, coder_sid: str, coder_dir: Path,
                                     review_sid: str) -> bool:
