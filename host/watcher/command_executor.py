@@ -80,7 +80,8 @@ class CommandExecutor:
                 _update_status(session_dir, "waiting:review")
 
         except Exception as e:
-            log.error(f"[{sid}] Revise failed: {e}")
+            log.error(f"[{sid}] Revise failed: {e} -- reverting to waiting:review")
+            _update_status(session_dir, "waiting:review")
 
     def do_cli_command(self, sid: str, command: str, issue_id: str):
         """Run a CLI command (accept/reject) as a subprocess."""
