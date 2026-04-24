@@ -14,6 +14,7 @@ STATES: frozenset[str] = frozenset({
     "suspended:auth-failure",
     "suspended:auth-failure-permanent",
     "suspended:provider-overload",
+    "suspended:provider-overload-permanent",
     "suspended:context-limit",
     "suspended:stall",
     "suspended:hook-failure",
@@ -85,6 +86,8 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("suspended:auth-failure", "suspended:auth-failure-permanent"),
     ("suspended:auth-failure-permanent", "working"),
     ("suspended:provider-overload", "working"),
+    ("suspended:provider-overload", "suspended:provider-overload-permanent"),
+    ("suspended:provider-overload-permanent", "working"),
     ("suspended:context-limit", "working"),
     ("suspended:stall", "working"),
     ("suspended:hook-failure", "working"),
@@ -103,8 +106,9 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("reviewing", "suspended:unexpected"),
     ("error:merge-conflict", "suspended:unexpected"),
     ("starting", "suspended:unexpected"),
-    # done:pending-review -> waiting:review
+    # done:pending-review -> waiting:review (normal) or working (rebase conflict)
     ("done:pending-review", "waiting:review"),
+    ("done:pending-review", "working"),
     # cancelled:external -> working (resume after cancellation)
     ("cancelled:external", "working"),
     # error:merge-conflict -> working (resume after conflict resolution)
