@@ -1,5 +1,6 @@
 """HostWatcher -- coordinator for the watcher subsystem."""
 
+import json
 import logging
 import os
 import subprocess
@@ -9,7 +10,8 @@ from pathlib import Path
 
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME,
-    BACKGROUND_LAUNCH_CHECK_S, REVIEW_SESSION_PREFIX,
+    BACKGROUND_LAUNCH_CHECK_S, REVIEW_SESSION_PREFIX, RECENTLY_LAUNCHED_FILENAME,
+    ORPHAN_GRACE_PERIOD_S,
 )
 from host.session_utils import read_state, update_status
 from core.config import load_workflow, create_tracker, WorkflowConfig
@@ -22,6 +24,65 @@ from host.watcher.issue_sync import sync_sessions
 from adapters.trackers.git_bug import repair_lamport_clocks
 
 log = logging.getLogger("watcher")
+
+
+class RecentlyLaunchedDict(dict):
+    """Dict subclass that persists to disk on mutation.
+
+    Used for _recently_launched to survive watcher restarts.
+    """
+
+    def __init__(self, persist_path: Path):
+        super().__init__()
+        self._persist_path = persist_path
+        self._load_and_prune()
+
+    def _load_and_prune(self):
+        """Load from disk and prune entries older than grace period."""
+        if not self._persist_path.exists():
+            return
+        try:
+            data = json.loads(self._persist_path.read_text())
+            if not isinstance(data, dict):
+                log.warning(f"Invalid recently_launched.json format, starting fresh")
+                return
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"Failed to load recently_launched.json: {e}")
+            return
+
+        now = time.time()
+        pruned = False
+        for sid, ts in list(data.items()):
+            if not isinstance(ts, (int, float)):
+                pruned = True
+                continue
+            if now - ts > ORPHAN_GRACE_PERIOD_S:
+                pruned = True
+            else:
+                super().__setitem__(sid, ts)
+
+        if pruned:
+            self._persist()
+
+    def _persist(self):
+        """Write current state to disk."""
+        try:
+            self._persist_path.write_text(json.dumps(dict(self)))
+        except OSError as e:
+            log.warning(f"Failed to persist recently_launched.json: {e}")
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._persist()
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._persist()
+
+    def pop(self, key, *args):
+        result = super().pop(key, *args)
+        self._persist()
+        return result
 
 
 def _diff_config(old: WorkflowConfig, new: WorkflowConfig) -> list[str]:
@@ -67,7 +128,8 @@ class HostWatcher:
         self._auto_start_config = None  # Lazy-loaded from workflow
         self._tracker = None
         self._config = None
-        self._recently_launched: dict[str, float] = {}
+        persist_path = sessions_dir.parent / RECENTLY_LAUNCHED_FILENAME
+        self._recently_launched: dict[str, float] = RecentlyLaunchedDict(persist_path)
         self._background_procs: dict[str, tuple] = {}
         self._writer: TrackerWriter | None = None
         self._socket_server: TrackerSocketServer | None = None
