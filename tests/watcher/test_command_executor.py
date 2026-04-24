@@ -34,3 +34,20 @@ class TestDoReviseRevert:
         state = json.loads((session_dir / "state.json").read_text())
         assert state["status"] == "waiting:review", \
             f"Expected status to revert to waiting:review, got {state['status']}"
+
+    def test_cmd_revise_reverts_status_on_exception(self, tmp_path):
+        """When do_revise raises an exception, status should revert to waiting:review."""
+        w = _make_watcher(tmp_path)
+        session_dir = _make_session(w.sessions_dir, "abc", status="working",
+                                    issue_id="issue-abc")
+
+        # Make tracker.get_comments raise
+        tracker = MagicMock()
+        tracker.get_comments.side_effect = RuntimeError("tracker failure")
+        w._tracker = tracker
+
+        w.reviews.commands.do_revise("abc", "issue-abc", session_dir)
+
+        state = json.loads((session_dir / "state.json").read_text())
+        assert state["status"] == "waiting:review", \
+            f"Expected waiting:review, got {state['status']}"
