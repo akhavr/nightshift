@@ -9,6 +9,7 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, ORPHAN_GRACE_PERIOD_S, SHORT_ID_LEN,
     MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
+    PROVIDER_OUTAGE_RETRY_INTERVAL_S, MAX_PROVIDER_OUTAGE_RETRIES,
     REVIEW_SESSION_PREFIX, LAUNCH_GRACE_PERIOD_S,
 )
 from core.protocols import NotificationLevel
@@ -55,7 +56,7 @@ class SessionMonitor:
         self._last_closed_check = 0.0
         self._last_auto_start_poll = 0.0
         self._last_auth_retry_check = 0.0
-        self._known_issue_ids: set[str] = set()
+        self._last_provider_outage_check = 0.0
 
     def cleanup_stale_review_sessions(self):
         """Clean up review sessions with completed_at set but not yet cleaned up.
@@ -123,20 +124,23 @@ class SessionMonitor:
         status = state.get("status")
         is_review_session = sid.startswith(REVIEW_SESSION_PREFIX)
 
+        # Any session with completed_at already finished normally. The
+        # container may have exited before the watcher observed the final
+        # status transition, so it must not be treated as an orphan.
+        if state.get("completed_at"):
+            return
+
         # Review sessions in waiting:review with no container are orphaned
-        # (the review container crashed) — UNLESS they completed normally.
-        # A completed_at timestamp means notify_done() ran successfully and
-        # the container exited after @@DONE@@, so it's not an orphan.
+        # (the review container crashed).
         # Coder sessions in waiting:review are expected to have no
         # container — the coder is paused while the review handles them.
         #
         # Coder sessions stuck in "reviewing" with no review container are
         # also recovered: the review launch likely failed, so revert to
         # waiting:review for retry.
-        if status == "waiting:review" and is_review_session:
-            if state.get("completed_at"):
-                return  # normal completion, not an orphan
-        elif status == "reviewing" and not is_review_session:
+        review_waiting_for_container = status == "waiting:review" and is_review_session
+
+        if status == "reviewing" and not is_review_session:
             # Coder session stuck in "reviewing" — check if the review
             # container is actually running.  If not, try to recover the
             # verdict from the completed review session before reverting.
@@ -157,7 +161,7 @@ class SessionMonitor:
                         f"reverting to 'waiting:review'")
             update_status(session_dir, "waiting:review")
             return
-        elif status not in ("working", "starting"):
+        elif status not in ("working", "starting") and not review_waiting_for_container:
             return
 
         # Skip if recently launched (give it time to start)
@@ -372,6 +376,57 @@ class SessionMonitor:
 
             self._resume_session(sid, issue_id, reason="auth-failure retry")
 
+    def check_provider_outages(self):
+        """Retry sessions suspended due to provider overload on a slow interval."""
+        now = time.time()
+        if now - self._last_provider_outage_check < PROVIDER_OUTAGE_RETRY_INTERVAL_S:
+            return
+        self._last_provider_outage_check = now
+
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not (session_dir / "state.json").exists():
+                continue
+
+            try:
+                state = read_state(session_dir)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"[{sid}] Failed to read state for provider-outage check: {e}")
+                continue
+
+            if state.get("status") != "suspended:provider-overload":
+                continue
+
+            issue_id = state.get("issue_id", "")
+            if not issue_id:
+                continue
+
+            overload_retries = state.get("overload_resumes", 0)
+            if overload_retries >= MAX_PROVIDER_OUTAGE_RETRIES:
+                log.warning(f"[{sid}] Provider outage retry limit reached ({MAX_PROVIDER_OUTAGE_RETRIES}). "
+                            f"Provider still overloaded — giving up.")
+                state["status"] = "suspended:provider-overload-permanent"
+                write_state(session_dir, state)
+                self.telegram.notify(
+                    f"⏳ `{sid}` hit {MAX_PROVIDER_OUTAGE_RETRIES} provider outage retries — "
+                    f"provider still overloaded. Giving up. `nightshift resume` manually when available.",
+                    level=NotificationLevel.ACTIONS)
+                continue
+
+            log.info(f"[{sid}] Provider-overload session — retrying (provider may be available, "
+                     f"attempt {overload_retries + 1}/{MAX_PROVIDER_OUTAGE_RETRIES})")
+            state["overload_resumes"] = overload_retries + 1
+            state["status"] = "working"
+            write_state(session_dir, state)
+            self._recently_launched[sid] = time.time()
+
+            self._resume_session(sid, issue_id, reason="provider-outage retry")
+
     def check_closed_issues(self):
         """Detect sessions whose issues have been closed -- clean up worktree + session."""
         now = time.time()
@@ -509,7 +564,7 @@ class SessionMonitor:
         active_count = self.count_active_sessions(states=all_states)
 
         for issue in issues:
-            if _issue_id_prefix_match(issue.id, existing_issue_ids) or issue.id in self._known_issue_ids:
+            if _issue_id_prefix_match(issue.id, existing_issue_ids):
                 continue
 
             if active_count >= asc.max_concurrent:
@@ -517,7 +572,6 @@ class SessionMonitor:
                          f"deferring {issue.identifier}")
                 break
 
-            self._known_issue_ids.add(issue.id)
             sid = issue.id[:SHORT_ID_LEN]
             self._recently_launched[sid] = time.time()
             active_count += 1

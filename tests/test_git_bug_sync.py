@@ -16,7 +16,16 @@ class TestSyncRemoteDetection:
     """sync() should detect missing remotes and stop retrying."""
 
     def _make_tracker(self):
-        return GitBugTracker(repo_dir="/tmp/fake")
+        return GitBugTracker(repo_dir="/tmp/fake", sync=True)
+
+    def test_sync_is_disabled_by_default(self):
+        """sync() is a no-op unless explicitly enabled."""
+        t = GitBugTracker(repo_dir="/tmp/fake")
+        with patch.object(t, "_run_interruptible") as mock_ri, \
+             patch.object(t, "_run") as mock_run:
+            t.sync()
+        mock_ri.assert_not_called()
+        mock_run.assert_not_called()
 
     def test_sync_skips_when_no_remote_pull_error(self):
         """sync() detects 'remote not found' and skips all future syncs."""

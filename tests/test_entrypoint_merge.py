@@ -48,10 +48,30 @@ class TestReadMergeInstructions:
 
         result = _read_merge_instructions(str(tmp_path))
 
-        assert "git fetch origin main" in result
-        assert "git merge" in result
-        assert "Resolve any merge conflicts" in result
-        assert "test suite" in result
+        assert "git merge main" in result
+        assert "Resolve any conflicts" in result
+        assert "run tests" in result
+
+    def test_merge_instructions_no_fetch(self, tmp_path):
+        """Instructions should NOT include git fetch (fails in container).
+
+        The container has /repo-git mounted with the latest local branch,
+        so the agent should merge from the local branch directly.
+        """
+        merge_file = tmp_path / MERGE_NEEDED_FILENAME
+        merge_file.write_text(
+            "merge_target: origin/master\n"
+            "base_branch: master\n"
+            "---\n"
+            "CONFLICT (content): Merge conflict in file.txt\n"
+        )
+
+        result = _read_merge_instructions(str(tmp_path))
+
+        # git fetch would fail in container (remote hostname not resolvable)
+        assert "git fetch" not in result
+        # Should use local branch merge instead
+        assert "git merge master" in result
 
     def test_file_deleted_even_on_empty_content(self, tmp_path):
         """Even an empty merge-needed.txt should be consumed."""
@@ -187,3 +207,26 @@ class TestBuildPromptWithMerge:
                                    resume=True, step="")
 
         assert result == "Continue working."
+
+    def test_resume_prompt_resets_status_to_working(self, tmp_path):
+        """Resuming from a saved prompt should mark the session active again."""
+        from entrypoint import _build_prompt
+
+        config = MagicMock()
+        config.prompt_template = None
+        issue = MagicMock()
+        issue.identifier = "test-004"
+        state_mgr = MagicMock()
+        state_mgr.read_resume_prompt.return_value = "Continue after auth recovered."
+        mock_state = MagicMock()
+        mock_state.step = 2
+        state_mgr.load_state.return_value = mock_state
+        tracker = MagicMock()
+
+        with patch("entrypoint._read_merge_instructions", return_value=None):
+            result = _build_prompt(config, issue, "", MagicMock(),
+                                   state_mgr, tracker, "test-004",
+                                   resume=True, step="")
+
+        assert result == "Continue after auth recovered."
+        state_mgr.update_status.assert_called_once_with("working")

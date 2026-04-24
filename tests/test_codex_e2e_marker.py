@@ -25,8 +25,9 @@ class TestCodexMCPSignals:
     def test_codex_uses_mcp_for_done(self):
         """When codex completes, it should call nightshift_done MCP tool, not text marker.
 
-        This test verifies that an MCP tool call for nightshift_done produces
-        the correct @@DONE@@ marker. MCP is the preferred signal mechanism per REQ-028.
+        This test verifies that an MCP tool call for nightshift_done buffers the
+        @@DONE@@ marker until turn.completed arrives with usage data. MCP is the
+        preferred signal mechanism per REQ-028.
         """
         agent = CodexAgent()
 
@@ -38,16 +39,24 @@ class TestCodexMCPSignals:
         )
         ev = agent._parse(mcp_done_event)
 
-        # MCP tool call should produce the @@DONE@@ marker
-        assert ev is not None
-        assert ev.type == AgentEventType.TEXT
-        assert ev.content == "@@DONE@@"
+        # MCP tool call should buffer @@DONE@@ for turn.completed
+        assert ev is None
+        assert agent._pending_done_raw == mcp_done_event
+
+        # When turn.completed arrives, emit @@DONE@@ with usage
+        turn_event = '{"type": "turn.completed", "usage": {"input_tokens": 1000, "output_tokens": 50}}'
+        done_ev = agent._parse(turn_event)
+        assert done_ev is not None
+        assert done_ev.type == AgentEventType.TEXT
+        assert done_ev.content == "@@DONE@@"
+        assert done_ev.raw == mcp_done_event  # Uses buffered raw
+        assert done_ev.metadata["usage"]["input_tokens"] == 1000
 
     def test_codex_text_marker_fallback_done(self):
         """Text markers in agent_message are detected as fallback (REQ-028).
 
         When the agent prints @@DONE@@ as text instead of using MCP tools,
-        the adapter extracts and normalizes it to ensure consistent behavior.
+        the adapter buffers it until turn.completed arrives with usage data.
         """
         agent = CodexAgent()
 
@@ -58,10 +67,18 @@ class TestCodexMCPSignals:
         )
         text_ev = agent._parse(text_done_event)
 
-        # Fallback detection extracts the marker
-        assert text_ev is not None
-        assert text_ev.type == AgentEventType.TEXT
-        assert text_ev.content == "@@DONE@@"
+        # Fallback detection buffers the marker for turn.completed
+        assert text_ev is None
+        assert agent._pending_done_raw == text_done_event
+
+        # When turn.completed arrives, emit @@DONE@@ with usage
+        turn_event = '{"type": "turn.completed", "usage": {"input_tokens": 500, "output_tokens": 25}}'
+        done_ev = agent._parse(turn_event)
+        assert done_ev is not None
+        assert done_ev.type == AgentEventType.TEXT
+        assert done_ev.content == "@@DONE@@"
+        assert done_ev.raw == text_done_event  # Uses buffered raw
+        assert done_ev.metadata["usage"]["output_tokens"] == 25
 
     def test_codex_text_marker_fallback_checkpoint(self):
         """Text checkpoint markers in agent_message are detected as fallback."""

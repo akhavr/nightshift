@@ -14,6 +14,8 @@ from host.cli import (
     cmd_accept,
     cmd_status,
     cmd_answer,
+    cmd_review,
+    cmd_resume,
     cmd_history,
     cmd_init,
     cmd_revise,
@@ -238,6 +240,86 @@ def test_truncate_title_over_limit():
 
 
 # ── cmd_answer ───────────────────────────────────────────────────────────────
+
+
+def test_cmd_review_launches_review(tmp_path):
+    """review launches launch.py in review mode for waiting:review sessions."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "cb5fde88faba"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "waiting:review", "step": 5, "checkpoints": []})
+    )
+    (repo / "REVIEW.md").write_text("review workflow\n")
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value="cb5fde88faba"),
+        patch("subprocess.run") as run_mock,
+    ):
+        cmd_review(_make_args(issue_id="cb5fde88faba"))
+
+    cmd = run_mock.call_args[0][0]
+    assert cmd[0] == sys.executable
+    assert Path(cmd[1]).name == "launch.py"
+    assert cmd[2] == "cb5fde88faba"
+    assert cmd[cmd.index("--workflow") + 1].endswith("REVIEW.md")
+    assert cmd[cmd.index("--step") + 1] == "review"
+    assert cmd[cmd.index("--coder-session") + 1] == "cb5fde88faba"
+
+
+def test_cmd_review_rejects_non_waiting_session(tmp_path, capsys):
+    """review rejects sessions that are not waiting for review."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "cb5fde88faba"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "working", "step": 5, "checkpoints": []})
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value="cb5fde88faba"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cmd_review(_make_args(issue_id="cb5fde88faba"))
+
+    assert exc_info.value.code == 1
+    assert "waiting:review" in capsys.readouterr().err
+
+
+def test_cmd_resume_review_session_strips_prefix():
+    """resume resolves review sessions and passes bare issue ID to launch.py."""
+    with (
+        patch("host.cli._resolve_workflow", return_value=Path("WORKFLOW.md")),
+        patch("host.cli.resolve_session", return_value="review-47ca35f12345"),
+        patch("subprocess.run") as run_mock,
+    ):
+        cmd_resume(_make_args(issue_id="review-47ca35f", workflow=None))
+
+    cmd = run_mock.call_args[0][0]
+    assert cmd[0] == sys.executable
+    assert Path(cmd[1]).name == "launch.py"
+    assert cmd[2] == "47ca35f12345"
+    assert "--resume" in cmd
+
+
+def test_cmd_resume_review_session_adds_step_flag():
+    """resume adds review step and review workflow for review sessions."""
+    with (
+        patch("host.cli._resolve_workflow", return_value=Path("CUSTOM.md")),
+        patch("host.cli.resolve_session", return_value="review-47ca35f12345"),
+        patch("subprocess.run") as run_mock,
+    ):
+        cmd_resume(_make_args(issue_id="review-47ca35f", workflow=None))
+
+    cmd = run_mock.call_args[0][0]
+    assert "--step" in cmd
+    assert cmd[cmd.index("--step") + 1] == "review"
+    assert "--workflow" in cmd
+    assert cmd[cmd.index("--workflow") + 1].endswith("REVIEW.md")
 
 
 def test_cmd_answer_writes_file(tmp_path, capsys):
@@ -552,6 +634,32 @@ def test_cmd_revise_success(tmp_path, capsys):
     cmd_args = launch_call[0][0]
     assert "launch.py" in " ".join(str(c) for c in cmd_args)
     assert "--resume" in cmd_args
+
+
+def test_cmd_revise_review_session_uses_review_resume_args(tmp_path):
+    """revise relaunches review sessions with bare ID, review step, and REVIEW.md."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "review-47ca35f12345"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "waiting:review", "step": 2, "checkpoints": []})
+    )
+    (repo / "REVIEW.md").write_text("review workflow\n")
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value="review-47ca35f12345"),
+        patch("host.cli._resolve_workflow", return_value=repo / "WORKFLOW.md"),
+        patch("host.cli._collect_review_feedback", return_value="Please fix this."),
+        patch("subprocess.run") as mock_subproc,
+    ):
+        cmd_revise(_make_args(issue_id="review-47ca35f", workflow=None, message=None))
+
+    cmd_args = mock_subproc.call_args[0][0]
+    assert cmd_args[2] == "47ca35f12345"
+    assert cmd_args[cmd_args.index("--step") + 1] == "review"
+    assert cmd_args[cmd_args.index("--workflow") + 1].endswith("REVIEW.md")
 
 
 def test_cmd_revise_accepts_waiting_human_review(tmp_path, capsys):

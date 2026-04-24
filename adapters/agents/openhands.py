@@ -20,6 +20,10 @@ log = logging.getLogger(__name__)
 
 EVENT_SEPARATOR = "--JSON Event--"
 CONVERSATION_ID_RE = re.compile(r"Conversation ID:\s*(\S+)")
+INPUT_TOKEN_KEYS = ("input_tokens", "prompt_tokens", "input")
+OUTPUT_TOKEN_KEYS = ("output_tokens", "completion_tokens", "output")
+COST_KEYS = ("cost_usd", "total_cost_usd", "cost", "response_cost")
+
 
 class OpenHandsAgent(HeadlessAgentBase):
     # Patterns indicating LLM API authentication/authorization failures.
@@ -93,33 +97,38 @@ class OpenHandsAgent(HeadlessAgentBase):
 
         try:
             ev = json.loads(stripped)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            log.debug("Failed to parse OpenHands JSON event as JSON: %s", e)
             return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
+        if not isinstance(ev, dict):
+            return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
+        return self._parse_event(ev, raw)
 
+    def _parse_event(self, ev: dict, raw: str) -> AgentEvent:
+        """Dispatch a decoded OpenHands event."""
         kind = ev.get("kind", "")
+        metadata = self._metadata(ev)
 
         if kind == "ActionEvent":
-            return self._parse_action(ev, raw)
+            return self._parse_action(ev, raw, metadata)
 
         if kind == "ObservationEvent":
-            content = str(ev.get("content", ""))[:TOOL_RESULT_PREVIEW_LEN]
-            if ev.get("is_error") and self._is_auth_failure(content):
-                return AgentEvent(
-                    type=AgentEventType.AUTH_FAILURE,
-                    content=content,
-                    raw=raw,
-                )
-            return AgentEvent(
-                type=AgentEventType.TOOL_RESULT,
-                content=content,
-                raw=raw,
-            )
+            return self._parse_observation(ev, raw, metadata)
 
         if kind == "MessageEvent":
             content = ev.get("content", "")
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=str(content),
+                metadata=metadata,
+                raw=raw,
+            )
+
+        if kind == "LLMCompletionLogEvent":
+            return AgentEvent(
+                type=AgentEventType.SYSTEM,
+                content="llm_completion_log",
+                metadata=metadata,
                 raw=raw,
             )
 
@@ -129,24 +138,40 @@ class OpenHandsAgent(HeadlessAgentBase):
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=f"@@LOG@@ {reasoning}",
+                metadata=metadata,
                 raw=raw,
             )
 
         # Unknown kind
-        return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
+        return AgentEvent(
+            type=AgentEventType.TEXT, content=raw, metadata=metadata, raw=raw)
 
-    def _parse_action(self, ev: dict, raw: str) -> AgentEvent:
-        """Parse an ActionEvent into the appropriate AgentEvent.
+    def _parse_observation(self, ev: dict, raw: str, metadata: dict) -> AgentEvent:
+        """Parse an ObservationEvent into the appropriate AgentEvent."""
+        content = str(ev.get("content", ""))[:TOOL_RESULT_PREVIEW_LEN]
+        if ev.get("is_error") and self._is_auth_failure(content):
+            return AgentEvent(
+                type=AgentEventType.AUTH_FAILURE,
+                content=content,
+                metadata=metadata,
+                raw=raw,
+            )
+        return AgentEvent(
+            type=AgentEventType.TOOL_RESULT,
+            content=content,
+            metadata=metadata,
+            raw=raw,
+        )
 
-        Marker actions (FinishAction, FileEditorAction, TerminalAction) are
-        checked before reasoning_content so they are never shadowed by @@LOG@@.
-        """
+    def _parse_action(self, ev: dict, raw: str, metadata: dict) -> AgentEvent:
+        """Parse an ActionEvent into the appropriate AgentEvent."""
         action_type = ev.get("action_type", "")
 
         if action_type == "FinishAction":
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content="@@DONE@@",
+                metadata=metadata,
                 raw=raw,
             )
 
@@ -155,6 +180,7 @@ class OpenHandsAgent(HeadlessAgentBase):
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=f"@@CHECKPOINT@@ {summary}",
+                metadata=metadata,
                 raw=raw,
             )
 
@@ -163,6 +189,7 @@ class OpenHandsAgent(HeadlessAgentBase):
             return AgentEvent(
                 type=AgentEventType.TOOL_CALL,
                 content=f"TerminalAction: {command}",
+                metadata=metadata,
                 raw=raw,
             )
 
@@ -172,6 +199,7 @@ class OpenHandsAgent(HeadlessAgentBase):
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=f"@@LOG@@ {reasoning}",
+                metadata=metadata,
                 raw=raw,
             )
 
@@ -179,5 +207,103 @@ class OpenHandsAgent(HeadlessAgentBase):
         return AgentEvent(
             type=AgentEventType.TEXT,
             content=f"{action_type}: {json.dumps(ev)[:200]}",
+            metadata=metadata,
             raw=raw,
         )
+
+    def _metadata(self, ev: dict) -> dict:
+        usage = self._extract_usage(ev)
+        return {"usage": usage} if usage else {}
+
+    def _extract_usage(self, ev: dict) -> dict | None:
+        """Extract per-event usage from OpenHands or LiteLLM payload shapes."""
+        if ev.get("kind") == "LLMCompletionLogEvent":
+            usage = self._extract_completion_log_usage(ev)
+            if usage:
+                return usage
+
+        usage = self._extract_usage_payload(ev, ev)
+        if usage:
+            return usage
+
+        metrics = ev.get("metrics") or ev.get("llm_metrics")
+        if isinstance(metrics, dict):
+            usage_obj = metrics.get("accumulated_token_usage")
+            return self._extract_usage_payload(metrics, usage_obj)
+        return None
+
+    def _extract_completion_log_usage(self, ev: dict) -> dict | None:
+        log_data = ev.get("log_data", "")
+        if not isinstance(log_data, str) or not log_data:
+            return None
+        try:
+            payload = json.loads(log_data)
+        except json.JSONDecodeError as e:
+            log.warning("Failed to parse OpenHands LLM log usage: %s", e)
+            return None
+        if not isinstance(payload, dict):
+            log.warning("OpenHands LLM log usage was not an object: %r", payload)
+            return None
+        usage = self._extract_usage_payload(payload, payload.get("usage_summary"))
+        if usage:
+            usage["model"] = usage["model"] or ev.get("model_name", "")
+            return usage
+        response = payload.get("response", {})
+        if not isinstance(response, dict):
+            return None
+        return self._extract_usage_payload(payload, response.get("usage", {}))
+
+    def _extract_usage_payload(
+        self, container: dict, usage_obj: object,
+    ) -> dict | None:
+        nested = container.get("usage") or container.get("tokens")
+        if isinstance(nested, dict):
+            usage_obj = nested
+        if not isinstance(usage_obj, dict):
+            usage_obj = container.get("usage") or container.get("tokens") or {}
+        if not isinstance(usage_obj, dict):
+            return None
+        input_tokens = self._first_int(usage_obj, INPUT_TOKEN_KEYS)
+        output_tokens = self._first_int(usage_obj, OUTPUT_TOKEN_KEYS)
+        cost_usd = self._first_float(container, COST_KEYS)
+        if cost_usd == 0.0:
+            cost_usd = self._first_float(usage_obj, COST_KEYS)
+        model = usage_obj.get("model", container.get("model", ""))
+        if not model:
+            model = container.get("model_name", "")
+        if input_tokens or output_tokens or cost_usd:
+            return {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost_usd,
+                "model": model,
+            }
+        return None
+
+    @staticmethod
+    def _first_int(data: dict, keys: tuple[str, ...]) -> int:
+        for key in keys:
+            value = data.get(key)
+            if value is not None:
+                try:
+                    return int(value or 0)
+                except (TypeError, ValueError) as e:
+                    log.warning(
+                        "Invalid OpenHands token value for %s=%r: %s",
+                        key, value, e,
+                    )
+        return 0
+
+    @staticmethod
+    def _first_float(data: dict, keys: tuple[str, ...]) -> float:
+        for key in keys:
+            value = data.get(key)
+            if value is not None:
+                try:
+                    return float(value or 0.0)
+                except (TypeError, ValueError) as e:
+                    log.warning(
+                        "Invalid OpenHands cost value for %s=%r: %s",
+                        key, value, e,
+                    )
+        return 0.0

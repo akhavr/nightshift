@@ -946,3 +946,237 @@ class TestStaleReviewCleanupBeforeLaunch:
         # Note: the launch may fail because session exists, but that's OK for this test
         # The point is that we don't delete an active review session
         assert not any("review-abc" in str(call) for call in mock_rmtree.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# Host-side pre-review rebase tests
+# ---------------------------------------------------------------------------
+
+class TestHostSideRebase:
+    """Pre-review rebase runs on host, not in container, to avoid bind-mount issues."""
+
+    def test_rebase_runs_on_host_not_container(self, tmp_path):
+        """Rebase is called from review_orchestrator before launching review.
+
+        This is the key test for the bind-mount fix: git cannot unlink mounted
+        files like WORKFLOW.md inside the container, so rebase must run on host.
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\n"
+            "workspace:\n"
+            "  root: .worktrees\n"
+            "  base_branch: master\n"
+            "---\n"
+        )
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        # Create worktree directory
+        worktree = w.repo_dir / ".worktrees" / "agent-abc"
+        worktree.mkdir(parents=True)
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid)) or True
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
+             patch("core.config.load_workflow") as mock_lw:
+            mock_rebase.return_value = None  # Rebase succeeds
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            cfg.workspace.test_command = None
+            cfg.workspace.test_timeout_s = 120
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Rebase should have been called
+        mock_rebase.assert_called_once()
+        # Review should be launched after successful rebase
+        assert any("review-abc" in str(sid) for _, sid in launched)
+
+    def test_rebase_failure_does_not_loop_session(self, tmp_path):
+        """Rebase failure resumes coder, doesn't loop with endless review launches.
+
+        This is the key test: before the fix, rebase failures would cause
+        the session to be resumed, complete again, and loop indefinitely.
+        Now the host handles rebase before launching review.
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\n"
+            "workspace:\n"
+            "  root: .worktrees\n"
+            "  base_branch: master\n"
+            "---\n"
+        )
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        # Create worktree directory
+        worktree = w.repo_dir / ".worktrees" / "agent-abc"
+        worktree.mkdir(parents=True)
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid)) or True
+        w.telegram.notify = MagicMock()
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
+             patch("core.config.load_workflow") as mock_lw:
+            mock_rebase.return_value = "REBASE CONFLICT: fix conflicts"  # Rebase fails
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            cfg.workspace.test_command = None
+            cfg.workspace.test_timeout_s = 120
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Coder should be resumed (not review launched)
+        assert any("abc" == sid and "--resume" in str(cmd) for cmd, sid in launched)
+        # Review should NOT be launched
+        assert not any("review-abc" in str(sid) for _, sid in launched)
+        # Status should be 'working' (not 'reviewing')
+        state = json.loads((coder_sd / "state.json").read_text())
+        assert state["status"] == "working"
+        # Resume prompt should be written
+        assert (coder_sd / "resume-prompt.md").exists()
+        assert "REBASE CONFLICT" in (coder_sd / "resume-prompt.md").read_text()
+
+    def test_rebase_posts_tracker_comment(self, tmp_path):
+        """Rebase failure posts a tracker comment about resuming."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\nworkspace:\n  root: .worktrees\n  base_branch: master\n---\n")
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        (w.repo_dir / ".worktrees" / "agent-abc").mkdir(parents=True)
+
+        w.reviews._launch_background = lambda cmd, sid: True
+        w.telegram.notify = MagicMock()
+        tracker = MagicMock()
+        w._tracker = tracker
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase",
+                   return_value="REBASE CONFLICT"), \
+             patch("core.config.load_workflow") as mock_lw:
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            cfg.workspace.test_command = None
+            cfg.workspace.test_timeout_s = 120
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Should have posted a comment about rebase
+        tracker.add_comment.assert_called_once()
+        comment_body = tracker.add_comment.call_args[0][1]
+        assert "Rebase" in comment_body
+
+    def test_successful_rebase_launches_review(self, tmp_path):
+        """When rebase succeeds, review is launched normally."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\nworkspace:\n  root: .worktrees\n  base_branch: master\n---\n")
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        (w.repo_dir / ".worktrees" / "agent-abc").mkdir(parents=True)
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase",
+                   return_value=None), \
+             patch("core.config.load_workflow") as mock_lw:
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            cfg.workspace.test_command = None
+            cfg.workspace.test_timeout_s = 120
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Review should be launched
+        assert "review-abc" in launched
+        # Status should be 'reviewing'
+        state = json.loads((coder_sd / "state.json").read_text())
+        assert state["status"] == "reviewing"
+
+    def test_missing_worktree_skips_rebase(self, tmp_path):
+        """If worktree doesn't exist, rebase is skipped and review proceeds."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\nworkspace:\n  root: .worktrees\n  base_branch: master\n---\n")
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        # Worktree NOT created
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
+             patch("core.config.load_workflow") as mock_lw:
+            mock_rebase.return_value = None  # Would succeed
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            cfg.workspace.test_command = None
+            cfg.workspace.test_timeout_s = 120
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Rebase called with non-existent path returns None, allowing review
+        assert "review-abc" in launched
+
+    def test_config_load_failure_skips_rebase(self, tmp_path):
+        """If WORKFLOW.md fails to load, rebase is skipped."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
+             patch("core.config.load_workflow") as mock_lw:
+            # First call (WORKFLOW.md) raises, second call (REVIEW.md) succeeds
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            mock_lw.side_effect = [FileNotFoundError("no workflow"), cfg]
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Rebase should not have been called due to config failure
+        mock_rebase.assert_not_called()
+        # Review should still launch
+        assert "review-abc" in launched

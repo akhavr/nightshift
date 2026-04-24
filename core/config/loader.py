@@ -10,7 +10,7 @@ import yaml
 from core.config.models import (
     WorkflowConfig, AgentConfig, TrackerConfig, WorkspaceConfig,
     NotifierConfig, MergeConfig, HooksConfig, ReviewConfig, AutoStartConfig,
-    OverflowConfig,
+    OverflowConfig, OverflowProfile, PricingConfig,
 )
 
 log = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
     # Resolve env vars for everything except overflow (deferred to avoid
     # noisy warnings when overflow env vars are not set in the shell).
     overflow_raw = raw.pop("overflow", None)
+    overflow_profiles_raw = raw.pop("overflow_profiles", None)
     raw = _resolve_env_vars(raw)
     config = WorkflowConfig(prompt_template=prompt_body.strip())
 
@@ -52,6 +53,8 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
     _parse_review(raw, config)
     _parse_auto_start(raw, config)
 
+    if overflow_profiles_raw is not None:
+        raw["overflow_profiles"] = _resolve_env_vars(overflow_profiles_raw, quiet=True)
     if overflow_raw is not None:
         raw["overflow"] = _resolve_env_vars(overflow_raw, quiet=True)
     _parse_overflow(raw, config)
@@ -80,9 +83,11 @@ def _parse_tracker(raw: dict, config: WorkflowConfig):
     if "tracker" not in raw:
         return
     t = raw["tracker"]
+    known = {"kind", "sync"}
     config.tracker = TrackerConfig(
         kind=t.get("kind", "git-bug"),
-        extra={k: v for k, v in t.items() if k != "kind"},
+        sync=bool(t.get("sync", False)),
+        extra={k: v for k, v in t.items() if k not in known},
     )
 
 
@@ -155,15 +160,73 @@ def _parse_auto_start(raw: dict, config: WorkflowConfig):
     )
 
 
+def _parse_overflow_profile(raw_profile: dict[str, Any]) -> OverflowProfile:
+    pricing = None
+    if isinstance(raw_profile.get("pricing"), dict):
+        pricing_raw = raw_profile["pricing"]
+        pricing = PricingConfig(
+            input_per_1m=float(pricing_raw.get("input_per_1m", 0.0)),
+            output_per_1m=float(pricing_raw.get("output_per_1m", 0.0)),
+        )
+    return OverflowProfile(
+        extra_args=raw_profile.get("extra_args", []),
+        env=raw_profile.get("env", {}),
+        litellm_config=raw_profile.get("litellm_config"),
+        pricing=pricing,
+        agent_kind=raw_profile.get("agent_kind"),
+    )
+
+
+def resolve_overflow_config(config: WorkflowConfig,
+                            profile_name: str | None = None) -> OverflowConfig:
+    """Return the active overflow config, optionally overriding the profile name."""
+    selected_profile = profile_name or config.overflow.profile_name
+    if not selected_profile:
+        return config.overflow
+    profile = config.overflow.profiles.get(selected_profile)
+    if profile is None:
+        raise ValueError(f"Unknown overflow profile '{selected_profile}'")
+    return OverflowConfig(
+        extra_args=list(profile.extra_args),
+        env=dict(profile.env),
+        litellm_config=profile.litellm_config,
+        pricing=profile.pricing,
+        agent_kind=profile.agent_kind,
+        profile_name=selected_profile,
+        profiles=dict(config.overflow.profiles),
+    )
+
+
 def _parse_overflow(raw: dict, config: WorkflowConfig):
+    profiles: dict[str, OverflowProfile] = {}
+    if "overflow_profiles" in raw:
+        raw_profiles = raw["overflow_profiles"]
+        if not isinstance(raw_profiles, dict):
+            raise ValueError("overflow_profiles must be a mapping of profile names")
+        for name, profile_raw in raw_profiles.items():
+            if not isinstance(profile_raw, dict):
+                raise ValueError(f"overflow_profiles.{name} must be a mapping")
+            profiles[str(name)] = _parse_overflow_profile(profile_raw)
+
     if "overflow" not in raw:
+        if profiles:
+            config.overflow = OverflowConfig(profiles=profiles)
         return
     o = raw["overflow"]
+    if isinstance(o, str):
+        config.overflow = OverflowConfig(profile_name=o, profiles=profiles)
+        config.overflow = resolve_overflow_config(config)
+        return
+    if not isinstance(o, dict):
+        raise ValueError("overflow must be a mapping or profile name")
+    profile = _parse_overflow_profile(o)
     config.overflow = OverflowConfig(
-        extra_args=o.get("extra_args", []),
-        env=o.get("env", {}),
-        litellm_config=o.get("litellm_config"),
-        agent_kind=o.get("agent_kind"),
+        extra_args=profile.extra_args,
+        env=profile.env,
+        litellm_config=profile.litellm_config,
+        pricing=profile.pricing,
+        agent_kind=profile.agent_kind,
+        profiles=profiles,
     )
 
 

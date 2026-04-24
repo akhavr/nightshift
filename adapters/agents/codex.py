@@ -41,6 +41,8 @@ class CodexAgent(HeadlessAgentBase):
         "authentication_error",
         "insufficient_quota",
         "missing authentication",
+        "usage limit",
+        "hit your usage limit",
     )
 
     def __init__(
@@ -51,9 +53,12 @@ class CodexAgent(HeadlessAgentBase):
     ):
         super().__init__(command, stall_timeout_s, extra_args)
         self._extra_events: list[AgentEvent] = []
+        # Buffer @@DONE@@ until turn.completed arrives with usage data
+        self._pending_done_raw: str | None = None
 
     def _before_stream(self) -> None:
         self._extra_events.clear()
+        self._pending_done_raw = None
 
     def _drain_extra(self) -> Iterator[AgentEvent]:
         while self._extra_events:
@@ -129,10 +134,13 @@ class CodexAgent(HeadlessAgentBase):
                     "cost_usd": usage.get("cost_usd", 0.0),
                     "model": usage.get("model", ev.get("model", "")),
                 }
+            # Use buffered raw if @@DONE@@ was emitted via MCP/text marker
+            event_raw = self._pending_done_raw if self._pending_done_raw else raw
+            self._pending_done_raw = None
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content="@@DONE@@",
-                raw=raw,
+                raw=event_raw,
                 metadata=metadata,
             )
 
@@ -191,6 +199,9 @@ class CodexAgent(HeadlessAgentBase):
             marker_event = self._parse_text_markers(text, raw)
             if marker_event:
                 return marker_event
+            # If @@DONE@@ was buffered (pending_done_raw set), don't emit the text
+            if self._pending_done_raw:
+                return None
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=text,
@@ -226,7 +237,7 @@ class CodexAgent(HeadlessAgentBase):
 
         return AgentEvent(type=AgentEventType.SYSTEM, content=f"item:{item_type}", raw=raw)
 
-    def _parse_mcp_signal(self, item: dict, raw: str) -> AgentEvent:
+    def _parse_mcp_signal(self, item: dict, raw: str) -> Optional[AgentEvent]:
         """Parse a nightshift-signals MCP tool call into a marker event."""
         tool = item.get("tool", "")
         args = item.get("arguments", {})
@@ -234,7 +245,9 @@ class CodexAgent(HeadlessAgentBase):
             args = {}
 
         if tool == "nightshift_done":
-            return AgentEvent(type=AgentEventType.TEXT, content="@@DONE@@", raw=raw)
+            # Buffer @@DONE@@ until turn.completed arrives with usage data
+            self._pending_done_raw = raw
+            return None
 
         if tool == "nightshift_checkpoint":
             desc = args.get("description", "")
@@ -275,9 +288,10 @@ class CodexAgent(HeadlessAgentBase):
         using MCP tools. SessionRunner also detects markers, but explicit
         adapter-level detection ensures consistent behavior per REQ-028.
         """
-        # @@DONE@@ - task completion
+        # @@DONE@@ - task completion (buffer until turn.completed for usage data)
         if "@@DONE@@" in text:
-            return AgentEvent(type=AgentEventType.TEXT, content="@@DONE@@", raw=raw)
+            self._pending_done_raw = raw
+            return None
 
         # @@CHECKPOINT@@ <description>
         match = re.search(r"@@CHECKPOINT@@\s*(.*?)(?:@@|$)", text)
@@ -303,3 +317,15 @@ class CodexAgent(HeadlessAgentBase):
             )
 
         return None
+
+    def _on_process_exit(self) -> None:
+        """Emit buffered @@DONE@@ if stream ends before turn.completed."""
+        if self._pending_done_raw:
+            self._extra_events.append(
+                AgentEvent(
+                    type=AgentEventType.TEXT,
+                    content="@@DONE@@",
+                    raw=self._pending_done_raw,
+                )
+            )
+            self._pending_done_raw = None

@@ -1,12 +1,13 @@
 """Tests for transient error retry logic in HeadlessAgentBase.
 
-REQ: REQ-031
+REQ: REQ-031, REQ-032
 """
 
 from adapters.agents.base import (
     HeadlessAgentBase,
     TRANSIENT_ERROR_PATTERNS,
     TRANSIENT_RETRY_DELAYS,
+    OVERLOAD_RETRY_DELAYS,
 )
 
 
@@ -159,3 +160,104 @@ class TestStoreStartParams:
         agent = HeadlessAgentBase("test")
         with pytest.raises(RuntimeError, match="no stored start parameters"):
             agent._restart()
+
+
+class TestProviderOverloadRetry:
+    """Tests for PROVIDER_OVERLOAD retry with exponential backoff."""
+
+    def test_provider_overload_retries_with_backoff(self):
+        """PROVIDER_OVERLOAD triggers retry with correct delays."""
+        from unittest.mock import patch, MagicMock
+        from pathlib import Path
+        from core.protocols import AgentEvent, AgentEventType
+
+        agent = HeadlessAgentBase("test")
+        # Store start params so _restart works
+        agent._store_start_params("test prompt", Path("/workspace"), 50)
+        agent.start = MagicMock()  # Mock start to avoid subprocess
+
+        ev = AgentEvent(
+            type=AgentEventType.PROVIDER_OVERLOAD,
+            content="high demand",
+        )
+
+        # First retry should use OVERLOAD_RETRY_DELAYS[0] = 60s
+        with patch("time.sleep") as mock_sleep:
+            handled = agent._maybe_retry_transient(ev)
+            assert handled is True
+            mock_sleep.assert_called_once_with(OVERLOAD_RETRY_DELAYS[0])
+            assert agent._overload_retry_count == 1
+
+        # Second retry should use OVERLOAD_RETRY_DELAYS[1] = 120s
+        with patch("time.sleep") as mock_sleep:
+            handled = agent._maybe_retry_transient(ev)
+            assert handled is True
+            mock_sleep.assert_called_once_with(OVERLOAD_RETRY_DELAYS[1])
+            assert agent._overload_retry_count == 2
+
+        # Third retry should use OVERLOAD_RETRY_DELAYS[2] = 300s
+        with patch("time.sleep") as mock_sleep:
+            handled = agent._maybe_retry_transient(ev)
+            assert handled is True
+            mock_sleep.assert_called_once_with(OVERLOAD_RETRY_DELAYS[2])
+            assert agent._overload_retry_count == 3
+
+    def test_provider_overload_max_retries_exceeded(self):
+        """After 3 retries, event passes through."""
+        from core.protocols import AgentEvent, AgentEventType
+
+        agent = HeadlessAgentBase("test")
+        # Set retry count to max
+        agent._overload_retry_count = len(OVERLOAD_RETRY_DELAYS)
+
+        ev = AgentEvent(
+            type=AgentEventType.PROVIDER_OVERLOAD,
+            content="high demand",
+        )
+
+        # Should return False and reset counter
+        handled = agent._maybe_retry_transient(ev)
+        assert handled is False
+        assert agent._overload_retry_count == 0
+
+    def test_provider_overload_counter_independent(self):
+        """Overload counter is separate from transient counter."""
+        from unittest.mock import patch, MagicMock
+        from pathlib import Path
+        from core.protocols import AgentEvent, AgentEventType
+
+        agent = HeadlessAgentBase("test")
+        agent._store_start_params("test prompt", Path("/workspace"), 50)
+        agent.start = MagicMock()
+
+        # Increment transient counter
+        agent._transient_retry_count = 2
+
+        # Create a PROVIDER_OVERLOAD event
+        ev = AgentEvent(
+            type=AgentEventType.PROVIDER_OVERLOAD,
+            content="high demand",
+        )
+
+        with patch("time.sleep"):
+            handled = agent._maybe_retry_transient(ev)
+
+        # Overload retry should work independently
+        assert handled is True
+        assert agent._overload_retry_count == 1
+        # Transient counter should be unchanged
+        assert agent._transient_retry_count == 2
+
+
+class TestOverloadRetryConstants:
+    """Tests for OVERLOAD_RETRY_DELAYS constant."""
+
+    def test_overload_retry_delays_defined(self):
+        """OVERLOAD_RETRY_DELAYS has expected values."""
+        assert OVERLOAD_RETRY_DELAYS == [60, 120, 300]
+
+    def test_overload_retry_delays_longer_than_transient(self):
+        """Overload delays should be longer than transient delays."""
+        for i, delay in enumerate(OVERLOAD_RETRY_DELAYS):
+            if i < len(TRANSIENT_RETRY_DELAYS):
+                assert delay >= TRANSIENT_RETRY_DELAYS[i]
