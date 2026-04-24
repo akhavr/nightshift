@@ -1358,6 +1358,8 @@ class TestStaleReviewSessionCleanup:
         # Coder should be relaunched
         assert "abc" in launched
 
+=======
+>>>>>>> 06a74629 (wip: resolve bcff6564f9ee at step 0 [bcff6564f9ee])
 
 # ---------------------------------------------------------------------------
 # Orphan with @@DONE@@ marker tests
