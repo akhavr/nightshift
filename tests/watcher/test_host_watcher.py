@@ -335,10 +335,11 @@ class TestCheckBackgroundLaunches:
         log_fh = MagicMock()
         w._background_procs["review-abc"] = (proc, log_fh, time.time() - 5)
 
-        # Mock the background launch to prevent actual subprocess
+        # Mock the background launch to prevent actual subprocess (must return True for success)
         launched = []
         def mock_launch(cmd, sid):
             launched.append(sid)
+            return True
         w._launch_background = mock_launch
         w.reviews.verdicts._launch_background = mock_launch
 
