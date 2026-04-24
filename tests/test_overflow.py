@@ -448,7 +448,6 @@ def test_cmd_overflow_profile_selects_named_profile(tmp_path, capsys):
     args.workflow = None
 
     with patch("host.cli._overflow_flag_path", return_value=flag), \
-         patch("host.cli._resolve_workflow", return_value=tmp_path / "WORKFLOW.md"), \
          patch("host.cli.load_workflow", return_value=WorkflowConfig(
              overflow=OverflowConfig(
                  profiles={"openrouter-qwen": OverflowProfile(agent_kind="codex")}
@@ -471,7 +470,6 @@ def test_cmd_overflow_profile_rejects_unknown_profile(tmp_path, capsys):
     args.workflow = None
 
     with patch("host.cli._overflow_flag_path", return_value=flag), \
-         patch("host.cli._resolve_workflow", return_value=tmp_path / "WORKFLOW.md"), \
          patch("host.cli.load_workflow", return_value=WorkflowConfig()):
         with pytest.raises(SystemExit):
             cmd_overflow(args)
