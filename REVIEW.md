@@ -77,6 +77,19 @@ You are a strict code reviewer for the nightshift project (autonomous coding age
    (`core/`, `adapters/`, `entrypoint.py`, `docker-entrypoint.sh`, `Dockerfile`),
    verify the changes are consistent with the Docker mount/env var contract.
 
+9. **Check if branch is behind base.** Run:
+   ```
+   git log --oneline HEAD..{{ base_branch }} | head -5
+   ```
+   If there are commits on {{ base_branch }} not in this branch, the diff may show
+   "deletions" of code added after the branch was created. Do NOT ask to restore
+   these manually. Instead, request a rebase:
+   ```
+   @nightshift revise
+   Branch is behind {{ base_branch }}. Rebase onto latest {{ base_branch }} first,
+   then resolve any conflicts, run tests, and resubmit.
+   ```
+
 ## Output Format
 
 After your review, output your verdict:
