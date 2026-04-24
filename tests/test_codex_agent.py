@@ -265,6 +265,16 @@ class TestParseErrorEvents:
         assert ev.type == AgentEventType.SYSTEM
         assert "turn.failed" in ev.content
 
+    def test_turn_failed_usage_limit(self):
+        """Usage limit errors in turn.failed should be detected as AUTH_FAILURE."""
+        agent = self._agent()
+        raw = _ev("turn.failed", error={
+            "message": "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
+        })
+        ev = agent._parse(raw)
+        assert ev.type == AgentEventType.AUTH_FAILURE
+        assert "usage limit" in ev.content
+
     def test_error_rate_limit_not_auth_failure(self):
         """Rate limit errors are handled as transient errors, not auth failures."""
         agent = self._agent()
@@ -330,6 +340,16 @@ class TestParseEdgeCases:
 
 
 class TestIsAuthFailure:
+    def test_usage_limit_detected_as_auth_failure(self):
+        """Usage limit errors from OpenAI should be detected as auth failures."""
+        # Exact message from OpenAI when hitting usage limits
+        assert CodexAgent._is_auth_failure(
+            "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
+        )
+        # Also test partial patterns
+        assert CodexAgent._is_auth_failure("hit your usage limit")
+        assert CodexAgent._is_auth_failure("usage limit exceeded")
+
     def test_detects_401(self):
         assert CodexAgent._is_auth_failure("unexpected status 401 Unauthorized")
 
@@ -400,8 +420,8 @@ class TestMCPSignalParsing:
     def _agent(self):
         return CodexAgent()
 
-    def test_mcp_signal_done_emits_done_marker(self):
-        """mcp_tool_call with server=nightshift-signals, tool=nightshift_done → @@DONE@@."""
+    def test_mcp_signal_done_buffers_for_usage(self):
+        """mcp_tool_call with nightshift_done buffers @@DONE@@ for turn.completed usage."""
         agent = self._agent()
         raw = _item_ev(
             "item.completed", "mcp_tool_call",
@@ -409,9 +429,9 @@ class TestMCPSignalParsing:
             arguments={"summary": "Task complete"},
         )
         ev = agent._parse(raw)
-        assert ev is not None
-        assert ev.type == AgentEventType.TEXT
-        assert ev.content == "@@DONE@@"
+        # Should return None and buffer for turn.completed
+        assert ev is None
+        assert agent._pending_done_raw == raw
 
     def test_mcp_signal_checkpoint_emits_checkpoint_marker(self):
         """mcp_tool_call with tool=nightshift_checkpoint → @@CHECKPOINT@@ description."""
@@ -455,6 +475,120 @@ class TestMCPSignalParsing:
         assert ev is not None
         assert ev.type == AgentEventType.SYSTEM
         assert "mcp_tool_call" in ev.content
+
+
+# ── Usage buffering (@@DONE@@ waits for turn.completed) ─────
+
+
+class TestUsageBuffering:
+    """Tests for buffering @@DONE@@ until turn.completed arrives with usage data."""
+
+    def _agent(self):
+        return CodexAgent()
+
+    def test_usage_captured_before_done_marker(self):
+        """agent_message with @@DONE@@ waits for turn.completed to get usage."""
+        agent = self._agent()
+        # First: agent_message contains @@DONE@@ text
+        msg_raw = _item_ev("item.completed", "agent_message", text="Task done @@DONE@@")
+        ev1 = agent._parse(msg_raw)
+        # Should return None (buffered)
+        assert ev1 is None
+        assert agent._pending_done_raw == msg_raw
+
+        # Then: turn.completed arrives with usage
+        turn_raw = _ev("turn.completed", usage={
+            "input_tokens": 5000, "output_tokens": 200, "cost_usd": 0.05
+        })
+        ev2 = agent._parse(turn_raw)
+        assert ev2 is not None
+        assert ev2.type == AgentEventType.TEXT
+        assert ev2.content == "@@DONE@@"
+        # Raw should be from the buffered @@DONE@@ event
+        assert ev2.raw == msg_raw
+        # Usage metadata should be attached
+        assert ev2.metadata["usage"]["input_tokens"] == 5000
+        assert ev2.metadata["usage"]["output_tokens"] == 200
+        assert ev2.metadata["usage"]["cost_usd"] == 0.05
+        # Buffer should be cleared
+        assert agent._pending_done_raw is None
+
+    def test_usage_from_turn_completed_after_mcp_done(self):
+        """MCP nightshift_done waits for turn.completed to get usage."""
+        agent = self._agent()
+        # First: MCP nightshift_done
+        mcp_raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_done",
+            arguments={"summary": "Done"}
+        )
+        ev1 = agent._parse(mcp_raw)
+        assert ev1 is None
+        assert agent._pending_done_raw == mcp_raw
+
+        # Then: turn.completed with usage
+        turn_raw = _ev("turn.completed", usage={
+            "input_tokens": 10000, "output_tokens": 500, "cost_usd": 0.12,
+            "model": "gpt-5.4"
+        })
+        ev2 = agent._parse(turn_raw)
+        assert ev2 is not None
+        assert ev2.content == "@@DONE@@"
+        assert ev2.raw == mcp_raw
+        assert ev2.metadata["usage"]["input_tokens"] == 10000
+        assert ev2.metadata["usage"]["model"] == "gpt-5.4"
+
+    def test_buffered_done_emitted_on_process_exit(self):
+        """If stream ends before turn.completed, buffered @@DONE@@ is emitted via _on_process_exit."""
+        agent = self._agent()
+        # Buffer a @@DONE@@
+        mcp_raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_done",
+            arguments={}
+        )
+        agent._parse(mcp_raw)
+        assert agent._pending_done_raw is not None
+
+        # Process exits without turn.completed
+        agent._on_process_exit()
+
+        # Buffered @@DONE@@ should be in extra_events
+        extras = list(agent._drain_extra())
+        assert len(extras) == 1
+        assert extras[0].content == "@@DONE@@"
+        assert extras[0].raw == mcp_raw
+        # No usage metadata (turn.completed never arrived)
+        assert not extras[0].metadata
+        # Buffer should be cleared
+        assert agent._pending_done_raw is None
+
+    def test_no_buffered_done_on_normal_turn_completed(self):
+        """turn.completed without prior @@DONE@@ uses its own raw."""
+        agent = self._agent()
+        # No prior @@DONE@@ buffered
+        assert agent._pending_done_raw is None
+
+        turn_raw = _ev("turn.completed", usage={"input_tokens": 1000, "output_tokens": 50})
+        ev = agent._parse(turn_raw)
+        assert ev is not None
+        assert ev.content == "@@DONE@@"
+        # Raw should be from turn.completed itself
+        assert ev.raw == turn_raw
+        assert ev.metadata["usage"]["input_tokens"] == 1000
+
+    def test_before_stream_clears_pending_done(self):
+        """_before_stream() resets pending @@DONE@@ state."""
+        agent = self._agent()
+        # Buffer a @@DONE@@
+        agent._pending_done_raw = "some raw"
+        agent._extra_events.append(AgentEvent(type=AgentEventType.TEXT, content="test"))
+
+        # Reset state
+        agent._before_stream()
+
+        assert agent._pending_done_raw is None
+        assert len(agent._extra_events) == 0
 
 
 # ── Registry ─────────────────────────────────────────────

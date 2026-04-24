@@ -10,7 +10,7 @@ import pytest
 from core.protocols import (
     AgentEvent, AgentEventType, TrackerIssue, Workspace,
 )
-from core.config.models import HooksConfig, MergeConfig
+from core.config.models import HooksConfig, MergeConfig, PricingConfig
 from core.state import StateManager, SessionState
 from core.session import SessionRunner, MAX_RESUMES
 from core.answer_collector import collect_answer
@@ -809,21 +809,46 @@ def _provider_overload_event(content: str = "high demand") -> AgentEvent:
 class TestProviderOverload:
     """Tests for provider overload handling (suspended:provider-overload status)."""
 
-    def test_provider_overload_status_reported(self, tmp_path):
-        """Provider overload should eventually set suspended:provider-overload-permanent after retries exhausted."""
-        # Use ScriptedAgent to emit PROVIDER_OVERLOAD on each cycle
-        from core.post_run import OVERLOAD_BACKOFF_DELAYS
-        # Need len(OVERLOAD_BACKOFF_DELAYS) + 1 cycles to exhaust retries
-        scripts = [[_provider_overload_event()] for _ in range(len(OVERLOAD_BACKOFF_DELAYS) + 2)]
-        agent = ScriptedAgent(scripts)
-        runner, _, tracker, notifier, ws_mgr, state_mgr = _make_runner(
-            tmp_path, agent=agent)
-        # Patch out the sleep to speed up the test
-        with patch("core.post_run.time.sleep"):
-            runner.run()
+    def test_provider_overload_sets_suspended_status(self, tmp_path):
+        """Provider overload should set suspended:provider-overload and NOT auto-resume."""
+        # Single PROVIDER_OVERLOAD event should set status and stop
+        events = [_provider_overload_event()]
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=events)
+        runner.run()
         st = state_mgr.load_state()
-        # After exhausting retries, status should be provider-overload-permanent
-        assert st.status == "suspended:provider-overload-permanent"
+        # Status should be suspended:provider-overload (watcher handles retries, not container)
+        assert st.status == "suspended:provider-overload"
+
+    def test_provider_overload_skips_auto_resume(self, tmp_path):
+        """post_run_action should return None for suspended:provider-overload (no in-container auto-resume)."""
+        from core.post_run import post_run_action
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        state_mgr = StateManager(session_dir)
+        state = SessionState(
+            issue_id="test-001", branch="agent/test-001",
+            status="suspended:provider-overload", overload_resumes=1
+        )
+        state_mgr._write(state)
+
+        # Create minimal mocks for post_run_action
+        from tests.conftest import MockTracker, MockNotifier, MockWorkspaceManager, MockAgent
+        from core.protocols import TrackerIssue
+        issue = TrackerIssue(id="test-001", identifier="test-001", title="Test", body="", status="open", labels=[])
+        result = post_run_action(
+            state_mgr=state_mgr,
+            workspace_mgr=MockWorkspaceManager(tmp_path / "ws"),
+            workspace=None,
+            tracker=MockTracker(),
+            notifier=MockNotifier(),
+            issue=issue,
+            agent=MockAgent([]),
+            build_resume_fn=lambda *args, **kwargs: None,
+            commit_wip_fn=lambda *args: None,
+        )
+        # Should return None (no auto-resume for provider-overload)
+        assert result is None
 
     def test_provider_overload_immediate_status(self, tmp_path):
         """Provider overload should set suspended:provider-overload immediately (before post_run)."""
@@ -865,23 +890,6 @@ class TestProviderOverload:
         runner._init_workspace(None)
         runner._run_agent_cycle(runner.prompt)
         assert any("provider overload" in c for c in ws_mgr.commits)
-
-    def test_backoff_on_provider_overload(self, tmp_path):
-        """Provider overload should apply exponential backoff delays."""
-        from core.post_run import OVERLOAD_BACKOFF_DELAYS
-        # On first overload, should_resume returns backoff delay
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        state_mgr = StateManager(session_dir)
-        state = SessionState(
-            issue_id="test-001", branch="agent/test-001",
-            status="suspended:provider-overload", overload_resumes=1
-        )
-        state_mgr._write(state)
-
-        from core.post_run import should_resume
-        delay = should_resume(state_mgr, "coder")
-        assert delay == OVERLOAD_BACKOFF_DELAYS[0]
 
     def test_overload_counter_reset_on_checkpoint(self, tmp_path):
         """Checkpoint should reset overload_resumes counter (session made progress)."""
@@ -1008,6 +1016,40 @@ class TestUsageTracking:
         st = state_mgr.load_state()
         assert st.usage.input_tokens == 0
         assert st.usage.cost_usd == 0.0
+
+    def test_cost_calculated_from_tokens(self, tmp_path):
+        """When provider reports zero cost, configured pricing computes it from tokens."""
+        usage_event = AgentEvent(
+            type=AgentEventType.TEXT, content="@@DONE@@ done",
+            metadata={"usage": {
+                "input_tokens": 1_000_000, "output_tokens": 2_000_000,
+                "cost_usd": 0.0, "model": "qwen/qwen3.6-plus",
+            }},
+            raw="done",
+        )
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=[usage_event])
+        runner.pricing = PricingConfig(input_per_1m=0.325, output_per_1m=1.95)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.usage.cost_usd == pytest.approx(4.225)
+
+    def test_cost_not_calculated_when_provider_reports_cost(self, tmp_path):
+        """Provider-reported non-zero cost takes precedence over configured pricing."""
+        usage_event = AgentEvent(
+            type=AgentEventType.TEXT, content="@@DONE@@ done",
+            metadata={"usage": {
+                "input_tokens": 1_000_000, "output_tokens": 2_000_000,
+                "cost_usd": 0.12, "model": "qwen/qwen3.6-plus",
+            }},
+            raw="done",
+        )
+        runner, agent, tracker, notifier, ws_mgr, state_mgr = _make_runner(
+            tmp_path, events=[usage_event])
+        runner.pricing = PricingConfig(input_per_1m=0.325, output_per_1m=1.95)
+        runner.run()
+        st = state_mgr.load_state()
+        assert st.usage.cost_usd == 0.12
 
 
 class TestDispatchEvent:

@@ -10,11 +10,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.config.models import OverflowConfig, WorkflowConfig
+from core.config.models import OverflowConfig, OverflowProfile, PricingConfig, WorkflowConfig
 from core.config.loader import load_workflow, _parse_overflow
+from core.protocols import AgentEvent, AgentEventType
+from core.session import SessionRunner
+from core.state import SessionState, StateManager
 from host.constants import OVERFLOW_FLAG_FILENAME
 from host.docker_cmd import build_docker_cmd
 from host.cli import cmd_overflow, cmd_status, _overflow_flag_path
+from tests.conftest import (
+    MockNotifier,
+    MockTracker,
+    MockWorkspaceManager,
+    make_test_issue,
+)
 
 
 # ── OverflowConfig dataclass ────────────────────────────────────────────────
@@ -26,6 +35,7 @@ def test_overflow_config_defaults():
     assert oc.extra_args == []
     assert oc.env == {}
     assert oc.litellm_config is None
+    assert oc.pricing is None
 
 
 def test_overflow_config_with_values():
@@ -38,12 +48,21 @@ def test_overflow_config_with_values():
     assert oc.env["ANTHROPIC_BASE_URL"] == "https://example.com"
 
 
+def test_overflow_config_profiles():
+    """OverflowConfig stores named overflow profiles."""
+    profile = OverflowProfile(agent_kind="codex", env={"CODEX_MODEL": "gpt-5.4-mini"})
+    oc = OverflowConfig(profile_name="codex-oauth", profiles={"codex-oauth": profile})
+    assert oc.profile_name == "codex-oauth"
+    assert oc.profiles["codex-oauth"] == profile
+
+
 def test_workflow_config_has_overflow():
     """WorkflowConfig includes an overflow field with correct default."""
     wc = WorkflowConfig()
     assert isinstance(wc.overflow, OverflowConfig)
     assert wc.overflow.extra_args == []
     assert wc.overflow.env == {}
+    assert wc.overflow.profiles == {}
 
 
 # ── Config parsing ──────────────────────────────────────────────────────────
@@ -107,6 +126,134 @@ def test_parse_overflow_partial():
     _parse_overflow(raw, config)
     assert config.overflow.extra_args == ["--model", "test"]
     assert config.overflow.env == {}
+
+
+def test_parse_overflow_profile_from_yaml(tmp_path, monkeypatch):
+    """String overflow values resolve to a named profile."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-openrouter")
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("""\
+---
+overflow_profiles:
+  openrouter-qwen:
+    agent_kind: codex
+    env:
+      CODEX_MODEL: qwen/qwen3.6-plus
+      CODEX_BASE_URL: https://openrouter.ai/api/v1
+      CODEX_API_KEY: $OPENROUTER_API_KEY
+overflow: openrouter-qwen
+---
+Prompt.
+""")
+    config = load_workflow(workflow)
+    assert config.overflow.profile_name == "openrouter-qwen"
+    assert config.overflow.agent_kind == "codex"
+    assert config.overflow.env["CODEX_MODEL"] == "qwen/qwen3.6-plus"
+    assert config.overflow.env["CODEX_API_KEY"] == "sk-openrouter"
+    assert "openrouter-qwen" in config.overflow.profiles
+
+
+def test_parse_overflow_profile_unknown_name_raises(tmp_path):
+    """Unknown overflow profile names fail fast during config load."""
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("""\
+---
+overflow_profiles:
+  codex-oauth:
+    agent_kind: codex
+overflow: missing-profile
+---
+Prompt.
+""")
+    with pytest.raises(ValueError, match="Unknown overflow profile"):
+        load_workflow(workflow)
+
+
+def test_pricing_config_parsed(tmp_path):
+    """Overflow pricing is parsed for custom-provider usage accounting."""
+    workflow = tmp_path / "WORKFLOW.md"
+    workflow.write_text("""\
+---
+overflow:
+  agent_kind: codex
+  pricing:
+    input_per_1m: 0.325
+    output_per_1m: 1.95
+---
+Prompt.
+""")
+    config = load_workflow(workflow)
+    assert isinstance(config.overflow.pricing, PricingConfig)
+    assert config.overflow.pricing.input_per_1m == 0.325
+    assert config.overflow.pricing.output_per_1m == 1.95
+
+
+class _SingleRunAgent:
+    def __init__(self, events):
+        self.events = events
+        self._pid = 12345
+
+    def start(self, prompt, workspace, max_turns=50):
+        self.started = True
+
+    def stream_events(self):
+        yield from self.events
+
+    def send_input(self, text):
+        pass
+
+    def is_alive(self):
+        return False
+
+    def terminate(self):
+        pass
+
+    @property
+    def pid(self):
+        return self._pid
+
+
+def _run_overflow_usage(tmp_path, cost_usd):
+    issue = make_test_issue()
+    session_dir = tmp_path / "session"
+    state_mgr = StateManager(session_dir)
+    state_mgr._write(SessionState(
+        issue_id=issue.id, branch=f"agent/{issue.identifier}", status="working"))
+    usage_event = AgentEvent(
+        type=AgentEventType.TEXT,
+        content="@@DONE@@",
+        metadata={"usage": {
+            "input_tokens": 1_000_000,
+            "output_tokens": 2_000_000,
+            "cost_usd": cost_usd,
+            "model": "qwen/qwen3.6-plus",
+        }},
+        raw="done",
+    )
+    runner = SessionRunner(
+        agent=_SingleRunAgent([usage_event]),
+        tracker=MockTracker({issue.id: issue}),
+        notifier=MockNotifier(),
+        workspace_mgr=MockWorkspaceManager(tmp_path),
+        state_mgr=state_mgr,
+        issue=issue,
+        prompt="Fix the widget",
+        pricing=PricingConfig(input_per_1m=0.325, output_per_1m=1.95),
+    )
+    runner.run()
+    return state_mgr.load_state().usage
+
+
+def test_cost_calculated_from_tokens(tmp_path):
+    """Zero-cost token usage is priced from overflow pricing config."""
+    usage = _run_overflow_usage(tmp_path, cost_usd=0.0)
+    assert usage.cost_usd == pytest.approx(4.225)
+
+
+def test_cost_not_calculated_when_provider_reports_cost(tmp_path):
+    """Provider-reported cost takes precedence over overflow pricing."""
+    usage = _run_overflow_usage(tmp_path, cost_usd=0.12)
+    assert usage.cost_usd == 0.12
 
 
 # ── docker_cmd with overflow ────────────────────────────────────────────────
@@ -291,6 +438,47 @@ def test_cmd_overflow_creates_parent_dir(tmp_path, capsys):
     assert flag.exists()
 
 
+def test_cmd_overflow_profile_selects_named_profile(tmp_path, capsys):
+    """'nightshift overflow profile <name>' stores the selected profile name."""
+    flag = tmp_path / ".nightshift" / OVERFLOW_FLAG_FILENAME
+
+    args = MagicMock()
+    args.state = "profile"
+    args.profile_name = "openrouter-qwen"
+    args.workflow = None
+
+    with patch("host.cli._overflow_flag_path", return_value=flag), \
+         patch("host.cli.load_workflow", return_value=WorkflowConfig(
+             overflow=OverflowConfig(
+                 profiles={"openrouter-qwen": OverflowProfile(agent_kind="codex")}
+             )
+         )):
+        cmd_overflow(args)
+
+    assert flag.read_text() == "openrouter-qwen\n"
+    out = capsys.readouterr().out
+    assert "openrouter-qwen" in out
+
+
+def test_cmd_overflow_profile_rejects_unknown_profile(tmp_path, capsys):
+    """'nightshift overflow profile <name>' exits when the profile is undefined."""
+    flag = tmp_path / ".nightshift" / OVERFLOW_FLAG_FILENAME
+
+    args = MagicMock()
+    args.state = "profile"
+    args.profile_name = "missing-profile"
+    args.workflow = None
+
+    with patch("host.cli._overflow_flag_path", return_value=flag), \
+         patch("host.cli.load_workflow", return_value=WorkflowConfig()):
+        with pytest.raises(SystemExit):
+            cmd_overflow(args)
+
+    err = capsys.readouterr().err
+    assert "missing-profile" in err
+    assert not flag.exists()
+
+
 # ── CLI status shows overflow state ─────────────────────────────────────────
 
 
@@ -310,6 +498,24 @@ def test_cmd_status_shows_overflow_on(tmp_path, capsys):
 
     out = capsys.readouterr().out
     assert "Overflow: ON" in out
+
+
+def test_cmd_status_shows_overflow_profile_name(tmp_path, capsys):
+    """'nightshift status' shows the selected overflow profile when present."""
+    ns_dir = tmp_path / ".nightshift"
+    sessions = ns_dir / "sessions"
+    sessions.mkdir(parents=True)
+    flag = ns_dir / OVERFLOW_FLAG_FILENAME
+    flag.write_text("openrouter-qwen\n")
+
+    args = MagicMock()
+
+    with patch("host.cli._overflow_flag_path", return_value=flag), \
+         patch("host.cli.sessions_dir", return_value=sessions):
+        cmd_status(args)
+
+    out = capsys.readouterr().out
+    assert "Overflow: ON (profile: openrouter-qwen)" in out
 
 
 def test_cmd_status_no_overflow_header(tmp_path, capsys):
@@ -376,6 +582,52 @@ Prompt.
     assert captured_kwargs.get("overflow") is not None
     assert captured_kwargs["overflow"].extra_args == ["--model", "m2.7"]
     assert captured_kwargs["overflow"].env["ANTHROPIC_API_KEY"] == "sk-overflow"
+
+
+def test_launch_uses_profile_selected_in_flag_file(tmp_path, monkeypatch):
+    """launch.py resolves the overflow profile named in the flag file."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    (ns_dir / OVERFLOW_FLAG_FILENAME).write_text("openrouter-qwen\n")
+
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text("""\
+---
+overflow_profiles:
+  openrouter-qwen:
+    agent_kind: codex
+    env:
+      CODEX_MODEL: qwen/qwen3.6-plus
+---
+Prompt.
+""")
+
+    from host.launch import main
+
+    monkeypatch.setattr("sys.argv", [
+        "launch.py", "test-issue-id",
+        "--workflow", str(wf),
+    ])
+    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
+    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
+    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+
+    captured_kwargs = {}
+
+    def mock_run_container(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("host.launch.run_container", mock_run_container)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert captured_kwargs["overflow"] is not None
+    assert captured_kwargs["overflow"].profile_name == "openrouter-qwen"
+    assert captured_kwargs["overflow"].agent_kind == "codex"
+    assert captured_kwargs["overflow"].env["CODEX_MODEL"] == "qwen/qwen3.6-plus"
 
 
 def test_launch_no_overflow_without_flag(tmp_path, monkeypatch):
@@ -529,6 +781,55 @@ Prompt.
 
     assert captured_kwargs.get("overflow") is not None
     assert captured_kwargs["overflow"].agent_kind == "openhands"
+    # agent_kind kwarg should be overflow.agent_kind, not config.agent.kind
+    assert captured_kwargs.get("agent_kind") == "openhands"
+
+
+def test_launch_uses_overflow_agent_kind_not_config(tmp_path, monkeypatch):
+    """When overflow is active, agent_kind should be overflow.agent_kind, not config.agent.kind."""
+    ns_dir = tmp_path / ".nightshift"
+    ns_dir.mkdir()
+    (ns_dir / OVERFLOW_FLAG_FILENAME).touch()
+
+    # config.agent.kind is claude-code, but overflow.agent_kind is codex
+    wf = tmp_path / "WORKFLOW.md"
+    wf.write_text("""\
+---
+agent:
+  kind: claude-code
+overflow:
+  agent_kind: codex
+  env:
+    CODEX_API_KEY: test-key
+    CODEX_BASE_URL: https://api.openai.com/v1
+---
+Prompt.
+""")
+
+    from host.launch import main
+
+    monkeypatch.setattr("host.launch.get_repo_root", lambda: tmp_path)
+    monkeypatch.setattr("host.launch.discover_workflow", lambda *a, **kw: wf)
+    monkeypatch.setattr("host.launch.load_all_dotenv", lambda *a: None)
+    monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
+    monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    import sys
+    monkeypatch.setattr(sys, "argv", ["launch.py", "abc123"])
+
+    captured_kwargs = {}
+
+    def mock_run_container(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("host.launch.run_container", mock_run_container)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    # The bug was: agent_kind was config.agent.kind (claude-code) instead of overflow.agent_kind (codex)
+    assert captured_kwargs.get("agent_kind") == "codex", \
+        f"Expected codex, got {captured_kwargs.get('agent_kind')}"
 
 
 # ── Watcher _diff_config detects overflow changes ───────────────────────────
@@ -710,9 +1011,27 @@ Prompt.
     assert captured["overflow"].litellm_config == "litellm-config.yaml"
 
 
-def test_overflow_skipped_for_review_step(tmp_path, monkeypatch):
-    """launch.py skips overflow when step='review', even when flag file exists."""
+def test_launch_uses_overflow_for_review_when_configured(tmp_path, monkeypatch):
+    """launch.py uses overflow for review when REVIEW.md defines overflow."""
     captured = _launch_with_overflow(tmp_path, monkeypatch, step="review")
+    assert captured.get("overflow") is not None
+    assert captured["overflow"].extra_args == ["--model", "m2.7"]
+
+
+def test_launch_skips_overflow_for_review_when_not_configured(tmp_path, monkeypatch):
+    """launch.py falls back to REVIEW.md agent config when overflow is absent."""
+    captured = _launch_with_overflow(
+        tmp_path,
+        monkeypatch,
+        step="review",
+        workflow_content="""\
+---
+agent:
+  kind: claude-code
+---
+Prompt.
+""",
+    )
     assert captured.get("overflow") is None
 
 

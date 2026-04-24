@@ -21,6 +21,7 @@ AGENT_REGISTRY: dict[str, tuple[str, str]] = {
 
 TRACKER_REGISTRY: dict[str, tuple[str, str]] = {
     "git-bug": ("adapters.trackers.git_bug", "GitBugTracker"),
+    "git-bug-graphql": ("adapters.trackers.git_bug_graphql", "GitBugGraphQLTracker"),
     "github": ("adapters.trackers.github_issues", "GitHubIssuesTracker"),
     "static": ("adapters.trackers.static", "StaticTracker"),
 }
@@ -69,7 +70,10 @@ def create_agent(config: WorkflowConfig, overflow: OverflowConfig | None = None)
 
 
 def create_tracker(config: WorkflowConfig, **overrides) -> Any:
-    kwargs = {**config.tracker.extra, **overrides}
+    kwargs = {**config.tracker.extra}
+    if config.tracker.sync:
+        kwargs["sync"] = True
+    kwargs.update(overrides)
     return _instantiate(TRACKER_REGISTRY, config.tracker.kind, **kwargs)
 
 

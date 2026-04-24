@@ -16,7 +16,7 @@ from adapters.trackers.static import StaticTracker
 from core.config import (
     load_workflow, create_agent, create_tracker,
     create_workspace_mgr, create_notifiers,
-    OverflowConfig,
+    OverflowConfig, resolve_overflow_config,
 )
 from core.constants import MERGE_NEEDED_FILENAME
 from core.prompts import render_template, build_initial_prompt
@@ -81,12 +81,8 @@ def _read_merge_instructions(session_dir: str) -> str | None:
         f"Conflict details from the host-side merge attempt:\n"
         f"{conflict_details}\n\n"
         f"Please:\n"
-        f"1. Run `git fetch origin {base_branch}` to get latest changes\n"
-        f"2. Run `git merge origin/{base_branch}` (or `git merge {base_branch}`)\n"
-        f"3. Resolve any merge conflicts\n"
-        f"4. Commit the merge\n"
-        f"5. Run the test suite to confirm no regressions\n"
-        f"6. Then continue with your original task\n"
+        f"1. Run `git merge {base_branch}` to merge latest changes\n"
+        f"2. Resolve any conflicts, run tests, then continue\n"
     )
 
 
@@ -95,6 +91,7 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
     """Build or load the agent prompt."""
     if resume and (p := state_mgr.read_resume_prompt()):
         tracker.add_comment(issue_id, f"🤖 Resuming from step {state_mgr.load_state().step}...")
+        state_mgr.update_status("working")
         # Prepend merge instructions if merge-needed.txt exists
         merge_instructions = _read_merge_instructions("/session")
         if merge_instructions:
@@ -178,7 +175,8 @@ def main():
 
     # Check if we're in overflow mode (OVERFLOW_ACTIVE set by host)
     overflow_active = os.environ.get("OVERFLOW_ACTIVE") == "1"
-    overflow_config = config.overflow if overflow_active else None
+    overflow_profile = os.environ.get("OVERFLOW_PROFILE")
+    overflow_config = resolve_overflow_config(config, overflow_profile) if overflow_active else None
     tracker, agent, workspace_mgr, workspace, state_mgr, notifier = _create_adapters(config, overflow_config)
     notifier.start()
 
@@ -199,6 +197,7 @@ def main():
         merge_config=config.merge,
         hooks_config=config.hooks,
         workspace_config=config.workspace,
+        pricing=overflow_config.pricing if overflow_config else None,
         is_review=(step == "review"),
     )
 

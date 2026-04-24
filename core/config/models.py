@@ -16,6 +16,7 @@ class AgentConfig:
 @dataclass
 class TrackerConfig:
     kind: str = "git-bug"
+    sync: bool = False
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -64,14 +65,30 @@ class AutoStartConfig:
 
 
 @dataclass
-class OverflowConfig:
+class PricingConfig:
+    input_per_1m: float = 0.0
+    output_per_1m: float = 0.0
+
+
+@dataclass
+class OverflowProfile:
     extra_args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     # Path to litellm-config.yaml for proxy-based model remapping
     litellm_config: str | None = None
+    # Optional provider pricing for agents that emit tokens without cost.
+    pricing: PricingConfig | None = None
     # Agent kind to use in overflow mode (e.g., "openhands" vs "claude-code")
     # In regular mode, agent.kind is used; in overflow mode, this overrides it
     agent_kind: str | None = None
+
+
+@dataclass
+class OverflowConfig(OverflowProfile):
+    # Name of the active overflow profile, if selected via WORKFLOW.md or CLI.
+    profile_name: str | None = None
+    # All named profiles available for selection.
+    profiles: dict[str, OverflowProfile] = field(default_factory=dict)
 
 
 @dataclass

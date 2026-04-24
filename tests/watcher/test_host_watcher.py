@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import host.watcher as wmod
 from host.watcher import HostWatcher
+from core.config.models import TrackerConfig, WorkflowConfig
 from core.protocols import TrackerIssue, TrackerComment
 
 from tests.watcher.conftest import _make_watcher, _make_session, _make_issue, _make_comment
@@ -30,7 +31,6 @@ class TestHostWatcherInit:
         assert w.qa._paused == {}
         assert w.reviews._comment_counts == {}
         assert w.reviews._rounds == {}
-        assert w.monitor._known_issue_ids == set()
         assert w._recently_launched == {}
         assert w.reviews._command_failures == {}
         assert w.telegram._offset == 0
@@ -60,6 +60,30 @@ class TestHostWatcherInit:
                 assert w.telegram.enabled is False
         finally:
             wmod.HAS_REQUESTS = orig
+
+
+class TestTrackerSyncConfig:
+    def test_maybe_sync_tracker_skips_when_disabled(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        tracker = MagicMock()
+        w._tracker = tracker
+        w._config = WorkflowConfig(tracker=TrackerConfig(sync=False))
+        w.reviews._last_poll = 0.0
+
+        w._maybe_sync_tracker()
+
+        tracker.sync.assert_not_called()
+
+    def test_maybe_sync_tracker_runs_when_enabled(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        tracker = MagicMock()
+        w._tracker = tracker
+        w._config = WorkflowConfig(tracker=TrackerConfig(sync=True))
+        w.reviews._last_poll = 0.0
+
+        w._maybe_sync_tracker()
+
+        tracker.sync.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -280,3 +304,156 @@ class TestStartupCleanup:
             w.run(shutdown_event=shutdown)
 
         assert len(cleanup_called) == 1, "cleanup_stale_review_sessions should be called once on startup"
+
+
+# ---------------------------------------------------------------------------
+# auto-start regression tests
+# ---------------------------------------------------------------------------
+
+class TestAutoStartRegressions:
+    def test_auto_start_after_reject(self, tmp_path):
+        """Auto-start should relaunch after cleanup removes the session dir."""
+        from core.config import AutoStartConfig
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        w = HostWatcher(sessions, repo, auto_start=True)
+        w.telegram.enabled = False
+        w._auto_start_config = AutoStartConfig(
+            enabled=True,
+            label="nightshift",
+            poll_interval_s=0,
+            max_concurrent=4,
+        )
+
+        issue = _make_issue("issue-abc", labels=["nightshift"])
+        tracker = MagicMock()
+        tracker.list_issues.return_value = [issue]
+        w._tracker = tracker
+
+        launched_sids = []
+        w.monitor._launch_background = lambda cmd, sid: launched_sids.append(sid) or True
+
+        with patch("host.watcher.session_monitor.post_start"):
+            w.monitor.check_new_issues()
+
+        assert launched_sids == ["issue-abc"]
+
+        session_dir = _make_session(
+            w.sessions_dir, "issue-abc", status="working", issue_id=issue.id
+        )
+        with patch("host.watcher.session_monitor.load_workflow") as mock_load_workflow, \
+             patch("host.watcher.remove_worktree"):
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_load_workflow.return_value = cfg
+            w.monitor.cleanup_session("issue-abc", issue.id, session_dir)
+
+        assert not session_dir.exists()
+
+        with patch("host.watcher.session_monitor.post_start"):
+            w.monitor.check_new_issues()
+
+        assert launched_sids == ["issue-abc", "issue-abc"]
+
+    def test_auto_start_after_sighup(self, tmp_path):
+        """Config reload should not block auto-start when no session dir exists."""
+        from core.config import AutoStartConfig
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        w = HostWatcher(sessions, repo, auto_start=True)
+        w.telegram.enabled = False
+
+        issue = _make_issue("issue-abc", labels=["nightshift"])
+        tracker = MagicMock()
+        tracker.list_issues.return_value = [issue]
+        w.monitor.__dict__["_known_issue_ids"] = {issue.id}
+
+        launched_sids = []
+        w.monitor._launch_background = lambda cmd, sid: launched_sids.append(sid) or True
+
+        workflow_config = WorkflowConfig(
+            auto_start=AutoStartConfig(
+                enabled=True,
+                label="nightshift",
+                poll_interval_s=0,
+                max_concurrent=4,
+            )
+        )
+        with patch("host.watcher.host_watcher.load_workflow", return_value=workflow_config), \
+             patch("host.watcher.host_watcher.create_tracker", return_value=tracker):
+            w.reload_config()
+
+        with patch("host.watcher.session_monitor.post_start"):
+            w.monitor.check_new_issues()
+
+        assert launched_sids == ["issue-abc"]
+
+
+# ---------------------------------------------------------------------------
+# reload_config tracker lifecycle tests
+# ---------------------------------------------------------------------------
+
+class TestReloadConfigTrackerLifecycle:
+    """Test that reload_config properly handles tracker lifecycle (REQ-026)."""
+
+    def test_reload_config_tracker_failure_restores_old(self, tmp_path):
+        """When tracker creation fails, the old tracker should be restored."""
+        w = _make_watcher(tmp_path)
+
+        old_tracker = MagicMock()
+        old_tracker.terminate_current = MagicMock()
+        w._tracker = old_tracker
+        w._config = WorkflowConfig()
+
+        # Make create_tracker fail
+        with patch("host.watcher.host_watcher.load_workflow", return_value=WorkflowConfig()), \
+             patch("host.watcher.host_watcher.create_tracker", side_effect=Exception("Connection failed")):
+            w.reload_config()
+
+        # Old tracker should be restored
+        assert w._tracker is old_tracker
+
+    def test_reload_config_terminates_old_tracker_on_success(self, tmp_path):
+        """Old tracker should be terminated when new tracker creation succeeds."""
+        w = _make_watcher(tmp_path)
+
+        old_tracker = MagicMock()
+        old_tracker.terminate_current = MagicMock()
+        w._tracker = old_tracker
+        w._config = WorkflowConfig()
+
+        new_tracker = MagicMock()
+
+        with patch("host.watcher.host_watcher.load_workflow", return_value=WorkflowConfig()), \
+             patch("host.watcher.host_watcher.create_tracker", return_value=new_tracker):
+            w.reload_config()
+
+        # Old tracker should be terminated
+        old_tracker.terminate_current.assert_called_once()
+        # New tracker should be in place
+        assert w._tracker is new_tracker
+
+    def test_reload_config_keeps_old_tracker_alive_on_failure(self, tmp_path):
+        """Old tracker should NOT be terminated when new tracker creation fails."""
+        w = _make_watcher(tmp_path)
+
+        old_tracker = MagicMock()
+        old_tracker.terminate_current = MagicMock()
+        w._tracker = old_tracker
+        w._config = WorkflowConfig()
+
+        # Make create_tracker fail
+        with patch("host.watcher.host_watcher.load_workflow", return_value=WorkflowConfig()), \
+             patch("host.watcher.host_watcher.create_tracker", side_effect=Exception("Connection failed")):
+            w.reload_config()
+
+        # Old tracker should NOT be terminated - we're still using it
+        old_tracker.terminate_current.assert_not_called()
+        # Old tracker should be restored
+        assert w._tracker is old_tracker

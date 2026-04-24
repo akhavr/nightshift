@@ -104,12 +104,14 @@ def _graceful_kill(proc: subprocess.Popen, timeout: int = _GRACEFUL_KILL_TIMEOUT
 
 class GitBugTracker:
     def __init__(self, repo_dir: str | Path = "/workspace",
-                 shutdown_event: threading.Event | None = None):
+                 shutdown_event: threading.Event | None = None,
+                 sync: bool = False):
         self.cwd = str(repo_dir)
         self._shutdown = shutdown_event or threading.Event()
         self._current_proc: subprocess.Popen | None = None
         self._proc_lock = threading.Lock()
         self._has_remote: bool | None = None  # lazy-detected on first sync
+        self._sync_enabled = sync
 
     @staticmethod
     def _short(issue_id: str) -> str:
@@ -297,6 +299,8 @@ class GitBugTracker:
     _NO_REMOTE_MARKERS = ("remote not found", "unable to resolve URL for remote")
 
     def sync(self) -> None:
+        if not self._sync_enabled:
+            return
         if self._has_remote is False:
             return
         if self._has_remote is None:

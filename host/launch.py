@@ -13,7 +13,7 @@ from pathlib import Path
 
 # host/launch.py runs on the host, so it adds the project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.config import load_workflow
+from core.config import load_workflow, resolve_overflow_config
 from core.post_run import format_cost_line
 from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
@@ -40,6 +40,14 @@ def _resolve_names(issue_id: str, step: str, config):
         "worktree_name": f"{prefix}-{short_id}",
         "base_branch": f"agent/{short_id}" if is_review else config.workspace.base_branch,
     }
+
+
+def _read_overflow_profile_name(flag: Path) -> str | None:
+    """Read the selected overflow profile name from the flag file."""
+    if not flag.exists():
+        return None
+    profile_name = flag.read_text().strip()
+    return profile_name or None
 
 
 def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
@@ -204,24 +212,29 @@ def main():
     dump_issue_data(config, repo, session_dir, args.issue_id,
                     names["is_review"], args.resume)
 
-    # Check overflow flag file — skip overflow for review sessions so the
-    # review agent always uses its own provider (e.g. Claude Code).
+    # Check overflow flag file. Review sessions can also use overflow when the
+    # active REVIEW.md defines an overflow section.
     overflow = None
-    if not names["is_review"]:
-        overflow_flag = repo / ".nightshift" / OVERFLOW_FLAG_FILENAME
-        has_overflow_config = (
-            config.overflow.extra_args
-            or config.overflow.env
-            or config.overflow.agent_kind
-        )
-        if overflow_flag.exists() and has_overflow_config:
-            overflow = config.overflow
-            print(f"Overflow active: using alternate provider")
+    overflow_flag = repo / ".nightshift" / OVERFLOW_FLAG_FILENAME
+    has_overflow_config = (
+        config.overflow.extra_args
+        or config.overflow.env
+        or config.overflow.pricing
+        or config.overflow.agent_kind
+    )
+    selected_overflow_profile = _read_overflow_profile_name(overflow_flag)
+    if overflow_flag.exists() and (has_overflow_config or selected_overflow_profile):
+        overflow = resolve_overflow_config(config, selected_overflow_profile)
+        print(f"Overflow active: using alternate provider")
 
+    # Use overflow.agent_kind when overflow is active, otherwise config.agent.kind
+    actual_agent_kind = (
+        overflow.agent_kind if overflow and overflow.agent_kind else config.agent.kind
+    )
     returncode = run_container(
         repo, workspace_mount, session_dir, names, args.issue_id,
         max_turns, args.step, args.resume, str(workflow_path), args.image,
-        overflow=overflow, agent_kind=config.agent.kind,
+        overflow=overflow, agent_kind=actual_agent_kind,
     )
 
     _post_container(session_dir, config, repo, args.issue_id, step=args.step)

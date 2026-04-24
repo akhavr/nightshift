@@ -112,6 +112,13 @@ class TrackerIPCBase:
     def _call(self, method: str, **kwargs) -> TrackerResponse:
         raise NotImplementedError
 
+    def create_issue(self, title: str, body: str) -> str:
+        resp = self._call("create_issue", title=title, body=body)
+        if not resp.ok:
+            log.warning("%s.create_issue failed: %s", type(self).__name__, resp.error)
+            return ""
+        return resp.result or ""
+
     def get_issue(self, issue_id: str) -> Optional[TrackerIssue]:
         resp = self._call("get_issue", issue_id=issue_id)
         if not resp.ok:
@@ -176,7 +183,11 @@ def execute_tracker_method(tracker: Any, request: TrackerRequest) -> TrackerResp
     args = request.args
 
     try:
-        if method == "get_issue":
+        if method == "create_issue":
+            result = tracker.create_issue(args["title"], args["body"])
+            return TrackerResponse(id=request.id, ok=True, result=result)
+
+        elif method == "get_issue":
             result = tracker.get_issue(args["issue_id"])
             return TrackerResponse(id=request.id, ok=True,
                                    result=serialize_tracker_issue(result))
