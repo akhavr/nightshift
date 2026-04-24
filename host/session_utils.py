@@ -21,7 +21,24 @@ ARCHIVE_FILES = ("conversation.jsonl", "state.json", "raw-output.log")
 # ── Path helpers ─────────────────────────────────────────
 
 def get_repo_root() -> Path:
-    """Return the git repository root."""
+    """Return the git repository root (main repo, not worktree).
+
+    Uses --git-common-dir which returns the same path for both the main
+    repo and all its worktrees, ensuring socket paths resolve correctly
+    when CLI commands are run from worktrees.
+
+    Falls back to --show-toplevel when git dir is external (e.g., Docker
+    bind-mounted git dirs that aren't named .git).
+    """
+    git_common = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    common_path = Path(git_common).resolve()
+    # Standard layout: .git dir is inside repo, so parent is repo root
+    if common_path.name == ".git":
+        return common_path.parent
+    # External git dir (e.g., /repo-git in Docker): fall back to show-toplevel
     return Path(subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,

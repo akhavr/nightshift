@@ -114,20 +114,60 @@ class TestUpdateStatus:
 # ── get_repo_root ─────────────────────────────────────────────────────────────
 
 class TestGetRepoRoot:
-    def test_returns_path_from_git_output(self):
+    def test_returns_parent_when_git_common_ends_with_dotgit(self):
+        """Standard case: git dir is .git inside repo, return its parent."""
         mock_result = MagicMock()
-        mock_result.stdout = "/home/user/myrepo\n"
+        mock_result.stdout = "/home/user/myrepo/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result) as mock_run:
             result = get_repo_root()
         assert result == Path("/home/user/myrepo")
         mock_run.assert_called_once_with(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "rev-parse", "--git-common-dir"],
             capture_output=True, text=True, check=True,
         )
 
+    def test_returns_main_repo_from_worktree(self):
+        """When called from a worktree, returns the main repo path, not the worktree path.
+
+        git rev-parse --git-common-dir from a worktree returns the path to the
+        main repo's .git directory (e.g., /path/to/main-repo/.git), so we take
+        the parent to get the main repo root.
+        """
+        mock_result = MagicMock()
+        # From a worktree, --git-common-dir returns the main repo's .git dir
+        mock_result.stdout = "/path/to/main-repo/.git\n"
+        with patch("host.session_utils.subprocess.run", return_value=mock_result):
+            result = get_repo_root()
+        # Should resolve to main repo, not the worktree
+        assert result == Path("/path/to/main-repo")
+
+    def test_falls_back_to_show_toplevel_for_external_git_dir(self):
+        """When git dir is external (not ending in .git), fall back to --show-toplevel.
+
+        This handles Docker setups where the git directory is bind-mounted
+        separately (e.g., /repo-git instead of /workspace/.git).
+        """
+        common_result = MagicMock()
+        common_result.stdout = "/repo-git\n"  # External git dir, not ending in .git
+        toplevel_result = MagicMock()
+        toplevel_result.stdout = "/workspace\n"
+
+        def mock_run(cmd, **kwargs):
+            if cmd == ["git", "rev-parse", "--git-common-dir"]:
+                return common_result
+            elif cmd == ["git", "rev-parse", "--show-toplevel"]:
+                return toplevel_result
+            raise ValueError(f"Unexpected command: {cmd}")
+
+        with patch("host.session_utils.subprocess.run", side_effect=mock_run) as mock_run_fn:
+            result = get_repo_root()
+
+        assert result == Path("/workspace")
+        assert mock_run_fn.call_count == 2
+
     def test_strips_trailing_newline(self):
         mock_result = MagicMock()
-        mock_result.stdout = "/some/path\n"
+        mock_result.stdout = "/some/path/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
             result = get_repo_root()
         assert str(result) == "/some/path"
@@ -140,7 +180,7 @@ class TestGetRepoRoot:
 
     def test_returns_path_type(self):
         mock_result = MagicMock()
-        mock_result.stdout = "/repo\n"
+        mock_result.stdout = "/repo/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
             result = get_repo_root()
         assert isinstance(result, Path)
