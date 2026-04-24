@@ -24,7 +24,14 @@ fi
 # Fix worktree .git pointer: the host path doesn't exist inside the container.
 # Rewrite to use the mounted /repo-git path so commits land on the correct branch.
 # WORKTREE_NAME is set by launch.py (e.g. "agent-abc123" or "review-abc123").
+# On exit, restore the original .git content so host git operations work.
 if [ -f /workspace/.git ] && [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
+    ORIGINAL_GIT_CONTENT=$(cat /workspace/.git)
+    cleanup_git_pointer() {
+        printf '%s' "$ORIGINAL_GIT_CONTENT" > /workspace/.git
+    }
+    trap cleanup_git_pointer EXIT
+
     echo "gitdir: /repo-git/worktrees/${WORKTREE_NAME}" > /workspace/.git
 fi
 
@@ -76,4 +83,4 @@ fi
 # Note: litellm proxy removed - agents use LLM_*/ANTHROPIC_* env vars directly
 # OpenHands uses LLM_* (litellm built-in), Claude Code uses ANTHROPIC_*
 
-exec python3 /opt/nightshift/entrypoint.py "$@"
+python3 /opt/nightshift/entrypoint.py "$@"

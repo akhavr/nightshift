@@ -7,7 +7,7 @@ import pytest
 from core.constants import TRACKER_IPC_MAX_MESSAGE_BYTES
 from core.protocols import TrackerIssue, TrackerComment
 from core.tracker_ipc import (
-    TrackerRequest, TrackerResponse,
+    TrackerIPCBase, TrackerRequest, TrackerResponse,
     serialize_tracker_issue, deserialize_tracker_issue,
     serialize_tracker_comment, deserialize_tracker_comment,
     execute_tracker_method, recv_json_line,
@@ -113,6 +113,16 @@ class TestExecuteTrackerMethod:
         resp = execute_tracker_method(self.tracker, req)
         assert resp.ok
         assert len(resp.result) == 0
+
+    def test_create_issue(self):
+        req = TrackerRequest(
+            method="create_issue",
+            args={"title": "New bug", "body": "steps to reproduce"},
+            id="t4b",
+        )
+        resp = execute_tracker_method(self.tracker, req)
+        assert resp.ok
+        assert resp.result == "new-issue-id"
 
     def test_get_comments(self):
         req = TrackerRequest(method="get_comments", args={"issue_id": "i1"}, id="t5")
@@ -241,3 +251,22 @@ class TestSocketRegistryRemoved:
     def test_socket_not_in_tracker_registry(self):
         from core.config.factories import TRACKER_REGISTRY
         assert "socket" not in TRACKER_REGISTRY
+
+
+class TestTrackerIPCBase:
+    def test_create_issue_ipc(self):
+        class StubIPCTracker(TrackerIPCBase):
+            def __init__(self):
+                self.calls = []
+
+            def _call(self, method: str, **kwargs) -> TrackerResponse:
+                self.calls.append((method, kwargs))
+                return TrackerResponse(id="resp-1", ok=True, result="abc123")
+
+        tracker = StubIPCTracker()
+        result = tracker.create_issue("Fix lock", "body text")
+
+        assert result == "abc123"
+        assert tracker.calls == [
+            ("create_issue", {"title": "Fix lock", "body": "body text"})
+        ]
