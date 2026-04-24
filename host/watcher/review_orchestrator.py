@@ -254,9 +254,11 @@ class ReviewOrchestrator:
             if self._launch_background(cmd, sid):
                 self._recently_launched[sid] = time.time()
             else:
-                log.warning(f"[{sid}] Coder relaunch for rebase failed")
+                log.warning(f"[{sid}] Coder relaunch for rebase failed -- reverting to waiting:review")
+                _update_status(session_dir, "waiting:review")
         except Exception as e:
-            log.error(f"[{sid}] Coder relaunch error: {e}")
+            log.error(f"[{sid}] Coder relaunch error: {e} -- reverting to waiting:review")
+            _update_status(session_dir, "waiting:review")
 
     def _escalate_to_human(self, sid: str, session_dir: Path,
                            issue_id: str, max_rounds: int):

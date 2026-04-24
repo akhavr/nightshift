@@ -1335,3 +1335,30 @@ class TestStaleCleanupProcessesVerdictFirst:
         # and a new review should be launched
         assert any("review-abc" in str(call) for call in mock_rmtree.call_args_list)
         assert "review-abc" in launched
+
+
+# ---------------------------------------------------------------------------
+# _resume_coder_for_rebase launch failure tests
+# ---------------------------------------------------------------------------
+
+class TestResumeCorderForRebaseRevert:
+    def test_resume_coder_for_rebase_reverts_on_failure(self, tmp_path):
+        """When _launch_background fails, status should revert to waiting:review."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\nworkspace:\n  root: .worktrees\n  base_branch: main\n---\n"
+        )
+        coder_dir = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+
+        # Simulate launch failure
+        w.reviews._launch_background = lambda cmd, sid: False
+
+        rebase_prompt = "Conflict detected. Please resolve."
+        w.reviews._resume_coder_for_rebase("abc", coder_dir, "issue-abc", rebase_prompt)
+
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "waiting:review", \
+            f"Expected status to revert to waiting:review, got {state['status']}"
