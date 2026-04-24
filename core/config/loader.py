@@ -65,17 +65,26 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
     return config
 
 
+VALID_SIGNAL_METHODS = {"auto", "mcp", "text", "file"}
+
+
 def _parse_agent(raw: dict, config: WorkflowConfig):
     if "agent" not in raw:
         return
     a = raw["agent"]
     known = {"kind", "max_turns", "stall_timeout_s", "extra_args", "signal_method"}
+    signal_method = str(a.get("signal_method", "auto"))
+    if signal_method not in VALID_SIGNAL_METHODS:
+        raise ValueError(
+            f"Invalid signal_method '{signal_method}'. "
+            f"Must be one of: {sorted(VALID_SIGNAL_METHODS)}"
+        )
     config.agent = AgentConfig(
         kind=a.get("kind", "claude-code"),
         max_turns=int(a.get("max_turns", 50)),
         stall_timeout_s=int(a.get("stall_timeout_s", 300)),
         extra_args=a.get("extra_args", []),
-        signal_method=str(a.get("signal_method", "auto")),
+        signal_method=signal_method,
         extra={k: v for k, v in a.items() if k not in known},
     )
 

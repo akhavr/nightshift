@@ -456,3 +456,18 @@ Prompt body
 """)
             config = load_workflow(workflow_md)
             assert config.agent.signal_method == method
+
+    def test_signal_method_invalid_raises(self, tmp_path):
+        """Invalid signal_method values raise ValueError."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+agent:
+  kind: claude-code
+  signal_method: invalid
+---
+Prompt body
+""")
+        with pytest.raises(ValueError) as exc_info:
+            load_workflow(workflow_md)
+        assert "Invalid signal_method 'invalid'" in str(exc_info.value)
+        assert "auto" in str(exc_info.value)
