@@ -42,7 +42,7 @@ def get_repo_root() -> Path:
     return Path(subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,
-    ).stdout.strip())
+    ).stdout.strip()).resolve()
 
 
 def sessions_dir(repo: Path | None = None) -> Path:
