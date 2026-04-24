@@ -28,3 +28,7 @@ MCP_SIGNAL_SERVER_PREFIX = "mcp__nightshift-signals__"         # Prefix for sign
 
 # ── File-based signals (fallback for non-MCP agents) ──
 SIGNAL_DIR_NAME = "signal"  # subdirectory of /session/ for file-based signals
+
+# ── Large prompt handling ─────────────────────────────────
+PROMPT_FILE_THRESHOLD = 100_000  # bytes; prompts larger than this use file-based passing
+PROMPT_FILE_NAME = "prompt.txt"  # written to session dir when prompt exceeds threshold

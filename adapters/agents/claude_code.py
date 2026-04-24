@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
-from core.constants import MCP_CONFIG_CONTAINER_PATH, MCP_SIGNAL_SERVER_PREFIX
+from core.constants import (
+    MCP_CONFIG_CONTAINER_PATH,
+    MCP_SIGNAL_SERVER_PREFIX,
+    PROMPT_FILE_NAME,
+    PROMPT_FILE_THRESHOLD,
+)
 from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
@@ -40,9 +45,12 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         command: str = "claude",
         stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
+        session_dir: Path | None = None,
     ):
         super().__init__(command, stall_timeout_s, extra_args)
         self._extra_events: list[AgentEvent] = []
+        self._session_dir = session_dir or Path("/session")
+        self._prompt_file: Path | None = None
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         self._store_start_params(prompt, workspace, max_turns)
@@ -56,7 +64,10 @@ class ClaudeCodeAgent(HeadlessAgentBase):
             cmd += ["--resume", self._session_id]
         if Path(MCP_CONFIG_CONTAINER_PATH).exists():
             cmd += ["--mcp-config", MCP_CONFIG_CONTAINER_PATH]
-        cmd += [*self.extra_args, "-p", prompt]
+
+        # Large prompts use file-based passing to avoid OS arg limit
+        prompt_arg = self._prepare_prompt_arg(prompt)
+        cmd += [*self.extra_args, "-p", prompt_arg]
 
         self._process = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -65,6 +76,26 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         )
         self._pid = self._process.pid
         self._last_event = time.monotonic()
+
+    def _prepare_prompt_arg(self, prompt: str) -> str:
+        """Prepare prompt argument, using file if prompt exceeds threshold."""
+        if len(prompt) > PROMPT_FILE_THRESHOLD and self._session_dir.exists():
+            self._prompt_file = self._session_dir / PROMPT_FILE_NAME
+            self._prompt_file.write_text(prompt)
+            log.info(f"Prompt ({len(prompt)} bytes) written to {self._prompt_file}")
+            return f"@{self._prompt_file}"
+        return prompt
+
+    def _on_process_exit(self) -> None:
+        """Clean up prompt file if it was used."""
+        if self._prompt_file:
+            if self._prompt_file.exists():
+                try:
+                    self._prompt_file.unlink()
+                    log.debug(f"Cleaned up prompt file: {self._prompt_file}")
+                except OSError as e:
+                    log.warning(f"Failed to clean up prompt file {self._prompt_file}: {e}")
+            self._prompt_file = None
 
     def _before_stream(self) -> None:
         self._extra_events.clear()
