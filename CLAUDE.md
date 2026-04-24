@@ -48,6 +48,13 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt pytest
 ```
 
+## Destructive Commands Requiring Confirmation
+
+Never run these without explicit user approval:
+- `nightshift reject` — discards all agent work (commits, code changes)
+- `git checkout` on WORKFLOW.md/REVIEW.md — loses local config customizations
+- `git reset --hard` — loses uncommitted changes
+
 ## Architecture
 
 The system has a strict three-layer split:
