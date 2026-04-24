@@ -274,6 +274,128 @@ class TestCheckBackgroundLaunches:
         state = json.loads((sd / "state.json").read_text())
         assert state["status"] == "waiting:review"
 
+    def test_successful_review_completion_processes_verdict(self, tmp_path):
+        """Successful review exit (rc=0) should extract and process the verdict."""
+        w = _make_watcher(tmp_path)
+        # Create coder session in "reviewing" status
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        # Create review session with "approve" verdict in conversation
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        conv_log = review_dir / "conversation.jsonl"
+        conv_log.write_text(json.dumps({"content": "@nightshift approve"}) + "\n")
+
+        proc = MagicMock()
+        proc.poll.return_value = 0
+        log_fh = MagicMock()
+        w._background_procs["review-abc"] = (proc, log_fh, time.time() - 5)
+
+        # Mock cleanup_review_session to verify it's called
+        with patch.object(w.reviews, 'cleanup_review_session') as mock_cleanup:
+            w.check_background_launches()
+
+        assert "review-abc" not in w._background_procs
+        # Coder session should transition to waiting:human-review
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
+        log_fh.close.assert_called_once()
+
+    def test_successful_review_completion_cleans_up_session(self, tmp_path):
+        """Successful review exit should clean up the review session."""
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        conv_log = review_dir / "conversation.jsonl"
+        conv_log.write_text(json.dumps({"content": "@nightshift approve"}) + "\n")
+
+        proc = MagicMock()
+        proc.poll.return_value = 0
+        log_fh = MagicMock()
+        w._background_procs["review-abc"] = (proc, log_fh, time.time() - 5)
+
+        cleanup_called = []
+        original_cleanup = w.reviews.cleanup_review_session
+        def mock_cleanup(sid, session_dir):
+            cleanup_called.append(sid)
+        w.reviews.cleanup_review_session = mock_cleanup
+
+        w.check_background_launches()
+
+        assert cleanup_called == ["review-abc"]
+
+    def test_successful_review_completion_revise_verdict(self, tmp_path):
+        """Successful review with 'revise' verdict resumes coder session."""
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        conv_log = review_dir / "conversation.jsonl"
+        conv_log.write_text(json.dumps({"content": "@nightshift revise fix the bug"}) + "\n")
+
+        proc = MagicMock()
+        proc.poll.return_value = 0
+        log_fh = MagicMock()
+        w._background_procs["review-abc"] = (proc, log_fh, time.time() - 5)
+
+        # Mock the background launch to prevent actual subprocess (must return True for success)
+        launched = []
+        def mock_launch(cmd, sid):
+            launched.append(sid)
+            return True
+        w._launch_background = mock_launch
+        w.reviews.verdicts._launch_background = mock_launch
+
+        w.check_background_launches()
+
+        # Coder session should transition to working and be relaunched
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "working"
+        assert "abc" in launched
+
+    def test_successful_review_no_verdict_no_action(self, tmp_path):
+        """Successful review exit with no verdict should still clean up."""
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review", issue_id="issue-abc")
+        # No conversation log or verdict
+
+        proc = MagicMock()
+        proc.poll.return_value = 0
+        log_fh = MagicMock()
+        w._background_procs["review-abc"] = (proc, log_fh, time.time() - 5)
+
+        cleanup_called = []
+        original_cleanup = w.reviews.cleanup_review_session
+        def mock_cleanup(sid, session_dir):
+            cleanup_called.append(sid)
+        w.reviews.cleanup_review_session = mock_cleanup
+
+        w.check_background_launches()
+
+        # Should still clean up
+        assert "review-abc" not in w._background_procs
+        assert cleanup_called == ["review-abc"]
+        # Coder stays in reviewing (orphan detector will handle it later)
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "reviewing"
+
+    def test_successful_coder_completion_no_action(self, tmp_path):
+        """Successful coder exit (non-review) should just clean up tracking."""
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        proc = MagicMock()
+        proc.poll.return_value = 0
+        log_fh = MagicMock()
+        w._background_procs["abc"] = (proc, log_fh, time.time() - 5)
+
+        w.check_background_launches()
+
+        # Session should be removed from tracking
+        assert "abc" not in w._background_procs
+        log_fh.close.assert_called_once()
+        # Status unchanged - container sets its own status
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "working"
+
 
 # ---------------------------------------------------------------------------
 # Startup cleanup tests
