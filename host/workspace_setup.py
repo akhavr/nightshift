@@ -133,7 +133,12 @@ def setup_workspace(config, repo: Path, names: dict, is_resume: bool,
             print(f"No session state at {session_dir}", file=sys.stderr)
             sys.exit(1)
         # Merge latest base branch into agent branch before resuming
-        if not names.get("is_review"):
+        if names.get("is_review"):
+            # Sync review worktree to current agent branch (may have been rebased)
+            coder_session = repo / ".nightshift" / "sessions" / names["short_id"]
+            sync_review_worktree(repo, wt_path, session_dir, coder_session,
+                                 names["short_id"], config.workspace.base_branch)
+        else:
             merge_base_into_worktree(repo, wt_path, names["base_branch"],
                                      session_dir=session_dir)
         print(f"Resuming session for {names['session_name']}")
@@ -150,12 +155,56 @@ def prepare_review_session(repo, review_session_dir, short_id, config):
         if src.exists():
             shutil.copy2(str(src), str(review_session_dir / fname))
 
-    base = config.workspace.base_branch
+    _regenerate_diff(repo, review_session_dir, short_id, config.workspace.base_branch)
+
+
+def _regenerate_diff(repo: Path, review_session_dir: Path, short_id: str,
+                     base_branch: str):
+    """Generate diff.patch comparing base branch to agent branch."""
     agent_branch = f"agent/{short_id}"
     diff_result = subprocess.run(
-        ["git", "diff", f"{base}..{agent_branch}"],
+        ["git", "diff", f"{base_branch}..{agent_branch}"],
         capture_output=True, text=True, cwd=str(repo),
     )
     diff = diff_result.stdout if diff_result.returncode == 0 else "N/A"
     (review_session_dir / "diff.patch").write_text(diff)
     print(f"Generated diff ({len(diff)} bytes) for review")
+
+
+def sync_review_worktree(repo: Path, review_wt: Path, review_session_dir: Path,
+                         coder_session_dir: Path, short_id: str,
+                         base_branch: str = "master"):
+    """Sync review worktree to current agent branch state on resume.
+
+    After coder rebases, the review worktree and diff.patch become stale.
+    This function:
+    1. Resets review worktree to current agent/{short_id} HEAD
+    2. Regenerates diff.patch
+    3. Re-copies issue.json from coder session
+    """
+    agent_branch = f"agent/{short_id}"
+
+    # 1. Reset review worktree to agent branch HEAD
+    result = subprocess.run(
+        ["git", "fetch", ".", f"{agent_branch}:{agent_branch}"],
+        cwd=str(review_wt), capture_output=True, text=True,
+    )
+    # Reset to the agent branch (this handles diverged history from rebase)
+    result = subprocess.run(
+        ["git", "reset", "--hard", agent_branch],
+        cwd=str(review_wt), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"Warning: git reset failed: {result.stderr}", file=sys.stderr)
+    else:
+        print(f"Synced review worktree to {agent_branch}")
+
+    # 2. Regenerate diff.patch
+    _regenerate_diff(repo, review_session_dir, short_id, base_branch)
+
+    # 3. Re-copy issue data from coder session
+    for fname in ("issue.json", "issues.json"):
+        src = coder_session_dir / fname
+        if src.exists():
+            shutil.copy2(str(src), str(review_session_dir / fname))
+            print(f"Refreshed {fname} from coder session")
