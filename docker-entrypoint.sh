@@ -1,4 +1,18 @@
 #!/bin/sh
+
+# WT-1.7: Defense-in-depth exit trap to sanitize core.worktree on container exit.
+# Even if something sets core.worktree=/workspace during the run, this cleans it up.
+cleanup_worktree() {
+    if [ -n "$GIT_DIR" ]; then
+        WORKTREE_VAL=$(git config --get core.worktree 2>/dev/null || true)
+        if [ "$WORKTREE_VAL" = "/workspace" ]; then
+            git config --unset core.worktree 2>/dev/null || true
+            echo "Exit: sanitized core.worktree"
+        fi
+    fi
+}
+trap cleanup_worktree EXIT
+
 # Copy read-only credentials to writable HOME so Claude Code can function.
 # The host mounts ~/.claude at /claude-auth:ro for security.
 if [ -d /claude-auth ]; then
