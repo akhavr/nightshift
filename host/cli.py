@@ -1048,6 +1048,7 @@ def cmd_revise(a):
         sys.exit(1)
 
     wf = _resolve_workflow(a)
+    config = load_workflow(wf)
 
     if status in WORKING_STATUSES:
         feedback = _stop_and_build_mid_flight(sid, sd, inline)
@@ -1055,6 +1056,8 @@ def cmd_revise(a):
         feedback = _collect_review_feedback(wf, r, a.issue_id, inline)
         # Clear completed_at when resuming from completion states (SSM-11)
         clear_completed_at(sd)
+        # Clean up sibling review session if exists
+        _cleanup_review_artifacts(r, sid, config)
 
     (sd / "resume-prompt.md").write_text(feedback)
     update_status(sd, "working")
