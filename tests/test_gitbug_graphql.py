@@ -281,7 +281,9 @@ def test_query_posts_to_graphql(graphql_tracker, monkeypatch):
 
 
 def test_run_raw_warns_when_locked(graphql_tracker, monkeypatch, caplog):
-    tracker, _popen, _proc = graphql_tracker
+    """CLI fallback warns about lock conflict when webui is dead."""
+    tracker, _popen, proc = graphql_tracker
+    proc.poll = MagicMock(return_value=0)  # webui process is dead
     run = MagicMock(
         return_value=MagicMock(
             returncode=1,
@@ -395,22 +397,14 @@ def test_run_raw_status_open_via_graphql(graphql_tracker, monkeypatch):
     tracker.shutdown()
 
 
-def test_run_raw_unsupported_command_falls_back_to_cli(graphql_tracker, monkeypatch, caplog):
-    """Unsupported commands fall back to CLI even when webui alive."""
+def test_run_raw_unsupported_command_raises_when_webui_alive(graphql_tracker):
+    """Unsupported commands raise error when webui is alive (no silent CLI fallback)."""
     tracker, _popen, proc = graphql_tracker
-    run = MagicMock(
-        return_value=MagicMock(
-            returncode=1,
-            stdout="",
-            stderr="Error: the repository you want to access is already locked by the process pid 1234",
-        )
-    )
-    monkeypatch.setattr("adapters.trackers.git_bug_graphql.subprocess.run", run)
 
-    with caplog.at_level("WARNING"):
-        result = tracker.run_raw("bug", "show", "abc123")
+    with pytest.raises(RuntimeError) as exc:
+        tracker.run_raw("bug", "show", "abc123")
 
-    run.assert_called_once()
+    assert "not recognized" in str(exc.value)
     tracker.shutdown()
 
 
@@ -426,4 +420,53 @@ def test_is_webui_alive_returns_false_when_exited(graphql_tracker):
     tracker, _popen, proc = graphql_tracker
     proc.poll = MagicMock(return_value=0)
     assert tracker._is_webui_alive() is False
+    tracker.shutdown()
+
+
+def test_label_add_alias_routes_to_graphql(graphql_tracker, monkeypatch):
+    """run_raw 'bug label add' routes through GraphQL just like 'bug label new'."""
+    tracker, _popen, proc = graphql_tracker
+    query = MagicMock(return_value={"bugChangeLabels": {"bug": {"id": "abc123"}}})
+    monkeypatch.setattr(tracker, "_query", query)
+
+    result = tracker.run_raw("bug", "label", "add", "abc123", "nightshift")
+
+    assert "bugChangeLabels" in query.call_args.args[0]
+    assert query.call_args.args[1] == {"id": "abc123", "added": ["nightshift"], "removed": []}
+    tracker.shutdown()
+
+
+def test_label_remove_alias_routes_to_graphql(graphql_tracker, monkeypatch):
+    """run_raw 'bug label remove' routes through GraphQL just like 'bug label rm'."""
+    tracker, _popen, proc = graphql_tracker
+    query = MagicMock(return_value={"bugChangeLabels": {"bug": {"id": "abc123"}}})
+    monkeypatch.setattr(tracker, "_query", query)
+
+    result = tracker.run_raw("bug", "label", "remove", "abc123", "nightshift")
+
+    assert "bugChangeLabels" in query.call_args.args[0]
+    assert query.call_args.args[1] == {"id": "abc123", "added": [], "removed": ["nightshift"]}
+    tracker.shutdown()
+
+
+def test_cli_only_command_raises_clear_error(graphql_tracker):
+    """CLI-only commands raise clear error when webui is alive."""
+    tracker, _popen, proc = graphql_tracker
+
+    with pytest.raises(RuntimeError) as exc:
+        tracker.run_raw("pull")
+
+    assert "no GraphQL equivalent" in str(exc.value)
+    assert "webui" in str(exc.value)
+    tracker.shutdown()
+
+
+def test_unrecognized_command_raises_clear_error(graphql_tracker):
+    """Unrecognized commands raise clear error when webui is alive."""
+    tracker, _popen, proc = graphql_tracker
+
+    with pytest.raises(RuntimeError) as exc:
+        tracker.run_raw("bug", "show", "abc123")
+
+    assert "not recognized" in str(exc.value)
     tracker.shutdown()

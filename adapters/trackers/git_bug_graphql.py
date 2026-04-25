@@ -25,6 +25,9 @@ _QUERY_PAGE_SIZE = 100
 _RAW_CMD_TIMEOUT_S = 30
 _LOCK_CONFLICT_TEXT = "already locked by the process pid"
 
+# Commands with NO GraphQL equivalent - cannot run while webui is active
+_CLI_ONLY_COMMANDS = {"pull", "push", "user", "bridge", "webui", "termui"}
+
 _BUG_FIELDS = """
 id
 title
@@ -167,9 +170,22 @@ class GitBugGraphQLTracker:
 
     def run_raw(self, *args: str) -> str:
         if self._is_webui_alive():
+            # Check for known CLI-only commands (no GraphQL equivalent)
+            if len(args) >= 1 and args[0] in _CLI_ONLY_COMMANDS:
+                raise RuntimeError(
+                    f"'{args[0]}' has no GraphQL equivalent and cannot run while webui is active. "
+                    "Stop the webui or use 'tracker.kind: git-bug' (CLI-only tracker)."
+                )
+
             result = self._run_raw_via_graphql(args)
             if result is not None:
                 return result
+
+            # Unrecognized command - might be mappable but isn't yet
+            raise RuntimeError(
+                f"Command '{' '.join(args)}' not recognized by GraphQL router. "
+                "Either add parsing support in _parse_raw_command(), or run without webui."
+            )
         return self._run_raw_via_cli(args)
 
     def _run_raw_via_graphql(self, args: tuple[str, ...]) -> str | None:
@@ -232,9 +248,9 @@ class GitBugGraphQLTracker:
                 return ("create_issue", (title, message))
 
         elif cmd == "label" and len(rest) >= 3:
-            if rest[0] == "new":
+            if rest[0] in ("new", "add"):
                 return ("add_label", (rest[1], rest[2]))
-            elif rest[0] == "rm":
+            elif rest[0] in ("rm", "remove"):
                 return ("remove_label", (rest[1], rest[2]))
 
         elif cmd == "status" and len(rest) >= 2:
