@@ -128,6 +128,11 @@ If any verification fails, remove that issue from your findings.
 correspond to actual file line numbers. The diff shows relative positions within hunks,
 not absolute file positions. ALWAYS use the Read tool to get real line numbers.
 
+**WARNING (Multi-revision sessions):** When reviewing a session that has been revised
+multiple times, the diff shown in the prompt may reflect an earlier iteration. Issues
+flagged in previous reviews may already be fixed. ALWAYS read the actual files to
+verify current state before citing issues — do NOT assume the diff is current.
+
 ## Output Format
 
 After your review, output your verdict:
