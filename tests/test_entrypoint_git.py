@@ -7,6 +7,29 @@ from pathlib import Path
 import pytest
 
 
+# WT-1.6: Script to test core.worktree sanitization
+_SANITIZE_WORKTREE_SCRIPT = """\
+#!/bin/sh
+
+# Simulate GIT_DIR being set
+export GIT_DIR="$TEST_GIT_DIR"
+
+# WT-1.6: Sanitize core.worktree if set to container path
+if [ -n "$GIT_DIR" ]; then
+    WORKTREE_VAL=$(git config --get core.worktree 2>/dev/null || true)
+    if [ "$WORKTREE_VAL" = "/workspace" ]; then
+        git config --unset core.worktree
+        echo "Sanitized core.worktree=/workspace from config"
+    fi
+fi
+
+# Output current core.worktree for verification
+CURRENT_VAL=$(git config --get core.worktree 2>/dev/null || echo "UNSET")
+echo "core.worktree=$CURRENT_VAL"
+exit 0
+"""
+
+
 # New env-var-based git worktree configuration (replaces file rewriting).
 # Sets GIT_DIR and GIT_WORK_TREE instead of modifying .git file.
 _GIT_ENV_SCRIPT = """\
@@ -405,3 +428,248 @@ class TestGitEnvVars:
         # Env vars should be empty since /repo-git doesn't exist
         assert "GIT_DIR=" in result.stdout
         assert "GIT_WORK_TREE=" in result.stdout
+
+
+class TestCoreWorktreeSanitization:
+    """Tests for WT-1.6: sanitize core.worktree in docker-entrypoint.sh."""
+
+    def test_entrypoint_sanitizes_core_worktree(self, tmp_path):
+        """core.worktree=/workspace is removed by docker-entrypoint.sh."""
+        # Set up a real git repo with a worktree
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        # Create an initial commit so we have a branch
+        test_file = repo / "README.md"
+        test_file.write_text("# Test\n")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        # Create a worktree
+        worktree_path = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "agent-branch", str(worktree_path)],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        # Get the actual worktree name from .git/worktrees
+        worktree_name = worktree_path.name
+        git_dir = repo / ".git" / "worktrees" / worktree_name
+
+        # Pollute the config with core.worktree=/workspace (simulating container pollution)
+        subprocess.run(
+            ["git", "config", "core.worktree", "/workspace"],
+            env={**clean_env, "GIT_DIR": str(git_dir)},
+            capture_output=True,
+            check=True,
+        )
+
+        # Verify the pollution is present
+        result = subprocess.run(
+            ["git", "config", "--get", "core.worktree"],
+            env={**clean_env, "GIT_DIR": str(git_dir)},
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == "/workspace"
+
+        # Create and run the sanitization script
+        script = tmp_path / "sanitize_test.sh"
+        script.write_text(_SANITIZE_WORKTREE_SCRIPT)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "TEST_GIT_DIR": str(git_dir),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            cwd=worktree_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "Sanitized core.worktree=/workspace from config" in result.stdout
+        assert "core.worktree=UNSET" in result.stdout
+
+        # Double-check: git config should no longer have core.worktree
+        result = subprocess.run(
+            ["git", "config", "--get", "core.worktree"],
+            env={**clean_env, "GIT_DIR": str(git_dir)},
+            capture_output=True,
+            text=True,
+        )
+        # git config --get returns exit code 1 when key is not found
+        assert result.returncode == 1
+
+    def test_sanitization_preserves_other_worktree_values(self, tmp_path):
+        """core.worktree with non-/workspace values is preserved."""
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        test_file = repo / "README.md"
+        test_file.write_text("# Test\n")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        worktree_path = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "agent-branch", str(worktree_path)],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        worktree_name = worktree_path.name
+        git_dir = repo / ".git" / "worktrees" / worktree_name
+
+        # Set core.worktree to a different value (not /workspace)
+        subprocess.run(
+            ["git", "config", "core.worktree", "/some/other/path"],
+            env={**clean_env, "GIT_DIR": str(git_dir)},
+            capture_output=True,
+            check=True,
+        )
+
+        script = tmp_path / "sanitize_test.sh"
+        script.write_text(_SANITIZE_WORKTREE_SCRIPT)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "TEST_GIT_DIR": str(git_dir),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            cwd=worktree_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        # Should NOT sanitize since value is not /workspace
+        assert "Sanitized" not in result.stdout
+        assert "core.worktree=/some/other/path" in result.stdout
+
+    def test_sanitization_noop_when_not_set(self, tmp_path):
+        """No error when core.worktree is not set."""
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        test_file = repo / "README.md"
+        test_file.write_text("# Test\n")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        worktree_path = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "agent-branch", str(worktree_path)],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+            env=clean_env,
+        )
+
+        worktree_name = worktree_path.name
+        git_dir = repo / ".git" / "worktrees" / worktree_name
+
+        # core.worktree is NOT set — this is the normal state
+
+        script = tmp_path / "sanitize_test.sh"
+        script.write_text(_SANITIZE_WORKTREE_SCRIPT)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "TEST_GIT_DIR": str(git_dir),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            cwd=worktree_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "Sanitized" not in result.stdout
+        assert "core.worktree=UNSET" in result.stdout
