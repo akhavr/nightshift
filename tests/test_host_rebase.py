@@ -91,28 +91,31 @@ class TestRebase:
         with patch("subprocess.run") as mock_run:
             # Fetch succeeds
             mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
                 MagicMock(returncode=0),  # fetch
                 MagicMock(returncode=0),  # rebase
             ]
             result = _rebase(tmp_path, "master")
         assert result.success
-        # Should have called fetch then rebase with origin/master
+        # Should have called stash, fetch, then rebase with origin/master
         calls = mock_run.call_args_list
-        assert "fetch" in str(calls[0])
-        assert "rebase" in str(calls[1])
-        assert "origin/master" in str(calls[1])
+        assert "stash" in str(calls[0])
+        assert "fetch" in str(calls[1])
+        assert "rebase" in str(calls[2])
+        assert "origin/master" in str(calls[2])
 
     def test_success_without_remote(self, tmp_path):
         """Successful rebase using local branch when remote fails."""
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
                 MagicMock(returncode=1),  # fetch fails
                 MagicMock(returncode=0),  # rebase succeeds
             ]
             result = _rebase(tmp_path, "master")
         assert result.success
         # Should rebase onto local master (not origin/master)
-        rebase_call = mock_run.call_args_list[1]
+        rebase_call = mock_run.call_args_list[2]
         assert "master" in str(rebase_call)
         assert "origin/master" not in str(rebase_call)
 
@@ -120,6 +123,7 @@ class TestRebase:
         """Rebase conflict returns details."""
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
                 MagicMock(returncode=0),  # fetch
                 MagicMock(returncode=1, stderr="CONFLICT"),  # rebase fails
                 MagicMock(stdout="file1.py\nfile2.py"),  # diff conflicting files
@@ -134,6 +138,7 @@ class TestRebase:
         """On conflict, rebase --abort is called to restore clean state."""
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
                 MagicMock(returncode=0),  # fetch
                 MagicMock(returncode=1, stderr="CONFLICT"),  # rebase fails
                 MagicMock(stdout=""),  # diff
@@ -143,6 +148,57 @@ class TestRebase:
         # Last call should be rebase --abort
         last_call = mock_run.call_args_list[-1]
         assert "--abort" in str(last_call)
+
+    def test_rebase_stashes_uncommitted_changes(self, tmp_path):
+        """Uncommitted changes are stashed before rebase."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="Saved working directory"),  # stash (had changes)
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=0),  # rebase
+                MagicMock(returncode=0),  # stash pop
+            ]
+            result = _rebase(tmp_path, "master")
+        assert result.success
+        # Verify stash was called with correct args
+        stash_call = mock_run.call_args_list[0]
+        assert "stash" in str(stash_call)
+        assert "--include-untracked" in str(stash_call)
+        assert "pre-rebase-stash" in str(stash_call)
+
+    def test_rebase_pops_stash_after_success(self, tmp_path):
+        """Stash is popped after successful rebase."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="Saved working directory"),  # stash (had changes)
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=0),  # rebase
+                MagicMock(returncode=0),  # stash pop
+            ]
+            result = _rebase(tmp_path, "master")
+        assert result.success
+        # Last call should be stash pop
+        last_call = mock_run.call_args_list[-1]
+        assert "stash" in str(last_call)
+        assert "pop" in str(last_call)
+
+    def test_rebase_pops_stash_after_conflict(self, tmp_path):
+        """Stash is restored after rebase conflict and abort."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="Saved working directory"),  # stash (had changes)
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=1, stderr="CONFLICT"),  # rebase fails
+                MagicMock(stdout="file.py"),  # diff conflicting files
+                MagicMock(returncode=0),  # rebase --abort
+                MagicMock(returncode=0),  # stash pop
+            ]
+            result = _rebase(tmp_path, "master")
+        assert not result.success
+        # Last call should be stash pop
+        last_call = mock_run.call_args_list[-1]
+        assert "stash" in str(last_call)
+        assert "pop" in str(last_call)
 
 
 class TestRunTestCommand:
