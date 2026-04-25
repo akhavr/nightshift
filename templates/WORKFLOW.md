@@ -1,5 +1,5 @@
 ---
-template_version: 2
+template_version: 2.1
 agent:
   kind: claude-code
   max_turns: 50
@@ -88,5 +88,24 @@ Use MCP tools from the nightshift-signals server to signal lifecycle events:
 - Call `nightshift_question` with your question if you need human input.
 These MCP tools are REQUIRED. Do NOT print text markers directly.
 {% endif %}
+
+## Feedback Logging
+
+When you receive a `@nightshift revise` with reviewer feedback, verify each claim:
+1. Read the file and line mentioned
+2. Determine if the reviewer's claim is accurate
+
+Append your assessment to `.nightshift/reviewer-issues.yaml`:
+```yaml
+- category: <false_positive|partial|valid>
+  session: {{ session_id }}
+  date: {{ date }}
+  file: <path>
+  claimed: <what reviewer said>
+  actual: <what the code actually does>
+  verdict: <agree|false_positive|partial>
+  reason: <one-line explanation>
+```
+This logs patterns in reviewer feedback quality for later analysis.
 
 Begin by reading the codebase, then plan your approach.
