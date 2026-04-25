@@ -12,6 +12,50 @@ from pathlib import Path
 log = logging.getLogger("watcher")
 
 TEST_COMMAND_TIMEOUT_S = 120  # timeout for test command execution
+CONTAINER_GIT_PATH = "/repo-git/"  # container mount point for .git directory
+
+
+def _fix_container_gitdir(worktree_path: Path, repo_root: Path | None = None) -> None:
+    """Fix gitdir path if corrupted by container (points to /repo-git/).
+
+    After container exit, the trap may not have restored the .git file,
+    leaving it pointing to /repo-git/worktrees/... instead of the host path.
+    This fixes it before running git commands.
+    """
+    git_file = worktree_path / ".git"
+    if not git_file.is_file():
+        return  # Not a worktree or doesn't exist
+
+    try:
+        content = git_file.read_text()
+    except OSError as e:
+        log.warning(f"Cannot read {git_file}: {e}")
+        return
+
+    if CONTAINER_GIT_PATH not in content:
+        return  # Already has a valid host path
+
+    # Extract worktree name from the container path
+    # Expected format: "gitdir: /repo-git/worktrees/agent-abc123\n"
+    worktree_name = worktree_path.name
+
+    # Derive repo root if not provided
+    # Worktree path is typically: <repo_root>/<workspace.root>/<worktree_name>
+    # e.g., /home/user/repo/worktrees/agent-abc123
+    if repo_root is None:
+        repo_root = worktree_path.parent.parent
+
+    host_gitdir = repo_root / ".git" / "worktrees" / worktree_name
+    if not host_gitdir.exists():
+        log.warning(f"Cannot fix gitdir: {host_gitdir} does not exist")
+        return
+
+    new_content = f"gitdir: {host_gitdir}\n"
+    try:
+        git_file.write_text(new_content)
+        log.info(f"Fixed container gitdir in {git_file} -> {host_gitdir}")
+    except OSError as e:
+        log.warning(f"Cannot write {git_file}: {e}")
 
 
 def attempt_pre_review_rebase(
@@ -19,6 +63,7 @@ def attempt_pre_review_rebase(
     base_branch: str,
     test_command: str | None = None,
     test_timeout_s: int = TEST_COMMAND_TIMEOUT_S,
+    repo_root: Path | None = None,
 ) -> str | None:
     """Rebase onto latest base branch and re-run tests.
 
@@ -30,6 +75,9 @@ def attempt_pre_review_rebase(
     if not worktree_path.exists():
         log.warning(f"Worktree does not exist: {worktree_path}")
         return None
+
+    # Fix gitdir if container corrupted it (points to /repo-git/)
+    _fix_container_gitdir(worktree_path, repo_root)
 
     log.info(f"Pre-review rebase onto {base_branch} in {worktree_path}...")
     result = _rebase(worktree_path, base_branch)

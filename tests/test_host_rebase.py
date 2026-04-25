@@ -218,3 +218,96 @@ class TestRebaseResult:
         result = RebaseResult(success=False, conflict_details="details")
         assert not result.success
         assert result.conflict_details == "details"
+
+
+class TestFixContainerGitdir:
+    """Tests for _fix_container_gitdir."""
+
+    def test_rebase_fixes_container_gitdir(self, tmp_path):
+        """Container gitdir path in .git file is fixed to host path before rebase."""
+        from host.rebase import _fix_container_gitdir
+
+        # Create worktree with container gitdir path
+        worktree = tmp_path / "agent-abc123"
+        worktree.mkdir()
+        git_file = worktree / ".git"
+        git_file.write_text("gitdir: /repo-git/worktrees/agent-abc123\n")
+
+        # Create the repo root where .git/worktrees should exist
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        (repo_root / ".git" / "worktrees" / "agent-abc123").mkdir(parents=True)
+
+        _fix_container_gitdir(worktree, repo_root)
+
+        # Should be rewritten to host path
+        content = git_file.read_text()
+        assert "/repo-git/" not in content
+        expected = str(repo_root / ".git" / "worktrees" / "agent-abc123")
+        assert f"gitdir: {expected}" in content
+
+    def test_rebase_preserves_valid_gitdir(self, tmp_path):
+        """Valid host gitdir path is not modified."""
+        from host.rebase import _fix_container_gitdir
+
+        worktree = tmp_path / "agent-xyz789"
+        worktree.mkdir()
+        git_file = worktree / ".git"
+        host_path = "/home/user/repo/.git/worktrees/agent-xyz789"
+        git_file.write_text(f"gitdir: {host_path}\n")
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        _fix_container_gitdir(worktree, repo_root)
+
+        # Should be unchanged
+        content = git_file.read_text()
+        assert f"gitdir: {host_path}" in content
+
+    def test_rebase_handles_missing_git_file(self, tmp_path):
+        """Missing .git file doesn't cause an error."""
+        from host.rebase import _fix_container_gitdir
+
+        worktree = tmp_path / "agent-nofile"
+        worktree.mkdir()
+        repo_root = tmp_path / "repo"
+
+        # Should not raise
+        _fix_container_gitdir(worktree, repo_root)
+
+    def test_rebase_handles_git_directory(self, tmp_path):
+        """Regular git repo (directory .git) is not modified."""
+        from host.rebase import _fix_container_gitdir
+
+        worktree = tmp_path / "regular-repo"
+        worktree.mkdir()
+        (worktree / ".git").mkdir()  # .git is a directory, not a file
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        # Should not raise
+        _fix_container_gitdir(worktree, repo_root)
+
+    def test_attempt_rebase_fixes_gitdir_before_git_ops(self, tmp_path):
+        """attempt_pre_review_rebase fixes gitdir before running git commands."""
+        # Create worktree with container gitdir path
+        worktree = tmp_path / "worktrees" / "agent-fix123"
+        worktree.mkdir(parents=True)
+        git_file = worktree / ".git"
+        git_file.write_text("gitdir: /repo-git/worktrees/agent-fix123\n")
+
+        # Create the expected host gitdir path
+        repo_root = tmp_path
+        (repo_root / ".git" / "worktrees" / "agent-fix123").mkdir(parents=True)
+
+        with patch("host.rebase._rebase") as mock_rebase:
+            mock_rebase.return_value = RebaseResult(success=True)
+            attempt_pre_review_rebase(worktree, "master", repo_root=repo_root)
+
+        # Verify gitdir was fixed before rebase was called
+        content = git_file.read_text()
+        assert "/repo-git/" not in content
+        expected = str(repo_root / ".git" / "worktrees" / "agent-fix123")
+        assert f"gitdir: {expected}" in content
