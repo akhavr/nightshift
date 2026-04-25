@@ -320,3 +320,55 @@ class TestAcceptRejectsBehindBase:
             mock_report.assert_called_once()
             call_msg = mock_report.call_args[0][3]
             assert "behind" in call_msg
+
+
+class TestAcceptSanitizesConfig:
+    """Tests that cmd_accept sanitizes core.worktree before git operations."""
+
+    def test_accept_sanitizes_config_first(self, tmp_path):
+        """cmd_accept removes core.worktree=/workspace before git operations."""
+        repo, run = _init_repo(tmp_path)
+
+        # Create agent branch
+        run("git", "checkout", "-b", "agent/sss123")
+        (repo / "agent.txt").write_text("work\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "agent work")
+        run("git", "checkout", "main")
+
+        # Set core.worktree to container path (simulates container corruption)
+        run("git", "config", "core.worktree", "/workspace")
+
+        # Verify it was set
+        result = run("git", "config", "--get", "core.worktree")
+        assert result.stdout.strip() == "/workspace"
+
+        # Setup session
+        ns_dir = repo / ".nightshift" / "sessions" / "sss123"
+        ns_dir.mkdir(parents=True)
+        (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+        (repo / "WORKFLOW.md").write_text(
+            "---\n"
+            "agent:\n  kind: claude-code\n"
+            "tracker:\n  kind: git-bug\n"
+            "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+            "---\nPrompt\n"
+        )
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="sss123"), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli.archive_session"), \
+             patch("host.cli.remove_worktree"), \
+             patch("host.cli._cleanup_review_artifacts"):
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "sss123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            cmd_accept(args)
+
+        # Verify core.worktree was sanitized (before any git ops that might fail)
+        result = run("git", "config", "--get", "core.worktree")
+        assert result.returncode != 0  # config key not found

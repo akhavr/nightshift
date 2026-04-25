@@ -46,6 +46,7 @@ from host.merge import (
     merge_with_rebase_fallback, verify_no_conflict_markers,
     check_branch_not_behind_base,
 )
+from host.rebase import sanitize_git_config
 from host.session_utils import (
     archive_session,
     clear_completed_at,
@@ -946,6 +947,9 @@ def cmd_reject(a):
     sid = resolve_session(a.issue_id)
     config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
+
+    # Sanitize core.worktree if container set it to /workspace
+    sanitize_git_config(r)
 
     result = subprocess.run(
         ["git", "log", "--oneline", f"{config.workspace.base_branch}..{branch}"],
