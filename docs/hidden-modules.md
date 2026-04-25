@@ -193,6 +193,30 @@ tests/test_codebase_audit.py::test_no_direct_status_writes
 
 ---
 
+### SSM-10: Auto-cleanup stale review sessions
+
+**Problem:** Completed review sessions (review-<id>) linger in `waiting:review` status after verdict processed. Manual `nightshift cleanup` required. Discovered when multiple stale reviews cluttered status output.
+
+**Tests:**
+```
+tests/watcher/test_session_monitor.py::test_cleanup_completed_review_after_verdict
+tests/watcher/test_session_monitor.py::test_no_cleanup_active_review
+tests/watcher/test_session_monitor.py::test_cleanup_only_when_coder_transitioned
+```
+
+**Files:** host/watcher/session_monitor.py, host/watcher/verdict_handler.py
+
+**Implementation:**
+1. After processing approve/revise verdict, check if review session completed
+2. If review session has completed_at and coder session transitioned, auto-archive review
+3. Grace period (60s) to ensure verdict fully processed before cleanup
+
+**Wired:** Review sessions auto-cleanup after verdict applied. Status output stays clean.
+
+**Note:** This also fixes the "stale status after accept" UX issue - completed sessions won't linger in `nightshift status` output.
+
+---
+
 ## Module 2: Agent Event Stream (AES)
 
 **Problem:** Three signal paths (markers, file signals, JSON) parsed separately per agent. SessionRunner has agent-specific code.
@@ -324,6 +348,29 @@ tests/test_session_runner.py::test_file_signal_question_becomes_event
 
 **Solution:** Transactional context manager with auto-cleanup.
 
+### WT-0: Worktree integrity check before operations
+
+**Problem:** Worktree metadata (`.git/worktrees/<name>/`) goes missing or corrupts, causing "not a git repository" errors. Discovered when multiple sessions needed `git worktree repair`.
+
+**Tests:**
+```
+tests/test_workspace_transaction.py::test_check_worktree_integrity_valid
+tests/test_workspace_transaction.py::test_check_worktree_integrity_missing_metadata
+tests/test_workspace_transaction.py::test_check_worktree_integrity_auto_repair
+tests/test_host_rebase.py::test_rebase_repairs_broken_worktree
+```
+
+**Files:** core/workspace_transaction.py (create), host/rebase.py (modify)
+
+**Implementation:**
+1. check_worktree_integrity(worktree_path) verifies .git file and metadata dir exist
+2. repair_worktree() runs `git worktree repair` if metadata missing
+3. Called before git operations in host/rebase.py and host/merge.py
+
+**Wired:** Host operations self-heal broken worktree metadata.
+
+---
+
 ### WT-1: WorkspaceTransaction with .git pointer
 
 **Tests:**
@@ -346,12 +393,36 @@ tests/test_workspace_transaction.py::test_nested_transactions_error
 
 ---
 
-### WT-2: docker-entrypoint.sh uses WorkspaceTransaction
+### WT-1.5: Host-side gitdir sanitization (defense in depth)
+
+**Problem:** Container may crash before cleanup. Host operations fail with "not a git repository" or `core.worktree` pollution breaks all git commands.
+
+**Tests:**
+```
+tests/test_host_rebase.py::test_rebase_fixes_container_gitdir (EXISTS - 88acf5d)
+tests/test_host_rebase.py::test_rebase_preserves_valid_gitdir (EXISTS - 88acf5d)
+tests/test_host_rebase.py::test_sanitize_removes_core_worktree
+tests/test_host_rebase.py::test_sanitize_preserves_valid_config
+```
+
+**Files:** host/rebase.py, host/git_utils.py
+
+**Implementation:**
+1. _fix_container_gitdir() detects /repo-git/ paths, rewrites to host paths (DONE: 88acf5d)
+2. _sanitize_git_config() removes core.worktree if set to container path (/workspace)
+3. Called before any host-side git operation (rebase, merge, accept)
+
+**Wired:** Host operations self-heal corrupt git state. Container cleanup (WT-2) is defense-in-depth, not primary protection.
+
+---
+
+### WT-2: docker-entrypoint.sh uses WorkspaceTransaction (defense in depth)
 
 **Tests:**
 ```
 tests/test_entrypoint_git.py::test_git_pointer_restored_on_exit
 tests/test_entrypoint_git.py::test_git_pointer_restored_on_error
+tests/test_entrypoint_git.py::test_no_config_pollution_on_exit
 ```
 
 **Files:** docker-entrypoint.sh, entrypoint.py
@@ -359,9 +430,12 @@ tests/test_entrypoint_git.py::test_git_pointer_restored_on_error
 **Implementation:**
 1. Python wrapper calls WorkspaceTransaction
 2. Shell script delegates to Python for .git handling
-3. EXIT trap removed (handled by Python)
+3. EXIT trap restores .git pointer AND removes any core.worktree pollution
+4. On crash: host-side WT-0 and WT-1.5 provide backup protection
 
-**Wired:** Container .git pointer handling uses WT. Bug impossible.
+**Wired:** Container cleanup is defense-in-depth. Host-side sanitization (WT-1.5) is primary protection since containers can crash/be killed.
+
+**Note:** This is secondary to WT-1.5. Even if container cleanup fails, host operations self-heal.
 
 ---
 
@@ -434,12 +508,13 @@ Priority based on impact and dependencies:
 | 2 | SSM-4 to SSM-9 | Full SSM integration |
 | 3 | AES-1 to AES-2 | Event foundation + ClaudeCode |
 | 4 | AES-3 to AES-6 | All agents unified |
-| 5 | WT-1 to WT-2 | .git pointer bulletproof |
-| 6 | WT-3 to WT-5 | Full transactional git |
+| 5 | WT-0, WT-1, WT-1.5 | Git state self-healing (PARTIAL: 88acf5d done) |
+| 6 | WT-2 to WT-5 | Full transactional git |
 
-**Total: 20 issues, each TDD, each wired to real flow.**
+**Total: 24 issues, each TDD, each wired to real flow.**
 
 After Phase 1 (3 issues): Race condition fixed structurally.
 After Phase 2 (6 more): SSM complete, lifecycle explicit.
 After Phase 4 (6 more): Adding new agents is trivial.
+After Phase 5 (3 issues): Git state self-heals from container corruption. WT-1.5 partially done (88acf5d merged).
 After Phase 6 (5 more): Git operations are bulletproof.
