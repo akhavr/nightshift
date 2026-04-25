@@ -1,5 +1,6 @@
 """Tests for host/rebase.py — host-side pre-review rebase."""
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -371,7 +372,6 @@ class TestFixContainerGitdir:
 
 def _clean_git_env():
     """Return env dict without GIT_DIR/GIT_WORK_TREE (allows tests in temp repos)."""
-    import os
     env = os.environ.copy()
     env.pop("GIT_DIR", None)
     env.pop("GIT_WORK_TREE", None)

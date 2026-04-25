@@ -1,5 +1,6 @@
 """Tests for host/merge.py — merge execution and conflict validation."""
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -11,7 +12,6 @@ from host.merge import check_branch_not_behind_base
 
 def _clean_git_env():
     """Return env dict without GIT_DIR/GIT_WORK_TREE."""
-    import os
     env = os.environ.copy()
     env.pop("GIT_DIR", None)
     env.pop("GIT_WORK_TREE", None)
