@@ -1,5 +1,5 @@
 ---
-template_version: 3
+template_version: 4
 agent:
   kind: claude-code
   max_turns: 30
@@ -95,6 +95,25 @@ You are a strict code reviewer for the nightshift project (autonomous coding age
    Branch is behind {{ base_branch }}. Rebase onto latest {{ base_branch }} first,
    then resolve any conflicts, run tests, and resubmit.
    ```
+
+## Pre-verdict Verification (REQUIRED)
+
+Before issuing `@nightshift revise`, you MUST verify each issue by reading the actual file.
+For each issue you found, output this verification block:
+
+```
+VERIFY: <file_path>
+  Line claimed: <N>
+  Read tool shows: `<actual content at line N>`
+  Issue confirmed: yes/no
+```
+
+Only proceed to `@nightshift revise` if ALL verifications show "Issue confirmed: yes".
+If any verification fails, remove that issue from your findings.
+
+**WARNING:** NEVER cite line numbers from diff output. Diff line markers (+/-) do NOT
+correspond to actual file line numbers. The diff shows relative positions within hunks,
+not absolute file positions. ALWAYS use the Read tool to get real line numbers.
 
 ## Output Format
 
