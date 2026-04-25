@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from core.state import StateManager, SessionState
+from core.state import StateManager, SessionState, state_lock
 from core.state_machine import InvalidTransition
 
 
@@ -218,3 +218,104 @@ class TestUpdateStatusValidation:
         sm2.update_status("waiting:review")
 
         assert sm2.load_state().status == "waiting:review"
+
+
+class TestStateLocking:
+    """Tests for file locking to prevent read-modify-write races."""
+
+    def test_state_lock_creates_lock_file(self, tmp_path):
+        """state_lock should create state.json.lock file."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        with state_lock(session_dir):
+            assert (session_dir / "state.json.lock").exists()
+
+    def test_state_lock_is_exclusive(self, tmp_path):
+        """Two concurrent state_lock calls should serialize."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        order = []
+
+        def worker(name: str, delay: float):
+            with state_lock(session_dir):
+                order.append(f"{name}-start")
+                time.sleep(delay)
+                order.append(f"{name}-end")
+
+        t1 = threading.Thread(target=worker, args=("A", 0.05))
+        t2 = threading.Thread(target=worker, args=("B", 0.05))
+
+        t1.start()
+        time.sleep(0.01)
+        t2.start()
+
+        t1.join()
+        t2.join()
+
+        assert order == ["A-start", "A-end", "B-start", "B-end"], \
+            f"Lock did not serialize access: {order}"
+
+    def test_concurrent_increments_with_locking(self, tmp_path):
+        """Concurrent increment_step calls should not lose updates."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc", status="working")
+        sm._write(state)
+
+        num_threads = 10
+        increments_per_thread = 5
+
+        def incrementer():
+            for _ in range(increments_per_thread):
+                sm.increment_step()
+
+        threads = [threading.Thread(target=incrementer) for _ in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        final = sm.load_state()
+        expected = num_threads * increments_per_thread
+        assert final.step == expected, f"Lost increments: {final.step} != {expected}"
+
+    def test_concurrent_status_updates_with_locking(self, tmp_path):
+        """Concurrent update_status calls should not corrupt state."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc", status="starting")
+        sm._write(state)
+        sm.update_status("working")
+
+        errors = []
+
+        def add_checkpoints(n: int):
+            for i in range(n):
+                try:
+                    sm.add_checkpoint(f"cp-{i}", i)
+                except Exception as e:
+                    errors.append(str(e))
+
+        def update_usage(n: int):
+            for i in range(n):
+                try:
+                    sm.update_usage(100, 50, 0.01)
+                except Exception as e:
+                    errors.append(str(e))
+
+        t1 = threading.Thread(target=add_checkpoints, args=(5,))
+        t2 = threading.Thread(target=update_usage, args=(5,))
+
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"Concurrent operations failed: {errors}"
+
+        final = sm.load_state()
+        assert len(final.checkpoints) == 5
+        assert final.usage.input_tokens == 500
+        assert final.usage.output_tokens == 250
