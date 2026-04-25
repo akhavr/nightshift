@@ -563,8 +563,8 @@ class TestReloadConfigTrackerLifecycle:
         # New tracker should be in place
         assert w._tracker is new_tracker
 
-    def test_reload_config_keeps_old_tracker_alive_on_failure(self, tmp_path):
-        """Old tracker should NOT be terminated when new tracker creation fails."""
+    def test_reload_config_terminates_old_before_new(self, tmp_path):
+        """Old tracker is terminated before new tracker creation to release locks."""
         w = _make_watcher(tmp_path)
 
         old_tracker = MagicMock()
@@ -572,14 +572,104 @@ class TestReloadConfigTrackerLifecycle:
         w._tracker = old_tracker
         w._config = WorkflowConfig()
 
-        # Make create_tracker fail
+        # Track call order
+        call_order = []
+
+        def record_terminate():
+            call_order.append("terminate")
+
+        def record_create(*args, **kwargs):
+            call_order.append("create")
+            return MagicMock()
+
+        old_tracker.terminate_current.side_effect = record_terminate
+
         with patch("host.watcher.host_watcher.load_workflow", return_value=WorkflowConfig()), \
-             patch("host.watcher.host_watcher.create_tracker", side_effect=Exception("Connection failed")):
+             patch("host.watcher.host_watcher.create_tracker", side_effect=record_create), \
+             patch("host.watcher.host_watcher.time.sleep"):
             w.reload_config()
 
-        # Old tracker should NOT be terminated - we're still using it
-        old_tracker.terminate_current.assert_not_called()
-        # Old tracker should be restored
+        # Terminate should be called BEFORE create
+        assert call_order == ["terminate", "create"]
+
+    def test_reload_waits_for_old_tracker(self, tmp_path):
+        """reload_config waits for old tracker termination before creating new."""
+        w = _make_watcher(tmp_path)
+
+        old_tracker = MagicMock()
+        old_tracker.terminate_current = MagicMock()
+        w._tracker = old_tracker
+        w._config = WorkflowConfig()
+
+        sleep_calls = []
+
+        def record_sleep(duration):
+            sleep_calls.append(duration)
+
+        with patch("host.watcher.host_watcher.load_workflow", return_value=WorkflowConfig()), \
+             patch("host.watcher.host_watcher.create_tracker", return_value=MagicMock()), \
+             patch("host.watcher.host_watcher.time.sleep", side_effect=record_sleep):
+            w.reload_config()
+
+        # Should sleep after termination (0.5s as per TRACKER_TERMINATION_WAIT_S)
+        from host.constants import TRACKER_TERMINATION_WAIT_S
+        assert TRACKER_TERMINATION_WAIT_S in sleep_calls
+        old_tracker.terminate_current.assert_called_once()
+
+    def test_reload_retries_tracker_creation(self, tmp_path):
+        """reload_config retries tracker creation with exponential backoff."""
+        w = _make_watcher(tmp_path)
+
+        old_tracker = MagicMock()
+        old_tracker.terminate_current = MagicMock()
+        w._tracker = old_tracker
+        w._config = WorkflowConfig()
+
+        # Fail first two attempts, succeed on third
+        attempt_count = [0]
+        new_tracker = MagicMock()
+
+        def failing_create(*args, **kwargs):
+            attempt_count[0] += 1
+            if attempt_count[0] < 3:
+                raise Exception(f"Transient failure {attempt_count[0]}")
+            return new_tracker
+
+        sleep_calls = []
+
+        def record_sleep(duration):
+            sleep_calls.append(duration)
+
+        with patch("host.watcher.host_watcher.load_workflow", return_value=WorkflowConfig()), \
+             patch("host.watcher.host_watcher.create_tracker", side_effect=failing_create), \
+             patch("host.watcher.host_watcher.time.sleep", side_effect=record_sleep):
+            w.reload_config()
+
+        # Should have tried 3 times
+        assert attempt_count[0] == 3
+        # New tracker should be installed
+        assert w._tracker is new_tracker
+        # Backoff sleeps: 0.5s (after termination), 0.5s (retry 1), 1.0s (retry 2)
+        from host.constants import TRACKER_TERMINATION_WAIT_S, TRACKER_RELOAD_BACKOFF_BASE_S
+        assert TRACKER_TERMINATION_WAIT_S in sleep_calls
+        assert TRACKER_RELOAD_BACKOFF_BASE_S in sleep_calls  # First retry
+        assert TRACKER_RELOAD_BACKOFF_BASE_S * 2 in sleep_calls  # Second retry
+
+    def test_reload_restores_old_tracker_after_all_retries_fail(self, tmp_path):
+        """When all retry attempts fail, old tracker object is restored."""
+        w = _make_watcher(tmp_path)
+
+        old_tracker = MagicMock()
+        old_tracker.terminate_current = MagicMock()
+        w._tracker = old_tracker
+        w._config = WorkflowConfig()
+
+        with patch("host.watcher.host_watcher.load_workflow", return_value=WorkflowConfig()), \
+             patch("host.watcher.host_watcher.create_tracker", side_effect=Exception("Persistent failure")), \
+             patch("host.watcher.host_watcher.time.sleep"):
+            w.reload_config()
+
+        # Old tracker object should be restored (even though its subprocess was terminated)
         assert w._tracker is old_tracker
 
 

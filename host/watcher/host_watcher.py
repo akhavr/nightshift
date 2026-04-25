@@ -14,6 +14,8 @@ from host.constants import (
     ORPHAN_GRACE_PERIOD_S,
     SOCKET_SERVER_RESTART_BACKOFF_BASE_S, SOCKET_SERVER_RESTART_BACKOFF_CAP_S,
     SOCKET_SERVER_MAX_RESTARTS,
+    TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
+    TRACKER_TERMINATION_WAIT_S,
 )
 from host.session_utils import read_state, update_status
 from core.config import load_workflow, create_tracker, WorkflowConfig
@@ -233,12 +235,34 @@ class HostWatcher:
 
         # Recreate tracker (kind or extra settings may have changed)
         old_tracker = self._tracker
+
+        # Terminate old tracker BEFORE creating new one to release locks
+        if old_tracker and hasattr(old_tracker, 'terminate_current'):
+            old_tracker.terminate_current()
+            # Wait for webui/subprocess to fully exit
+            time.sleep(TRACKER_TERMINATION_WAIT_S)
+
         self._tracker = None  # force re-creation on next _get_tracker()
         # Temporarily disable proxy so _get_tracker creates a direct tracker
         saved_proxy = self._proxy
         self._proxy = None
-        try:
-            new_tracker = self._get_tracker()
+
+        # Retry tracker creation with exponential backoff
+        new_tracker = None
+        last_error = None
+        for attempt in range(TRACKER_RELOAD_MAX_ATTEMPTS):
+            try:
+                new_tracker = self._get_tracker()
+                break
+            except Exception as e:
+                last_error = e
+                if attempt < TRACKER_RELOAD_MAX_ATTEMPTS - 1:
+                    backoff = TRACKER_RELOAD_BACKOFF_BASE_S * (2 ** attempt)
+                    log.warning(f"Tracker creation attempt {attempt + 1} failed: {e}, "
+                                f"retrying in {backoff}s")
+                    time.sleep(backoff)
+
+        if new_tracker is not None:
             self._proxy = saved_proxy
             # Propagate shutdown event to new tracker
             if hasattr(new_tracker, '_shutdown') and hasattr(self, '_shutdown'):
@@ -246,11 +270,9 @@ class HostWatcher:
             # Swap the writer's underlying tracker instance
             if self._writer:
                 self._writer.tracker = new_tracker
-            # Terminate old tracker's in-flight subprocess now that swap succeeded
-            if old_tracker and hasattr(old_tracker, 'terminate_current'):
-                old_tracker.terminate_current()
-        except Exception as e:
-            log.error(f"Tracker creation failed, restoring previous tracker: {e}")
+        else:
+            log.error(f"Tracker creation failed after {TRACKER_RELOAD_MAX_ATTEMPTS} "
+                      f"attempts: {last_error}")
             self._tracker = old_tracker
             self._proxy = saved_proxy
 
