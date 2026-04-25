@@ -1272,3 +1272,154 @@ def test_accept_no_cost_when_no_usage(accept_env, capsys):
 
     out = capsys.readouterr().out
     assert "Cost:" not in out
+
+
+# ── Sibling review session cleanup ─────────────────────────────────────────
+
+
+def test_accept_cleans_sibling_review(tmp_path, capsys):
+    """cmd_accept cleans up sibling review session when it exists."""
+    repo, run = _init_repo(tmp_path)
+    sid = "coder1234567"
+
+    # Create coder session
+    coder_session = repo / ".nightshift" / "sessions" / sid
+    coder_session.mkdir(parents=True)
+    (coder_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    # Create sibling review session
+    review_session = repo / ".nightshift" / "sessions" / f"review-{sid}"
+    review_session.mkdir(parents=True)
+    (review_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 1,
+    }))
+    (review_session / "conversation.jsonl").write_text("")
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_tracker = MagicMock()
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.resolve_merge_ref", return_value=f"agent/{sid}"),
+        patch("host.cli.check_branch_not_behind_base", return_value=None),
+        patch("host.cli.merge_with_rebase_fallback"),
+        patch("host.cli.verify_no_conflict_markers"),
+        patch("host.cli.remove_worktree"),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    # Review session should be cleaned up
+    assert not review_session.exists()
+    out = capsys.readouterr().out
+    assert f"Cleaned up review session for {sid}" in out
+
+
+def test_revise_cleans_sibling_review(tmp_path, capsys):
+    """cmd_revise cleans up sibling review session when revising from waiting:review."""
+    repo, run = _init_repo(tmp_path)
+    sid = "revisetst123"
+
+    # Create coder session in waiting:review status
+    coder_session = repo / ".nightshift" / "sessions" / sid
+    coder_session.mkdir(parents=True)
+    (coder_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 3, "issue_id": sid,
+    }))
+
+    # Create sibling review session
+    review_session = repo / ".nightshift" / "sessions" / f"review-{sid}"
+    review_session.mkdir(parents=True)
+    (review_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 1,
+    }))
+    (review_session / "conversation.jsonl").write_text("")
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_comment = MagicMock()
+    mock_comment.author = "reviewer"
+    mock_comment.body = "Please fix this issue"
+    mock_tracker = MagicMock()
+    mock_tracker.get_comments.return_value = [mock_comment]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("host.cli.remove_worktree"),
+        patch("subprocess.run"),
+    ):
+        cmd_revise(_make_args(
+            issue_id=sid,
+            workflow=str(repo / "WORKFLOW.md"),
+            message=None,
+        ))
+
+    # Review session should be cleaned up
+    assert not review_session.exists()
+    out = capsys.readouterr().out
+    assert f"Cleaned up review session for {sid}" in out
+
+
+def test_revise_no_review_is_noop(tmp_path, capsys):
+    """cmd_revise is a no-op when there's no sibling review session."""
+    repo, run = _init_repo(tmp_path)
+    sid = "noreview1234"
+
+    # Create coder session only - no sibling review
+    coder_session = repo / ".nightshift" / "sessions" / sid
+    coder_session.mkdir(parents=True)
+    (coder_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_comment = MagicMock()
+    mock_comment.author = "reviewer"
+    mock_comment.body = "Needs work"
+    mock_tracker = MagicMock()
+    mock_tracker.get_comments.return_value = [mock_comment]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("host.cli.remove_worktree"),
+        patch("subprocess.run"),
+    ):
+        cmd_revise(_make_args(
+            issue_id=sid,
+            workflow=str(repo / "WORKFLOW.md"),
+            message=None,
+        ))
+
+    # Should not print "Cleaned up review session" message
+    out = capsys.readouterr().out
+    assert "Cleaned up review session" not in out
+    # Coder session should still exist
+    assert coder_session.exists()
