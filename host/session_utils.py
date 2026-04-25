@@ -10,6 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from core.state import state_lock
 from host.constants import ARCHIVE_DIR
 
 log = logging.getLogger(__name__)
@@ -68,10 +69,46 @@ def write_state(session_dir: Path, state: dict) -> None:
 
 
 def update_status(session_dir: Path, status: str) -> None:
-    """Read state.json, update the status field, and write back."""
-    state = read_state(session_dir)
-    state["status"] = status
-    write_state(session_dir, state)
+    """Read state.json, update the status field, and write back (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["status"] = status
+        write_state(session_dir, state)
+
+
+def increment_orphan_resumes(session_dir: Path) -> int:
+    """Atomically increment orphan_resumes and return the new value (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["orphan_resumes"] = state.get("orphan_resumes", 0) + 1
+        write_state(session_dir, state)
+        return state["orphan_resumes"]
+
+
+def increment_auth_retries(session_dir: Path) -> int:
+    """Atomically increment auth_retries and return the new value (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["auth_retries"] = state.get("auth_retries", 0) + 1
+        write_state(session_dir, state)
+        return state["auth_retries"]
+
+
+def increment_provider_outage_retries(session_dir: Path) -> int:
+    """Atomically increment provider_outage_retries and return the new value (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["provider_outage_retries"] = state.get("provider_outage_retries", 0) + 1
+        write_state(session_dir, state)
+        return state["provider_outage_retries"]
+
+
+def update_state_fields(session_dir: Path, **fields) -> None:
+    """Atomically update arbitrary fields in state.json (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state.update(fields)
+        write_state(session_dir, state)
 
 
 # ── Session archival ────────────────────────────────────

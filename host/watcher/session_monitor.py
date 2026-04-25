@@ -14,7 +14,10 @@ from host.constants import (
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
-from host.session_utils import read_state, write_state, update_status, _issue_id_prefix_match
+from host.session_utils import (
+    read_state, update_status, _issue_id_prefix_match,
+    increment_orphan_resumes, update_state_fields,
+)
 from core.config import load_workflow
 from host.watcher.lifecycle_comments import post_start, post_resume, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
@@ -209,11 +212,10 @@ class SessionMonitor:
                 self._handle_coder_orphan_limit(sid, session_dir, state, issue_id)
             return
 
-        state["orphan_resumes"] = orphan_resumes + 1
-        write_state(session_dir, state)
+        new_count = increment_orphan_resumes(session_dir)
 
         log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}, "
-                 f"orphan_resume {orphan_resumes + 1}/{MAX_ORPHAN_RESUMES}). Auto-resuming.")
+                 f"orphan_resume {new_count}/{MAX_ORPHAN_RESUMES}). Auto-resuming.")
         self._recently_launched[sid] = time.time()
 
         session_dir = self.sessions_dir / sid
@@ -312,8 +314,7 @@ class SessionMonitor:
         """Suspend a coder session as too-complex after hitting the orphan limit."""
         log.error(f"[{sid}] Hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
                   f"Task may be too complex — stopping.")
-        state["status"] = "suspended:too-complex"
-        write_state(session_dir, state)
+        update_state_fields(session_dir, status="suspended:too-complex")
         try:
             tracker = self._get_tracker()
             tracker.add_comment(issue_id,
@@ -334,8 +335,7 @@ class SessionMonitor:
         coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
         log.error(f"[{sid}] Review session hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
                   f"Falling back to human review for coder session {coder_sid}.")
-        state["status"] = "suspended:review-failed"
-        write_state(session_dir, state)
+        update_state_fields(session_dir, status="suspended:review-failed")
 
         # Transition coder session to waiting:human-review
         coder_dir = self.sessions_dir / coder_sid
@@ -414,8 +414,7 @@ class SessionMonitor:
             if auth_retries >= MAX_AUTH_RETRIES:
                 log.warning(f"[{sid}] Auth retry limit reached ({MAX_AUTH_RETRIES}). "
                             f"Token still invalid — giving up.")
-                state["status"] = "suspended:auth-failure-permanent"
-                write_state(session_dir, state)
+                update_state_fields(session_dir, status="suspended:auth-failure-permanent")
                 self.telegram.notify(
                     f"🔑 `{sid}` hit {MAX_AUTH_RETRIES} auth retries — token still invalid. "
                     f"Giving up. Fix credentials and `nightshift resume` manually.",
@@ -424,9 +423,7 @@ class SessionMonitor:
 
             log.info(f"[{sid}] Auth-failure session — retrying (token may have been refreshed, "
                      f"attempt {auth_retries + 1}/{MAX_AUTH_RETRIES})")
-            state["auth_retries"] = auth_retries + 1
-            state["status"] = "working"
-            write_state(session_dir, state)
+            update_state_fields(session_dir, auth_retries=auth_retries + 1, status="working")
             self._recently_launched[sid] = time.time()
 
             self._resume_session(sid, issue_id, reason="auth-failure retry")
@@ -465,8 +462,7 @@ class SessionMonitor:
             if overload_retries >= MAX_PROVIDER_OUTAGE_RETRIES:
                 log.warning(f"[{sid}] Provider outage retry limit reached ({MAX_PROVIDER_OUTAGE_RETRIES}). "
                             f"Provider still overloaded — giving up.")
-                state["status"] = "suspended:provider-overload-permanent"
-                write_state(session_dir, state)
+                update_state_fields(session_dir, status="suspended:provider-overload-permanent")
                 self.telegram.notify(
                     f"⏳ `{sid}` hit {MAX_PROVIDER_OUTAGE_RETRIES} provider outage retries — "
                     f"provider still overloaded. Giving up. `nightshift resume` manually when available.",
@@ -475,9 +471,7 @@ class SessionMonitor:
 
             log.info(f"[{sid}] Provider-overload session — retrying (provider may be available, "
                      f"attempt {overload_retries + 1}/{MAX_PROVIDER_OUTAGE_RETRIES})")
-            state["overload_resumes"] = overload_retries + 1
-            state["status"] = "working"
-            write_state(session_dir, state)
+            update_state_fields(session_dir, overload_resumes=overload_retries + 1, status="working")
             self._recently_launched[sid] = time.time()
 
             self._resume_session(sid, issue_id, reason="provider-outage retry")

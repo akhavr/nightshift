@@ -15,9 +15,13 @@ from host.session_utils import (
     archive_session,
     force_remove_dir,
     get_repo_root,
+    increment_orphan_resumes,
+    increment_auth_retries,
+    increment_provider_outage_retries,
     read_state,
     remove_worktree,
     sessions_dir,
+    update_state_fields,
     update_status,
     write_state,
 )
@@ -485,3 +489,74 @@ class TestArchiveSession:
         (session_dir / "state.json").write_text('{"status":"updated"}')
         archive_dir = archive_session(session_dir, repo)
         assert json.loads((archive_dir / "state.json").read_text()) == {"status": "updated"}
+
+
+# ── Locked state operations ───────────────────────────────────────────────────
+
+class TestLockedStateOperations:
+    """Tests for locked read-modify-write operations."""
+
+    def test_increment_orphan_resumes(self, tmp_path):
+        """increment_orphan_resumes atomically increments and returns new value."""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "status": "working", "orphan_resumes": 2
+        }))
+
+        result = increment_orphan_resumes(tmp_path)
+        assert result == 3
+        state = read_state(tmp_path)
+        assert state["orphan_resumes"] == 3
+
+    def test_increment_orphan_resumes_initializes_from_zero(self, tmp_path):
+        """increment_orphan_resumes works when field is missing."""
+        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
+
+        result = increment_orphan_resumes(tmp_path)
+        assert result == 1
+
+    def test_increment_auth_retries(self, tmp_path):
+        """increment_auth_retries atomically increments and returns new value."""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "status": "suspended:auth-failure", "auth_retries": 1
+        }))
+
+        result = increment_auth_retries(tmp_path)
+        assert result == 2
+        state = read_state(tmp_path)
+        assert state["auth_retries"] == 2
+
+    def test_increment_provider_outage_retries(self, tmp_path):
+        """increment_provider_outage_retries atomically increments."""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "status": "suspended:provider-overload"
+        }))
+
+        result = increment_provider_outage_retries(tmp_path)
+        assert result == 1
+
+    def test_update_state_fields_updates_multiple(self, tmp_path):
+        """update_state_fields atomically updates multiple fields."""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "status": "working", "orphan_resumes": 0, "other": "value"
+        }))
+
+        update_state_fields(tmp_path, status="suspended", orphan_resumes=5)
+
+        state = read_state(tmp_path)
+        assert state["status"] == "suspended"
+        assert state["orphan_resumes"] == 5
+        assert state["other"] == "value"
+
+    def test_update_state_fields_creates_lock_file(self, tmp_path):
+        """update_state_fields should create state.json.lock file."""
+        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
+
+        update_state_fields(tmp_path, status="done")
+        assert (tmp_path / "state.json.lock").exists()
+
+    def test_update_status_creates_lock_file(self, tmp_path):
+        """update_status should create state.json.lock file."""
+        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
+
+        update_status(tmp_path, "done")
+        assert (tmp_path / "state.json.lock").exists()
