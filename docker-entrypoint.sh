@@ -32,6 +32,17 @@ if [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
     export GIT_WORK_TREE="/workspace"
 fi
 
+# WT-1.6: Sanitize core.worktree if set to container path.
+# Previous runs may have written core.worktree=/workspace to the repo's .git/config.
+# This causes "fatal: this operation must be run in a work tree" on the host.
+if [ -n "$GIT_DIR" ]; then
+    WORKTREE_VAL=$(git config --get core.worktree 2>/dev/null || true)
+    if [ "$WORKTREE_VAL" = "/workspace" ]; then
+        git config --unset core.worktree
+        echo "Sanitized core.worktree=/workspace from config"
+    fi
+fi
+
 # Create OpenHands conversation persistence directory
 mkdir -p "$HOME/.openhands" 2>/dev/null || true
 
