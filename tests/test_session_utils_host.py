@@ -870,3 +870,18 @@ class TestFixAllCorruptedGitdirs:
             fix_all_corrupted_gitdirs(repo)
 
         assert git_file.read_text() == original
+
+
+class TestFixCorruptedGitdirUsesRebaseImport:
+    """Verify _fix_container_gitdir is reused from host.rebase (DRY)."""
+
+    def test_fix_corrupted_gitdir_uses_rebase_import(self):
+        """session_utils imports _fix_container_gitdir from host.rebase, not duplicated."""
+        import host.session_utils as su
+        import host.rebase as rb
+
+        # Verify the constant is imported (not duplicated)
+        assert su.CONTAINER_GIT_PATH is rb.CONTAINER_GIT_PATH
+
+        # Verify the function is imported (not duplicated)
+        assert su._fix_container_gitdir is rb._fix_container_gitdir

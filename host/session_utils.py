@@ -12,6 +12,7 @@ from pathlib import Path
 
 from core.state import state_lock
 from host.constants import ARCHIVE_DIR
+from host.rebase import CONTAINER_GIT_PATH, _fix_container_gitdir
 
 log = logging.getLogger(__name__)
 
@@ -236,9 +237,6 @@ def _issue_id_prefix_match(issue_id: str, existing_ids: set[str]) -> bool:
 
 # ── Safe worktree prune (WT-6) ──────────────────────────
 
-# Container mount point for .git directory - used to detect corrupted gitdir paths
-CONTAINER_GIT_PATH = "/repo-git/"
-
 # Session statuses that indicate active work (should not prune while these exist)
 ACTIVE_STATUSES = {"working", "starting", "reviewing"}
 
@@ -283,40 +281,7 @@ def fix_all_corrupted_gitdirs(repo: Path) -> None:
         if not line.startswith("worktree "):
             continue
         wt_path = Path(line.split(" ", 1)[1])
-        _fix_corrupted_gitdir(wt_path, repo)
-
-
-def _fix_corrupted_gitdir(worktree_path: Path, repo_root: Path) -> None:
-    """Fix gitdir path if corrupted by container (points to /repo-git/).
-
-    Reuses the logic from host/rebase.py but as a standalone helper.
-    """
-    git_file = worktree_path / ".git"
-    if not git_file.is_file():
-        return
-
-    try:
-        content = git_file.read_text()
-    except OSError as e:
-        log.warning("Cannot read %s: %s", git_file, e)
-        return
-
-    if CONTAINER_GIT_PATH not in content:
-        return  # Already has a valid host path
-
-    worktree_name = worktree_path.name
-    host_gitdir = repo_root / ".git" / "worktrees" / worktree_name
-
-    if not host_gitdir.exists():
-        log.warning("Cannot fix gitdir: %s does not exist", host_gitdir)
-        return
-
-    new_content = f"gitdir: {host_gitdir}\n"
-    try:
-        git_file.write_text(new_content)
-        log.info("Fixed container gitdir in %s -> %s", git_file, host_gitdir)
-    except OSError as e:
-        log.warning("Cannot write %s: %s", git_file, e)
+        _fix_container_gitdir(wt_path, repo)
 
 
 def safe_prune(repo: Path) -> None:
@@ -370,7 +335,7 @@ def remove_worktree(repo: Path, wt: Path, branch: str) -> None:
     """
     if wt.exists():
         # Fix corrupted gitdir before attempting remove (WT-6)
-        _fix_corrupted_gitdir(wt, repo)
+        _fix_container_gitdir(wt, repo)
         result = subprocess.run(
             ["git", "worktree", "remove", str(wt), "--force"],
             capture_output=True, cwd=str(repo),
