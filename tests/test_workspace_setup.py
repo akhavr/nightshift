@@ -5,6 +5,13 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def clean_git_environ(monkeypatch):
+    """Clear GIT_DIR/GIT_WORK_TREE so subprocess calls use the temp repo."""
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
 from core.constants import MERGE_NEEDED_FILENAME
 from host.workspace_setup import merge_base_into_worktree
 

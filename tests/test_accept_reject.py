@@ -1,11 +1,28 @@
 """Tests for accept/reject CLI commands."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+
+
+def _clean_git_env():
+    """Return env dict without GIT_DIR/GIT_WORK_TREE (allows tests in temp repos)."""
+    env = os.environ.copy()
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    return env
+
+
+@pytest.fixture(autouse=True)
+def clean_git_environ(monkeypatch):
+    """Clear GIT_DIR/GIT_WORK_TREE so subprocess calls use the temp repo."""
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
 
 from host.merge import (
     check_conflict_markers as _check_conflict_markers,
@@ -34,7 +51,7 @@ def test_accept_merges_branch(tmp_path):
     # Set up a git repo with main and agent branch
     repo = tmp_path / "repo"
     repo.mkdir()
-    _run = lambda *args: subprocess.run(args, cwd=str(repo), capture_output=True, text=True)
+    _run = lambda *args: subprocess.run(args, cwd=str(repo), capture_output=True, text=True, env=_clean_git_env())
 
     _run("git", "init")
     _run("git", "config", "user.email", "test@test.com")
@@ -66,7 +83,7 @@ def test_reject_cleans_up(tmp_path):
     """Reject should remove worktree and session but NOT merge."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    _run = lambda *args: subprocess.run(args, cwd=str(repo), capture_output=True, text=True)
+    _run = lambda *args: subprocess.run(args, cwd=str(repo), capture_output=True, text=True, env=_clean_git_env())
 
     _run("git", "init")
     _run("git", "config", "user.email", "test@test.com")
@@ -91,7 +108,7 @@ def _init_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     run = lambda *args: subprocess.run(
-        args, cwd=str(repo), capture_output=True, text=True,
+        args, cwd=str(repo), capture_output=True, text=True, env=_clean_git_env(),
     )
     run("git", "init")
     run("git", "config", "user.email", "test@test.com")

@@ -4,6 +4,7 @@ Focuses on functions not covered by test_cli_commands.py or test_accept_reject.p
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,13 @@ from unittest.mock import patch, MagicMock, call
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+@pytest.fixture(autouse=True)
+def clean_git_environ(monkeypatch):
+    """Clear GIT_DIR/GIT_WORK_TREE so subprocess calls use the temp repo."""
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
 
 from host.merge import (
     resolve_merge_ref,
