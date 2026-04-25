@@ -221,31 +221,36 @@ class TestGitEnvVars:
     def test_git_operations_work_with_env_vars(self, tmp_path):
         """Git operations work correctly with GIT_DIR and GIT_WORK_TREE env vars."""
         # Set up a real git repo with a worktree
+        # Clear git env vars to avoid inheriting from test runner environment
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         repo = tmp_path / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, env=clean_env)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
             cwd=repo,
             capture_output=True,
             check=True,
+            env=clean_env,
         )
         subprocess.run(
             ["git", "config", "user.name", "Test"],
             cwd=repo,
             capture_output=True,
             check=True,
+            env=clean_env,
         )
 
         # Create an initial commit so we have a branch
         test_file = repo / "README.md"
         test_file.write_text("# Test\n")
-        subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True, env=clean_env)
         subprocess.run(
             ["git", "commit", "-m", "Initial commit"],
             cwd=repo,
             capture_output=True,
             check=True,
+            env=clean_env,
         )
 
         # Create a worktree
@@ -255,6 +260,7 @@ class TestGitEnvVars:
             cwd=repo,
             capture_output=True,
             check=True,
+            env=clean_env,
         )
 
         # Get the actual worktree name from .git/worktrees
