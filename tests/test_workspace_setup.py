@@ -334,74 +334,6 @@ class TestCreateWorktreeTransaction:
         assert session_dir.exists()
 
 
-class TestCreateWorktreeTransaction:
-    """WT-4: create_worktree should use WorkspaceTransaction and clean up on failure."""
-
-    @patch("host.workspace_setup.WorkspaceTransaction")
-    @patch("host.workspace_setup.safe_prune")
-    @patch("host.workspace_setup.subprocess.run")
-    def test_setup_uses_transaction(self, mock_run, mock_safe_prune,
-                                    mock_txn, tmp_path):
-        repo, run = _init_repo(tmp_path)
-        wt_path = tmp_path / "worktree"
-        session_dir = tmp_path / "session"
-        branch = "agent/test-transaction"
-        base_branch = "master"
-        issue_id = "issue-123"
-
-        def side_effect(cmd, **kwargs):
-            result = subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-            if cmd[:3] == ["git", "worktree", "add"]:
-                wt_path.mkdir(exist_ok=True)
-                (wt_path / "README.md").write_text("hello\n")
-                (wt_path / ".git").write_text("gitdir: /tmp/repo/.git/worktrees/worktree\n")
-            return result
-
-        mock_run.side_effect = side_effect
-        mock_txn.return_value.__enter__.return_value = mock_txn.return_value
-        mock_txn.return_value.__exit__.return_value = False
-
-        from host.workspace_setup import create_worktree
-
-        create_worktree(repo, wt_path, branch, base_branch, session_dir, issue_id)
-
-        mock_txn.assert_called_once_with(wt_path)
-        mock_txn.return_value.__enter__.assert_called_once_with()
-        mock_txn.return_value.__exit__.assert_called_once()
-        assert (session_dir / "state.json").exists()
-
-    @patch("host.workspace_setup.safe_prune")
-    @patch("host.workspace_setup.subprocess.run")
-    def test_setup_failure_cleans_up(self, mock_run, mock_safe_prune, tmp_path):
-        repo, run = _init_repo(tmp_path)
-        wt_path = tmp_path / "worktree"
-        session_dir = tmp_path / "session"
-
-        def side_effect(cmd, **kwargs):
-            if cmd[:3] == ["git", "branch", "agent/test-failure"]:
-                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-            if cmd[:3] == ["git", "worktree", "add"]:
-                wt_path.mkdir(exist_ok=True)
-                (wt_path / "README.md").write_text("partial\n")
-                (wt_path / ".git").write_text("gitdir: /tmp/repo/.git/worktrees/worktree\n")
-                return subprocess.CompletedProcess(
-                    cmd, 1, stdout="", stderr="fatal: simulated add failure"
-                )
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        mock_run.side_effect = side_effect
-
-        from host.workspace_setup import create_worktree
-
-        with pytest.raises(SystemExit) as exc_info:
-            create_worktree(repo, wt_path, "agent/test-failure", "master",
-                            session_dir, "issue-123")
-
-        assert exc_info.value.code == 1
-        assert not wt_path.exists()
-        assert session_dir.exists()
-
-
 class TestCreateWorktreeBaseCommitVerification:
     """Tests for base commit verification before branch creation."""
 
@@ -438,6 +370,7 @@ class TestCreateWorktreeBaseCommitVerification:
         # Verify the branch points to a valid commit
         result = run("git", "rev-parse", "agent/test-branch")
         assert result.returncode == 0
+
 
 
 class TestSyncReviewWorktree:
