@@ -1,5 +1,5 @@
 ---
-template_version: 2
+template_version: 2.1
 agent:
   kind: claude-code
   max_turns: 30
@@ -87,3 +87,16 @@ Be strict. Do not accept "good enough" or "can be cleaned up later".
 Every merge goes to the base branch and stays. Flag and reject: duplicated logic,
 missing features from the issue spec, untested code paths, CLAUDE.md drift,
 silent exception swallowing.
+
+## Feedback Logging
+
+When issuing `@nightshift revise`, append a YAML entry to `.nightshift/coder-issues.yaml`:
+```yaml
+- category: <bug|incomplete|style|test|docs|other>
+  session: {{ session_id }}
+  date: {{ date }}
+  file: <path>
+  line: <number or range>
+  detail: <one-line description of the issue>
+```
+This logs patterns in coder mistakes for later analysis.

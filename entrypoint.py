@@ -9,6 +9,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 from adapters.notifiers.composite import CompositeNotifier
@@ -110,6 +111,8 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
                     config.prompt_template, issue=issue,
                     related_context=related, attempt=None,
                     agent_kind=config.agent.kind,
+                    session_id=os.environ.get("SHORT_ID", "unknown"),
+                    date=date.today().isoformat(),
                 )
             else:
                 base_prompt = build_initial_prompt(issue.title, issue.body, related)
@@ -120,7 +123,11 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
     state_mgr.update_status("working")
 
     if config.prompt_template:
-        extra_vars = {"agent_kind": config.agent.kind}
+        extra_vars = {
+            "agent_kind": config.agent.kind,
+            "session_id": os.environ.get("SHORT_ID", "unknown"),
+            "date": date.today().isoformat(),
+        }
         if step == "review":
             extra_vars["diff"] = _read_diff()
             extra_vars["base_branch"] = os.environ.get("BASE_BRANCH", "master")
