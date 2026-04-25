@@ -21,18 +21,12 @@ if [ -d /codex-auth ]; then
     cp /codex-auth/config.toml "$HOME/.codex/" 2>/dev/null || true
 fi
 
-# Fix worktree .git pointer: the host path doesn't exist inside the container.
-# Rewrite to use the mounted /repo-git path so commits land on the correct branch.
+# Configure git for worktree: use env vars instead of rewriting .git file.
+# This avoids corruption of worktree metadata (gitdir reverse pointer).
 # WORKTREE_NAME is set by launch.py (e.g. "agent-abc123" or "review-abc123").
-# On exit, restore the original .git content so host git operations work.
-if [ -f /workspace/.git ] && [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
-    ORIGINAL_GIT_CONTENT=$(cat /workspace/.git)
-    cleanup_git_pointer() {
-        printf '%s' "$ORIGINAL_GIT_CONTENT" > /workspace/.git
-    }
-    trap cleanup_git_pointer EXIT
-
-    echo "gitdir: /repo-git/worktrees/${WORKTREE_NAME}" > /workspace/.git
+if [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
+    export GIT_DIR="/repo-git/worktrees/${WORKTREE_NAME}"
+    export GIT_WORK_TREE="/workspace"
 fi
 
 # Create OpenHands conversation persistence directory
