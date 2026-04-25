@@ -85,6 +85,13 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
 
     workflow_mount_path = str(Path(workflow_path).resolve())
 
+    # WT-1.7: Build git mounts with read-only config overlay to prevent core.worktree pollution.
+    # The config mount must come AFTER the .git mount to properly overlay.
+    git_mounts = ["-v", f"{repo / '.git'}:/repo-git:rw"]
+    git_config = repo / ".git" / "config"
+    if git_config.exists():
+        git_mounts += ["-v", f"{git_config}:/repo-git/config:ro"]
+
     cmd = [
         "docker", "run", "--rm",
         "--name", container_name,
@@ -92,7 +99,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
         "-v", f"{session_dir}:/session:rw",
-        "-v", f"{repo / '.git'}:/repo-git:rw",
+        *git_mounts,
         "-v", f"{workflow_mount_path}:/workspace/WORKFLOW.md:ro",
         *_auth_mounts(),
         "-e", f"ISSUE_ID={issue_id}",

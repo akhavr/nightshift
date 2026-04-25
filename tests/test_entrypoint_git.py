@@ -673,3 +673,164 @@ class TestCoreWorktreeSanitization:
         assert result.returncode == 0
         assert "Sanitized" not in result.stdout
         assert "core.worktree=UNSET" in result.stdout
+
+
+# WT-1.7: Exit trap sanitization script
+_EXIT_TRAP_SCRIPT = """\
+#!/bin/sh
+
+# Simulate GIT_DIR being set
+export GIT_DIR="$TEST_GIT_DIR"
+
+# WT-1.7: Exit trap for defense-in-depth core.worktree sanitization
+cleanup_worktree() {
+    if [ -n "$GIT_DIR" ]; then
+        WORKTREE_VAL=$(git config --get core.worktree 2>/dev/null || true)
+        if [ "$WORKTREE_VAL" = "/workspace" ]; then
+            git config --unset core.worktree 2>/dev/null || true
+            echo "Exit: sanitized core.worktree"
+        fi
+    fi
+}
+trap cleanup_worktree EXIT
+
+# Simulate some work, then exit (trap fires automatically)
+echo "Working..."
+exit 0
+"""
+
+
+class TestExitTrapSanitization:
+    """Tests for WT-1.7: exit trap sanitizes core.worktree on container exit."""
+
+    def test_exit_trap_sanitizes_core_worktree(self, tmp_path):
+        """Exit trap sanitizes core.worktree=/workspace on container exit."""
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+
+        test_file = repo / "README.md"
+        test_file.write_text("# Test\n")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+
+        worktree_path = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "agent-branch", str(worktree_path)],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+
+        worktree_name = worktree_path.name
+        git_dir = repo / ".git" / "worktrees" / worktree_name
+
+        # Simulate pollution that occurs DURING a run (not at startup)
+        subprocess.run(
+            ["git", "config", "core.worktree", "/workspace"],
+            env={**clean_env, "GIT_DIR": str(git_dir)},
+            capture_output=True, check=True,
+        )
+
+        # Verify pollution is present
+        result = subprocess.run(
+            ["git", "config", "--get", "core.worktree"],
+            env={**clean_env, "GIT_DIR": str(git_dir)},
+            capture_output=True, text=True,
+        )
+        assert result.stdout.strip() == "/workspace"
+
+        # Run the exit trap script
+        script = tmp_path / "exit_trap_test.sh"
+        script.write_text(_EXIT_TRAP_SCRIPT)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "TEST_GIT_DIR": str(git_dir),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            cwd=worktree_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "Exit: sanitized core.worktree" in result.stdout
+
+        # Verify core.worktree is now unset
+        result = subprocess.run(
+            ["git", "config", "--get", "core.worktree"],
+            env={**clean_env, "GIT_DIR": str(git_dir)},
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 1  # Not found
+
+    def test_exit_trap_noop_when_not_polluted(self, tmp_path):
+        """Exit trap does nothing when core.worktree is not set to /workspace."""
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+
+        test_file = repo / "README.md"
+        test_file.write_text("# Test\n")
+        subprocess.run(["git", "add", "README.md"], cwd=repo, capture_output=True, check=True, env=clean_env)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit"],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+
+        worktree_path = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "agent-branch", str(worktree_path)],
+            cwd=repo, capture_output=True, check=True, env=clean_env,
+        )
+
+        worktree_name = worktree_path.name
+        git_dir = repo / ".git" / "worktrees" / worktree_name
+
+        # core.worktree is NOT set (normal state)
+
+        script = tmp_path / "exit_trap_test.sh"
+        script.write_text(_EXIT_TRAP_SCRIPT)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "TEST_GIT_DIR": str(git_dir),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            cwd=worktree_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "Exit: sanitized core.worktree" not in result.stdout

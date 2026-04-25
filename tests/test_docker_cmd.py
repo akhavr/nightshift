@@ -141,3 +141,113 @@ def test_overflow_no_profile_name_no_env_var(tmp_path, monkeypatch):
     assert "OVERFLOW_PROFILE=" not in cmd_str
     # OVERFLOW_ACTIVE should still be set
     assert "OVERFLOW_ACTIVE=1" in cmd_str
+
+
+def test_git_config_mounted_readonly(tmp_path, monkeypatch):
+    """WT-1.7: .git/config is mounted read-only to prevent core.worktree pollution."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Create fake .git directory with config file
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\n")
+
+    from host.docker_cmd import build_docker_cmd
+
+    cmd = build_docker_cmd(
+        repo=tmp_path,
+        workspace_mount=str(tmp_path / "ws"),
+        session_dir=tmp_path / "session",
+        container_name="test",
+        worktree_name="test-worktree",
+        issue_id="test-123",
+        short_id="t123",
+        max_turns=10,
+        step="coder",
+        is_resume=False,
+        workflow_path=str(tmp_path / "WORKFLOW.md"),
+        image="nightshift:latest",
+    )
+
+    cmd_str = " ".join(cmd)
+    # Main .git mount should be read-write
+    assert f"{tmp_path / '.git'}:/repo-git:rw" in cmd_str
+    # Config file should be mounted read-only on top
+    assert f"{tmp_path / '.git' / 'config'}:/repo-git/config:ro" in cmd_str
+
+
+def test_git_config_mount_order(tmp_path, monkeypatch):
+    """WT-1.7: .git/config readonly mount comes after .git mount for correct overlay."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\n")
+
+    from host.docker_cmd import build_docker_cmd
+
+    cmd = build_docker_cmd(
+        repo=tmp_path,
+        workspace_mount=str(tmp_path / "ws"),
+        session_dir=tmp_path / "session",
+        container_name="test",
+        worktree_name="test-worktree",
+        issue_id="test-123",
+        short_id="t123",
+        max_turns=10,
+        step="coder",
+        is_resume=False,
+        workflow_path=str(tmp_path / "WORKFLOW.md"),
+        image="nightshift:latest",
+    )
+
+    # Find indices of both mounts
+    git_mount_idx = None
+    config_mount_idx = None
+    for i, arg in enumerate(cmd):
+        if "/repo-git:rw" in arg:
+            git_mount_idx = i
+        if "/repo-git/config:ro" in arg:
+            config_mount_idx = i
+
+    assert git_mount_idx is not None, ".git mount not found"
+    assert config_mount_idx is not None, ".git/config mount not found"
+    assert config_mount_idx > git_mount_idx, "config mount must come after .git mount"
+
+
+def test_git_config_mount_skipped_if_no_config_file(tmp_path, monkeypatch):
+    """WT-1.7: Skip .git/config mount if the config file doesn't exist."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Create .git directory WITHOUT config file (unusual but possible)
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+
+    from host.docker_cmd import build_docker_cmd
+
+    cmd = build_docker_cmd(
+        repo=tmp_path,
+        workspace_mount=str(tmp_path / "ws"),
+        session_dir=tmp_path / "session",
+        container_name="test",
+        worktree_name="test-worktree",
+        issue_id="test-123",
+        short_id="t123",
+        max_turns=10,
+        step="coder",
+        is_resume=False,
+        workflow_path=str(tmp_path / "WORKFLOW.md"),
+        image="nightshift:latest",
+    )
+
+    cmd_str = " ".join(cmd)
+    # Main .git mount should still be there
+    assert "/repo-git:rw" in cmd_str
+    # Config mount should NOT be there since file doesn't exist
+    assert "/repo-git/config:ro" not in cmd_str
