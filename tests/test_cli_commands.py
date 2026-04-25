@@ -290,9 +290,12 @@ def test_cmd_review_rejects_non_waiting_session(tmp_path, capsys):
     assert "waiting:review" in capsys.readouterr().err
 
 
-def test_cmd_resume_review_session_strips_prefix():
+def test_cmd_resume_review_session_strips_prefix(tmp_path):
     """resume resolves review sessions and passes bare issue ID to launch.py."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
     with (
+        patch("host.cli.repo_root", return_value=repo),
         patch("host.cli._resolve_workflow", return_value=Path("WORKFLOW.md")),
         patch("host.cli.resolve_session", return_value="review-47ca35f12345"),
         patch("subprocess.run") as run_mock,
@@ -306,9 +309,12 @@ def test_cmd_resume_review_session_strips_prefix():
     assert "--resume" in cmd
 
 
-def test_cmd_resume_review_session_adds_step_flag():
+def test_cmd_resume_review_session_adds_step_flag(tmp_path):
     """resume adds review step and review workflow for review sessions."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
     with (
+        patch("host.cli.repo_root", return_value=repo),
         patch("host.cli._resolve_workflow", return_value=Path("CUSTOM.md")),
         patch("host.cli.resolve_session", return_value="review-47ca35f12345"),
         patch("subprocess.run") as run_mock,

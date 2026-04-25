@@ -21,8 +21,8 @@ ARCHIVE_FILES = ("conversation.jsonl", "state.json", "raw-output.log")
 
 # ── Path helpers ─────────────────────────────────────────
 
-def get_repo_root() -> Path:
-    """Return the git repository root (main repo, not worktree).
+def _git_repo_root() -> Path:
+    """Return the git repository root based on git commands (internal helper).
 
     Uses --git-common-dir which returns the same path for both the main
     repo and all its worktrees, ensuring socket paths resolve correctly
@@ -43,7 +43,29 @@ def get_repo_root() -> Path:
     return Path(subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,
-    ).stdout.strip())
+    ).stdout.strip()).resolve()
+
+
+def get_repo_root() -> Path:
+    """Return the nightshift repo root with symlink resolution and validation.
+
+    1. Gets git repo root and resolves symlinks
+    2. Validates .nightshift/ exists at that location
+    3. If not found, walks up from cwd to find .nightshift/
+    4. Raises RuntimeError if no .nightshift/ found anywhere
+    """
+    root = _git_repo_root()
+    if (root / ".nightshift").exists():
+        return root
+
+    # Walk up from cwd to find .nightshift/
+    for parent in Path.cwd().resolve().parents:
+        if (parent / ".nightshift").exists():
+            return parent
+
+    raise RuntimeError(
+        "No .nightshift/ found. Run from a nightshift repo or use --repo flag."
+    )
 
 
 def sessions_dir(repo: Path | None = None) -> Path:

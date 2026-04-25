@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.session_utils import (
     ARCHIVE_FILES,
+    _git_repo_root,
     archive_session,
     force_remove_dir,
     get_repo_root,
@@ -117,13 +118,15 @@ class TestUpdateStatus:
 
 # ── get_repo_root ─────────────────────────────────────────────────────────────
 
-class TestGetRepoRoot:
+class TestGitRepoRoot:
+    """Tests for _git_repo_root() - the internal git-based root detection."""
+
     def test_returns_parent_when_git_common_ends_with_dotgit(self):
         """Standard case: git dir is .git inside repo, return its parent."""
         mock_result = MagicMock()
         mock_result.stdout = "/home/user/myrepo/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result) as mock_run:
-            result = get_repo_root()
+            result = _git_repo_root()
         assert result == Path("/home/user/myrepo")
         mock_run.assert_called_once_with(
             ["git", "rev-parse", "--git-common-dir"],
@@ -131,28 +134,17 @@ class TestGetRepoRoot:
         )
 
     def test_returns_main_repo_from_worktree(self):
-        """When called from a worktree, returns the main repo path, not the worktree path.
-
-        git rev-parse --git-common-dir from a worktree returns the path to the
-        main repo's .git directory (e.g., /path/to/main-repo/.git), so we take
-        the parent to get the main repo root.
-        """
+        """When called from a worktree, returns the main repo path, not the worktree path."""
         mock_result = MagicMock()
-        # From a worktree, --git-common-dir returns the main repo's .git dir
         mock_result.stdout = "/path/to/main-repo/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = get_repo_root()
-        # Should resolve to main repo, not the worktree
+            result = _git_repo_root()
         assert result == Path("/path/to/main-repo")
 
     def test_falls_back_to_show_toplevel_for_external_git_dir(self):
-        """When git dir is external (not ending in .git), fall back to --show-toplevel.
-
-        This handles Docker setups where the git directory is bind-mounted
-        separately (e.g., /repo-git instead of /workspace/.git).
-        """
+        """When git dir is external (not ending in .git), fall back to --show-toplevel."""
         common_result = MagicMock()
-        common_result.stdout = "/repo-git\n"  # External git dir, not ending in .git
+        common_result.stdout = "/repo-git\n"
         toplevel_result = MagicMock()
         toplevel_result.stdout = "/workspace\n"
 
@@ -164,7 +156,7 @@ class TestGetRepoRoot:
             raise ValueError(f"Unexpected command: {cmd}")
 
         with patch("host.session_utils.subprocess.run", side_effect=mock_run) as mock_run_fn:
-            result = get_repo_root()
+            result = _git_repo_root()
 
         assert result == Path("/workspace")
         assert mock_run_fn.call_count == 2
@@ -173,8 +165,25 @@ class TestGetRepoRoot:
         mock_result = MagicMock()
         mock_result.stdout = "/some/path/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = get_repo_root()
+            result = _git_repo_root()
         assert str(result) == "/some/path"
+
+    def test_propagates_subprocess_error(self):
+        with patch("host.session_utils.subprocess.run",
+                   side_effect=subprocess.CalledProcessError(128, "git")):
+            with pytest.raises(subprocess.CalledProcessError):
+                _git_repo_root()
+
+    def test_returns_path_type(self):
+        mock_result = MagicMock()
+        mock_result.stdout = "/repo/.git\n"
+        with patch("host.session_utils.subprocess.run", return_value=mock_result):
+            result = _git_repo_root()
+        assert isinstance(result, Path)
+
+
+class TestGetRepoRoot:
+    """Tests for get_repo_root() - with .nightshift/ validation."""
 
     def test_propagates_subprocess_error(self):
         with patch("host.session_utils.subprocess.run",
@@ -182,12 +191,69 @@ class TestGetRepoRoot:
             with pytest.raises(subprocess.CalledProcessError):
                 get_repo_root()
 
-    def test_returns_path_type(self):
+    def test_get_repo_root_resolves_symlinks(self, tmp_path):
+        """Symlinked directories should resolve to their real paths."""
+        real_repo = tmp_path / "real-repo"
+        real_repo.mkdir()
+        (real_repo / ".git").mkdir()
+        (real_repo / ".nightshift").mkdir()
+
+        symlink = tmp_path / "symlinked-repo"
+        symlink.symlink_to(real_repo)
+
         mock_result = MagicMock()
-        mock_result.stdout = "/repo/.git\n"
+        mock_result.stdout = f"{symlink}/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
             result = get_repo_root()
-        assert isinstance(result, Path)
+
+        assert result == real_repo  # Should resolve through symlink
+
+    def test_get_repo_root_finds_nightshift_dir(self, tmp_path):
+        """Returns git root if .nightshift/ exists there."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / ".nightshift").mkdir()
+
+        mock_result = MagicMock()
+        mock_result.stdout = f"{repo}/.git\n"
+        with patch("host.session_utils.subprocess.run", return_value=mock_result):
+            result = get_repo_root()
+
+        assert result == repo
+
+    def test_get_repo_root_walks_up_to_find_nightshift(self, tmp_path, monkeypatch):
+        """If git root lacks .nightshift/, walk up from cwd to find it."""
+        actual_repo = tmp_path / "actual-repo"
+        actual_repo.mkdir()
+        (actual_repo / ".nightshift").mkdir()
+
+        nested = actual_repo / "subdir" / "nested"
+        nested.mkdir(parents=True)
+        (nested / ".git").mkdir()
+
+        monkeypatch.chdir(nested)
+
+        mock_result = MagicMock()
+        mock_result.stdout = f"{nested}/.git\n"
+        with patch("host.session_utils.subprocess.run", return_value=mock_result):
+            result = get_repo_root()
+
+        assert result == actual_repo
+
+    def test_get_repo_root_errors_when_no_nightshift(self, tmp_path, monkeypatch):
+        """Raises RuntimeError if no .nightshift/ found anywhere."""
+        random_dir = tmp_path / "random"
+        random_dir.mkdir()
+        (random_dir / ".git").mkdir()
+
+        monkeypatch.chdir(random_dir)
+
+        mock_result = MagicMock()
+        mock_result.stdout = f"{random_dir}/.git\n"
+        with patch("host.session_utils.subprocess.run", return_value=mock_result):
+            with pytest.raises(RuntimeError, match="No .nightshift/ found"):
+                get_repo_root()
 
 
 # ── sessions_dir ──────────────────────────────────────────────────────────────
