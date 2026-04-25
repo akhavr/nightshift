@@ -17,7 +17,7 @@ from host.constants import (
     TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
     TRACKER_TERMINATION_WAIT_S,
 )
-from host.session_utils import read_state, update_status
+from host.session_utils import read_state, update_status, has_active_sessions
 from core.config import load_workflow, create_tracker, WorkflowConfig
 from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
@@ -346,6 +346,8 @@ class HostWatcher:
             if self._reload.is_set():
                 self._reload.clear()
                 self.reload_config()
+            if not self._check_worktree_integrity():
+                break
             self._check_socket_server_health()
             tg_answers, tg_reviews = (
                 self.telegram.poll_all(self.qa._paused) if self.telegram.enabled else ({}, {})
@@ -463,6 +465,44 @@ class HostWatcher:
             log.error(f"Failed to restart socket server: {e}")
             self._socket_restart_count += 1
             self._socket_last_restart = now
+
+    def _check_worktree_integrity(self) -> bool:
+        """Check if .git/worktrees/ exists when active sessions exist.
+
+        If worktrees directory is missing while sessions are active, logs a
+        CRITICAL error and triggers shutdown to prevent cascading failures.
+
+        Returns True if integrity check passes, False if watcher should halt.
+        """
+        worktrees_dir = self.repo_dir / ".git" / "worktrees"
+
+        if not has_active_sessions(self.repo_dir):
+            return True
+
+        if worktrees_dir.exists():
+            return True
+
+        # Critical: worktrees deleted while sessions active
+        active_sids = []
+        for session_dir in self.sessions_dir.iterdir():
+            state_file = session_dir / "state.json"
+            if not state_file.exists():
+                continue
+            try:
+                state = json.loads(state_file.read_text())
+                status = state.get("status", "")
+                if status in ("working", "starting", "reviewing"):
+                    active_sids.append(state.get("issue_id", session_dir.name))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+        log.critical(
+            "FATAL: .git/worktrees/ deleted while sessions active: %s. "
+            "Run git worktree repair. Halting watcher.",
+            active_sids
+        )
+        self._shutdown.set()
+        return False
 
     def check_background_launches(self):
         """Poll recently launched background processes for early exit.
