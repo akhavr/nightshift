@@ -433,6 +433,81 @@ fi
 """
 
 
+class TestEntrypointRegression:
+    """Verify docker-entrypoint.sh matches expected OAuth logic."""
+
+    def test_entrypoint_has_oauth_check(self):
+        """docker-entrypoint.sh must have CODEX_OAUTH_PRESENT check before config generation."""
+        from pathlib import Path
+
+        entrypoint = Path(__file__).parent.parent / "docker-entrypoint.sh"
+        content = entrypoint.read_text()
+
+        # Must initialize CODEX_OAUTH_PRESENT=0
+        assert "CODEX_OAUTH_PRESENT=0" in content, "Missing CODEX_OAUTH_PRESENT initialization"
+
+        # Must set CODEX_OAUTH_PRESENT=1 when auth.json exists
+        assert "CODEX_OAUTH_PRESENT=1" in content, "Missing CODEX_OAUTH_PRESENT=1 set"
+
+        # Must check CODEX_OAUTH_PRESENT before config generation
+        assert 'if [ "$CODEX_OAUTH_PRESENT" = "1" ]' in content, "Missing OAuth check conditional"
+
+        # OAuth check must appear BEFORE OPENAI_API_KEY export
+        oauth_check_pos = content.find('if [ "$CODEX_OAUTH_PRESENT" = "1" ]')
+        openai_export_pos = content.find('export OPENAI_API_KEY="$CODEX_KEY"')
+
+        assert oauth_check_pos < openai_export_pos, (
+            "OAuth check must appear before OPENAI_API_KEY export to prevent override"
+        )
+
+    def test_entrypoint_oauth_flow(self, tmp_path):
+        """End-to-end: actual entrypoint OAuth logic skips config.toml when auth.json present."""
+        from pathlib import Path
+
+        entrypoint = Path(__file__).parent.parent / "docker-entrypoint.sh"
+        content = entrypoint.read_text()
+
+        # Extract the Codex config section (from CODEX_OAUTH_PRESENT=0 to before MCP add)
+        start = content.find("CODEX_OAUTH_PRESENT=0")
+        end = content.find("codex mcp add nightshift-signals")
+        assert start != -1 and end != -1, "Could not find Codex config section"
+
+        script_text = "#!/bin/sh\n" + content[start:end]
+
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        (codex_auth / "auth.json").write_text('{"auth_mode": "oauth", "refresh_token": "tok"}')
+
+        script_text = script_text.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "test.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(fake_home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-should-be-ignored",
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        # OAuth auth.json should be copied
+        assert (fake_home / ".codex" / "auth.json").exists()
+
+        # config.toml should NOT exist (OAuth overrides API key config)
+        assert not (fake_home / ".codex" / "config.toml").exists(), (
+            "config.toml should not be generated when OAuth auth.json is present"
+        )
+
+
 class TestPluginsCopy:
 
     def test_entrypoint_copies_plugins_dir(self, tmp_path):
