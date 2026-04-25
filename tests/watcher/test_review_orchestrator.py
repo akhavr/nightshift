@@ -1053,6 +1053,58 @@ class TestHostSideRebase:
         assert (coder_sd / "resume-prompt.md").exists()
         assert "REBASE CONFLICT" in (coder_sd / "resume-prompt.md").read_text()
 
+    def test_rebase_conflict_clears_completed_at(self, tmp_path):
+        """SSM-11: Rebase conflict should clear completed_at when resuming coder.
+
+        Sessions in waiting:review have completed_at set. When resuming for
+        rebase conflict, completed_at must be cleared so the orphan detector
+        doesn't treat it as a crashed completed session.
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\n"
+            "workspace:\n"
+            "  root: .worktrees\n"
+            "  base_branch: master\n"
+            "---\n"
+        )
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        # Set completed_at to simulate a completed coder session
+        state = json.loads((coder_sd / "state.json").read_text())
+        state["completed_at"] = "2025-01-01T00:00:00Z"
+        (coder_sd / "state.json").write_text(json.dumps(state))
+
+        # Create worktree directory
+        worktree = w.repo_dir / ".worktrees" / "agent-abc"
+        worktree.mkdir(parents=True)
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid)) or True
+        w.telegram.notify = MagicMock()
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
+             patch("core.config.load_workflow") as mock_lw:
+            mock_rebase.return_value = "REBASE CONFLICT: fix conflicts"
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            cfg.workspace.test_command = None
+            cfg.workspace.test_timeout_s = 120
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Verify completed_at is cleared
+        state = json.loads((coder_sd / "state.json").read_text())
+        assert "completed_at" not in state, \
+            f"completed_at should be cleared on rebase conflict, but found: {state.get('completed_at')}"
+        assert state["status"] == "working"
+
     def test_rebase_posts_tracker_comment(self, tmp_path):
         """Rebase failure posts a tracker comment about resuming."""
         w = _make_watcher(tmp_path)
