@@ -98,6 +98,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "--memory=8g", "--memory-swap=24g",
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
+        "-v", f"{workspace_mount}/.git:/workspace/.git:ro",  # WT-7: Protect .git from container corruption
         "-v", f"{session_dir}:/session:rw",
         *git_mounts,
         "-v", f"{workflow_mount_path}:/workspace/WORKFLOW.md:ro",
