@@ -40,6 +40,7 @@ class SessionRunner:
         workspace_config: "WorkspaceConfig | None" = None,
         pricing: "PricingConfig | None" = None,
         is_review: bool = False,
+        signal_method: str = "auto",
     ):
         self.agent = agent
         self.tracker = tracker
@@ -52,6 +53,7 @@ class SessionRunner:
         self.terminal_statuses = terminal_statuses
         self.pricing = pricing
         self.is_review = is_review
+        self.signal_method = signal_method
         self._workspace: Workspace | None = None
         self._pending_questions: list[str] = []  # OQ-7: queue, not overwrite
         self._new_comments: list[TrackerComment] = []  # accumulated from tracker reload
@@ -137,14 +139,15 @@ class SessionRunner:
         question_time: float | None = None  # OQ-4: track when question was asked
 
         for event in self.agent.stream_events():
-            # Check file-based signals before processing agent output
-            file_signal = self._check_file_signals()
-            if file_signal is not None:
-                result = self._handle_file_signal(file_signal)
-                if result == "STOP":
-                    break
-                if result == "QUESTION_ASKED":
-                    question_time = time.monotonic()
+            # Check file-based signals if signal_method allows
+            if self.signal_method in ("auto", "file"):
+                file_signal = self._check_file_signals()
+                if file_signal is not None:
+                    result = self._handle_file_signal(file_signal)
+                    if result == "STOP":
+                        break
+                    if result == "QUESTION_ASKED":
+                        question_time = time.monotonic()
 
             self.state_mgr.append_raw(event.raw)
 
@@ -311,6 +314,11 @@ class SessionRunner:
 
     def _handle_text(self, text: str) -> str | None:
         self.state_mgr.append_conversation("assistant", text)
+
+        # Skip text marker parsing if signal_method is "file"
+        if self.signal_method == "file":
+            return None
+
         question_content = self._extract_question(text)
 
         for line in text.splitlines():

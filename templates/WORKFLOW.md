@@ -4,6 +4,7 @@ agent:
   kind: claude-code
   max_turns: 50
   stall_timeout_s: 300
+  signal_method: auto  # "auto", "mcp", "text", "file"
   extra_args: []
 
 tracker:

@@ -10,6 +10,7 @@ class AgentConfig:
     max_turns: int = 50
     stall_timeout_s: int = 300
     extra_args: list[str] = field(default_factory=list)
+    signal_method: str = "auto"  # "auto", "mcp", "text", "file"
     extra: dict[str, Any] = field(default_factory=dict)
 
 
