@@ -6,6 +6,7 @@ cannot unlink mounted files like WORKFLOW.md.
 """
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -18,7 +19,6 @@ CONTAINER_WORKTREE_PATH = "/workspace"  # container workspace mount point
 
 def _clean_git_env() -> dict:
     """Return env dict without GIT_DIR/GIT_WORK_TREE to operate on the repo directly."""
-    import os
     env = os.environ.copy()
     env.pop("GIT_DIR", None)
     env.pop("GIT_WORK_TREE", None)
