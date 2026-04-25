@@ -302,9 +302,18 @@ def safe_prune(repo: Path) -> None:
         log.debug("Skipping worktree prune: active sessions exist")
         return
 
+    # Log worktrees before prune
+    before = subprocess.run(["git", "worktree", "list", "--porcelain"],
+                            capture_output=True, text=True, cwd=str(repo))
+    log.info(f"Worktree prune starting. Current worktrees:\n{before.stdout.strip()}")
+
     # Now safe to prune
-    subprocess.run(["git", "worktree", "prune"],
-                   capture_output=True, cwd=str(repo))
+    result = subprocess.run(["git", "worktree", "prune", "-v"],
+                            capture_output=True, text=True, cwd=str(repo))
+    if result.stdout.strip():
+        log.warning(f"Worktree prune removed:\n{result.stdout.strip()}")
+    else:
+        log.debug("Worktree prune: nothing to remove")
 
 
 # ── Worktree cleanup ────────────────────────────────────
