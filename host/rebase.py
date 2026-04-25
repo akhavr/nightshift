@@ -6,6 +6,7 @@ cannot unlink mounted files like WORKFLOW.md.
 """
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,48 @@ log = logging.getLogger("watcher")
 
 TEST_COMMAND_TIMEOUT_S = 120  # timeout for test command execution
 CONTAINER_GIT_PATH = "/repo-git/"  # container mount point for .git directory
+CONTAINER_WORKTREE_PATH = "/workspace"  # container workspace mount point
+
+
+def _clean_git_env() -> dict:
+    """Return env dict without GIT_DIR/GIT_WORK_TREE to operate on the repo directly."""
+    env = os.environ.copy()
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    return env
+
+
+def sanitize_git_config(repo: Path) -> bool:
+    """Remove core.worktree=/workspace if set by container.
+
+    Container may set core.worktree to /workspace in the repo's .git/config.
+    This breaks host-side git commands because /workspace doesn't exist on host.
+
+    Returns True if sanitization occurred, False otherwise.
+    """
+    env = _clean_git_env()
+    result = subprocess.run(
+        ["git", "config", "--get", "core.worktree"],
+        cwd=str(repo), capture_output=True, text=True, env=env,
+    )
+    if result.returncode != 0:
+        return False  # not set
+
+    worktree_value = result.stdout.strip()
+    if worktree_value != CONTAINER_WORKTREE_PATH:
+        return False  # set to something else, leave it alone
+
+    # Unset the container worktree path
+    unset_result = subprocess.run(
+        ["git", "config", "--unset", "core.worktree"],
+        cwd=str(repo), capture_output=True, text=True, env=env,
+    )
+    if unset_result.returncode == 0:
+        log.info(f"Sanitized core.worktree (was {CONTAINER_WORKTREE_PATH}) in {repo}")
+        return True
+
+    log.warning(f"Failed to unset core.worktree in {repo}: {unset_result.stderr}")
+    return False
 
 
 def _fix_container_gitdir(worktree_path: Path, repo_root: Path | None = None) -> None:
@@ -78,6 +121,10 @@ def attempt_pre_review_rebase(
 
     # Fix gitdir if container corrupted it (points to /repo-git/)
     _fix_container_gitdir(worktree_path, repo_root)
+
+    # Sanitize core.worktree if container set it to /workspace
+    if repo_root:
+        sanitize_git_config(repo_root)
 
     log.info(f"Pre-review rebase onto {base_branch} in {worktree_path}...")
     result = _rebase(worktree_path, base_branch)

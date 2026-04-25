@@ -11,6 +11,7 @@ from host.constants import (
     SHORT_ID_LEN, CONFLICT_FILE_PREVIEW_LEN,
 )
 from host.git_utils import fetch_and_resolve_ref
+from host.rebase import sanitize_git_config
 from host.session_utils import update_status
 
 BEHIND_BASE_COMMIT_PREVIEW = 10  # max commits to show in behind-base warning
@@ -22,6 +23,9 @@ def check_branch_not_behind_base(repo: Path, branch: str, base: str) -> str | No
     Returns None if the branch is up to date, or a message describing
     the divergence if the branch is behind.
     """
+    # Sanitize core.worktree if container set it to /workspace
+    sanitize_git_config(repo)
+
     base_ref = fetch_and_resolve_ref(repo, base)
 
     # Find commits in base that are not in the agent branch
