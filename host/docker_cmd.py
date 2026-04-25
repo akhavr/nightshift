@@ -145,8 +145,9 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
     if not docker_remove(container_name):
         raise RuntimeError(f"Failed to remove stale container {container_name}")
 
-    # Save the worktree .git file — the container rewrites it to /repo-git/...
-    # which is invalid on the host. Restore after container exits.
+    # Defense-in-depth: save/restore the worktree .git file.
+    # The container uses GIT_DIR/GIT_WORK_TREE env vars now, so it shouldn't
+    # modify .git. But if anything corrupts it, we restore the original.
     worktree_git = Path(workspace_mount) / ".git"
     original_git_content = None
     if worktree_git.is_file():
