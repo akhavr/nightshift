@@ -106,6 +106,13 @@ class RebaseResult:
 
 def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
     """Fetch latest base branch and rebase the worktree branch onto it."""
+    # Stash uncommitted changes before rebase (e.g., WORKFLOW.md local config)
+    stash_result = subprocess.run(
+        ["git", "stash", "--include-untracked", "-m", "pre-rebase-stash"],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+    had_stash = "No local changes" not in stash_result.stdout
+
     # Fetch latest from remote (ignore failure — remote may not exist)
     fetch_result = subprocess.run(
         ["git", "fetch", "origin", base_branch],
@@ -119,6 +126,13 @@ def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
         cwd=str(worktree_path), capture_output=True, text=True,
     )
     if result.returncode == 0:
+        if had_stash:
+            pop_result = subprocess.run(
+                ["git", "stash", "pop"],
+                cwd=str(worktree_path), capture_output=True, text=True,
+            )
+            if pop_result.returncode != 0:
+                log.warning(f"Stash pop failed (conflicts?): {pop_result.stderr}")
         return RebaseResult(success=True)
 
     # Collect conflict details before aborting
@@ -136,6 +150,16 @@ def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
         ["git", "rebase", "--abort"],
         cwd=str(worktree_path), capture_output=True, text=True,
     )
+
+    # Restore stashed changes after abort
+    if had_stash:
+        pop_result = subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=str(worktree_path), capture_output=True, text=True,
+        )
+        if pop_result.returncode != 0:
+            log.warning(f"Stash pop failed after rebase abort: {pop_result.stderr}")
+
     return RebaseResult(success=False, conflict_details=details)
 
 
