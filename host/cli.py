@@ -1009,9 +1009,8 @@ def _stop_and_build_mid_flight(sid: str, sd, message: str) -> str:
     return _build_mid_flight_prompt(message)
 
 
-def _collect_review_feedback(wf, repo, issue_id: str, inline) -> str:
+def _collect_review_feedback(config, repo, issue_id: str, inline) -> str:
     """Collect tracker comments and return a review revision prompt."""
-    config = load_workflow(wf)
     tracker = get_tracker_with_fallback(config, repo)
     review_comments = collect_review_feedback(tracker, issue_id)
     feedback = build_revise_prompt(review_comments, inline)
@@ -1054,7 +1053,7 @@ def cmd_revise(a):
     if status in WORKING_STATUSES:
         feedback = _stop_and_build_mid_flight(sid, sd, inline)
     else:
-        feedback = _collect_review_feedback(wf, r, a.issue_id, inline)
+        feedback = _collect_review_feedback(config, r, a.issue_id, inline)
         # Clear completed_at when resuming from completion states (SSM-11)
         clear_completed_at(sd)
         # Clean up sibling review session if exists
