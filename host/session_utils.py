@@ -133,6 +133,20 @@ def update_state_fields(session_dir: Path, **fields) -> None:
         write_state(session_dir, state)
 
 
+def clear_completed_at(session_dir: Path) -> None:
+    """Clear completed_at when resuming from a completion state.
+
+    When a session in waiting:review or waiting:human-review is resumed
+    (e.g., revise verdict), completed_at must be cleared so the orphan
+    detector doesn't treat it as a completed session that crashed.
+    """
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        if "completed_at" in state:
+            del state["completed_at"]
+            write_state(session_dir, state)
+
+
 # ── Session archival ────────────────────────────────────
 
 def archive_session(session_dir: Path, repo: Path | None = None) -> Path | None:

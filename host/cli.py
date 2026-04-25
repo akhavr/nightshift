@@ -48,6 +48,7 @@ from host.merge import (
 )
 from host.session_utils import (
     archive_session,
+    clear_completed_at,
     get_repo_root,
     read_state, write_state, update_status,
     force_remove_dir, remove_worktree,
@@ -1048,6 +1049,8 @@ def cmd_revise(a):
         feedback = _stop_and_build_mid_flight(sid, sd, inline)
     else:
         feedback = _collect_review_feedback(wf, r, a.issue_id, inline)
+        # Clear completed_at when resuming from completion states (SSM-11)
+        clear_completed_at(sd)
 
     (sd / "resume-prompt.md").write_text(feedback)
     update_status(sd, "working")

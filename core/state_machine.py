@@ -5,6 +5,22 @@ class InvalidTransition(Exception):
     """Raised when a state transition is not allowed."""
 
 
+# Terminal states: session is fully done, no further transitions allowed
+TERMINAL_STATES: frozenset[str] = frozenset({
+    "accepted",
+    "rejected",
+    "closed",
+})
+
+# Completion states: coder finished work, but session can still resume
+# (e.g., rebase conflict, revise verdict). These have completed_at set
+# but can transition back to working.
+COMPLETION_STATES: frozenset[str] = frozenset({
+    "waiting:review",
+    "waiting:human-review",
+})
+
+
 STATES: frozenset[str] = frozenset({
     "starting",
     "working",

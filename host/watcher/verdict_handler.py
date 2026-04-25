@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from host.constants import SHORT_ID_LEN
-from host.session_utils import update_status as _update_status
+from host.session_utils import update_status as _update_status, clear_completed_at
 from core.config import load_workflow
 from core.protocols import NotificationLevel
 from core.review import (
@@ -158,6 +158,8 @@ class VerdictHandler:
             feedback = build_revise_prompt([], inline_feedback="\n".join(parts))
             (coder_dir / "resume-prompt.md").write_text(feedback)
 
+            # Clear completed_at so orphan detection can resume if container crashes
+            clear_completed_at(coder_dir)
             _update_status(coder_dir, "working")
             self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")

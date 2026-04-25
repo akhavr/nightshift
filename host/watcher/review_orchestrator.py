@@ -14,7 +14,7 @@ from host.constants import (
     REVIEW_SESSION_PREFIX,
 )
 from core.protocols import NotificationLevel
-from host.session_utils import read_state, update_status as _update_status
+from host.session_utils import read_state, update_status as _update_status, clear_completed_at
 from host.rebase import attempt_pre_review_rebase
 from core.config import load_workflow
 from core.review import parse_nightshift_command
@@ -229,6 +229,8 @@ class ReviewOrchestrator:
 
         # Write resume prompt
         (session_dir / "resume-prompt.md").write_text(resume_prompt)
+        # Clear completed_at when resuming from completion states (SSM-11)
+        clear_completed_at(session_dir)
         _update_status(session_dir, "working")
 
         # Post tracker comment

@@ -9,7 +9,7 @@ from host.constants import (
     COMMAND_BACKOFF_BASE_S, COMMAND_BACKOFF_CAP_S, COMMAND_BACKOFF_CAP_CYCLES,
     SHORT_ID_LEN,
 )
-from host.session_utils import update_status as _update_status
+from host.session_utils import update_status as _update_status, clear_completed_at
 from core.protocols import NotificationLevel
 from core.review import collect_review_feedback, build_revise_prompt
 from host.watcher.telegram_relay import TelegramRelay
@@ -63,6 +63,8 @@ class CommandExecutor:
             feedback = build_revise_prompt(review_comments)
             (session_dir / "resume-prompt.md").write_text(feedback)
 
+            # Clear completed_at when resuming from completion states (SSM-11)
+            clear_completed_at(session_dir)
             _update_status(session_dir, "working")
 
             self._comment_counts.pop(sid, None)

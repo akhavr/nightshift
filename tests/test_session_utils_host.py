@@ -14,6 +14,7 @@ from host.session_utils import (
     ARCHIVE_FILES,
     _git_repo_root,
     archive_session,
+    clear_completed_at,
     force_remove_dir,
     get_repo_root,
     increment_orphan_resumes,
@@ -626,3 +627,28 @@ class TestLockedStateOperations:
 
         update_status(tmp_path, "done")
         assert (tmp_path / "state.json.lock").exists()
+
+    def test_clear_completed_at_removes_field(self, tmp_path):
+        """clear_completed_at removes completed_at field from state (SSM-11)."""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "status": "waiting:review",
+            "completed_at": "2025-01-01T00:00:00Z",
+            "other": "preserved"
+        }))
+
+        clear_completed_at(tmp_path)
+
+        state = read_state(tmp_path)
+        assert "completed_at" not in state
+        assert state["other"] == "preserved"
+
+    def test_clear_completed_at_noop_if_not_set(self, tmp_path):
+        """clear_completed_at is a no-op if completed_at is not set."""
+        (tmp_path / "state.json").write_text(json.dumps({
+            "status": "working"
+        }))
+
+        clear_completed_at(tmp_path)
+
+        state = read_state(tmp_path)
+        assert state == {"status": "working"}

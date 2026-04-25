@@ -7,6 +7,8 @@ from core.state_machine import (
     InvalidTransition,
     STATES,
     TRANSITIONS,
+    TERMINAL_STATES,
+    COMPLETION_STATES,
 )
 
 
@@ -103,3 +105,39 @@ class TestSessionStateMachine:
         ssm = SessionStateMachine(initial_state="working")
         ssm.transition("waiting:review")
         assert ssm.state == "waiting:review"
+
+
+class TestStateCategories:
+    """Tests for TERMINAL_STATES and COMPLETION_STATES (SSM-11)."""
+
+    def test_terminal_states_are_subset_of_states(self):
+        """TERMINAL_STATES should be a subset of STATES."""
+        assert TERMINAL_STATES.issubset(STATES)
+
+    def test_completion_states_are_subset_of_states(self):
+        """COMPLETION_STATES should be a subset of STATES."""
+        assert COMPLETION_STATES.issubset(STATES)
+
+    def test_terminal_and_completion_are_disjoint(self):
+        """TERMINAL_STATES and COMPLETION_STATES should not overlap."""
+        assert TERMINAL_STATES.isdisjoint(COMPLETION_STATES)
+
+    def test_terminal_states_content(self):
+        """TERMINAL_STATES should contain exactly accepted, rejected, closed."""
+        assert TERMINAL_STATES == {"accepted", "rejected", "closed"}
+
+    def test_completion_states_content(self):
+        """COMPLETION_STATES should contain waiting:review and waiting:human-review."""
+        assert COMPLETION_STATES == {"waiting:review", "waiting:human-review"}
+
+    def test_terminal_states_have_no_outgoing_transitions(self):
+        """Terminal states should not have any outgoing transitions."""
+        for state in TERMINAL_STATES:
+            outgoing = [t for t in TRANSITIONS if t[0] == state]
+            assert not outgoing, f"{state} has outgoing transitions: {outgoing}"
+
+    def test_completion_states_can_transition_to_working(self):
+        """Completion states should be able to transition back to working."""
+        for state in COMPLETION_STATES:
+            assert (state, "working") in TRANSITIONS, \
+                f"{state} should be able to transition to working"
