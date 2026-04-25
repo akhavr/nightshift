@@ -5,6 +5,7 @@ contention. The watcher's internal code uses QueueTrackerProxy (direct
 queue submission). External CLI processes connect via the socket server.
 """
 
+import errno
 import logging
 import os
 import queue
@@ -174,6 +175,10 @@ class TrackerSocketServer:
     def socket_path(self) -> Path:
         return self._socket_path
 
+    def is_alive(self) -> bool:
+        """Check if the socket server thread is still running."""
+        return self._thread.is_alive()
+
     def start(self) -> None:
         # Remove stale socket file
         if self._socket_path.exists():
@@ -201,6 +206,44 @@ class TrackerSocketServer:
             self._socket_path.unlink(missing_ok=True)
         log.info("Tracker socket server stopped")
 
+    def restart(self) -> None:
+        """Restart the socket server after a crash.
+
+        Creates a fresh thread and socket since threads can't be restarted
+        after exit. The ThreadPoolExecutor is reused if still alive.
+        """
+        log.info("Restarting tracker socket server")
+
+        # Clean up old socket file if it exists
+        if self._socket_path.exists():
+            self._socket_path.unlink(missing_ok=True)
+
+        # Close old server socket if somehow still open
+        if self._server_sock:
+            try:
+                self._server_sock.close()
+            except OSError:
+                pass
+
+        # Wait for old thread to fully exit
+        if self._thread.is_alive():
+            self._thread.join(timeout=2)
+
+        # Create fresh thread (threads can't be restarted)
+        self._thread = threading.Thread(target=self._run,
+                                        name="tracker-socket-server",
+                                        daemon=True)
+
+        # Create fresh socket and start
+        self._server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._server_sock.bind(str(self._socket_path))
+        os.chmod(str(self._socket_path), 0o600)
+        self._server_sock.listen(TRACKER_SOCKET_MAX_WORKERS)
+        self._server_sock.setblocking(False)
+
+        self._thread.start()
+        log.info("Tracker socket server restarted on %s", self._socket_path)
+
     def _run(self) -> None:
         """Accept loop using selectors for interruptible shutdown."""
         sel = selectors.DefaultSelector()
@@ -213,6 +256,13 @@ class TrackerSocketServer:
 
         try:
             while not self._shutdown.is_set():
+                # Check if server socket was closed externally
+                try:
+                    if self._server_sock.fileno() < 0:
+                        log.warning("Server socket closed externally, exiting")
+                        break
+                except (ValueError, OSError):
+                    break
                 try:
                     events = sel.select(timeout=0.2)
                 except (ValueError, OSError):
@@ -225,6 +275,9 @@ class TrackerSocketServer:
                     except OSError as e:
                         if not self._shutdown.is_set():
                             log.warning("Socket accept error: %s", e)
+                        # Exit loop if socket is gone (bad file descriptor)
+                        if e.errno == errno.EBADF:
+                            return
         finally:
             sel.close()
 

@@ -544,3 +544,197 @@ class TestQueueTrackerProxy:
         result = self.proxy.run_raw("bug", "show")
         # Since MockTracker has no run_raw, it should fail gracefully
         assert isinstance(result, str)
+
+
+class TestSocketServerRestart:
+    def test_is_alive_returns_true_when_running(self, tmp_path):
+        """is_alive() returns True when server thread is running."""
+        shutdown = threading.Event()
+        tracker = MockTracker()
+        writer = TrackerWriter(tracker, shutdown)
+        writer.start()
+
+        sock_path = tmp_path / "tracker.sock"
+        server = TrackerSocketServer(sock_path, writer, shutdown)
+        server.start()
+
+        try:
+            assert server.is_alive()
+        finally:
+            shutdown.set()
+            server.stop()
+            writer.stop()
+
+    def test_is_alive_returns_false_after_crash(self, tmp_path):
+        """is_alive() returns False when server thread dies."""
+        shutdown = threading.Event()
+        tracker = MockTracker()
+        writer = TrackerWriter(tracker, shutdown)
+        writer.start()
+
+        sock_path = tmp_path / "tracker.sock"
+        server = TrackerSocketServer(sock_path, writer, shutdown)
+        server.start()
+
+        try:
+            assert server.is_alive()
+            # Force the thread to exit by closing the socket and triggering
+            # an error via a connect attempt
+            server._server_sock.close()
+            # Try to connect to trigger select to notice the closed socket
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.settimeout(0.5)
+                client.connect(str(sock_path))
+                client.close()
+            except OSError:
+                pass
+            # Wait for thread to notice and exit
+            for _ in range(10):
+                if not server.is_alive():
+                    break
+                time.sleep(0.1)
+            assert not server.is_alive()
+        finally:
+            shutdown.set()
+            server.stop()
+            writer.stop()
+
+    def test_restart_recovers_dead_server(self, tmp_path):
+        """restart() brings back a dead socket server."""
+        shutdown = threading.Event()
+        tracker = MockTracker(issues={"i1": make_test_issue(issue_id="i1")})
+        writer = TrackerWriter(tracker, shutdown)
+        writer.start()
+
+        sock_path = tmp_path / "tracker.sock"
+        server = TrackerSocketServer(sock_path, writer, shutdown)
+        server.start()
+
+        try:
+            # Kill the server thread by closing the socket and triggering accept
+            server._server_sock.close()
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.settimeout(0.5)
+                client.connect(str(sock_path))
+                client.close()
+            except OSError:
+                pass
+            # Wait for thread to exit
+            for _ in range(10):
+                if not server.is_alive():
+                    break
+                time.sleep(0.1)
+            assert not server.is_alive()
+
+            # Restart should bring it back
+            server.restart()
+            assert server.is_alive()
+
+            # Verify it works again
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5)
+            client.connect(str(sock_path))
+            req = TrackerRequest(method="get_issue", args={"issue_id": "i1"})
+            client.sendall((req.to_json() + "\n").encode())
+            data = b""
+            while b"\n" not in data:
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+            client.close()
+
+            resp = TrackerResponse.from_json(data.decode().strip())
+            assert resp.ok
+        finally:
+            shutdown.set()
+            server.stop()
+            writer.stop()
+
+    def test_socket_server_restarts_on_crash(self, tmp_path, monkeypatch):
+        """If socket server thread dies, watcher restarts it within one loop iteration."""
+        from host.watcher.host_watcher import HostWatcher
+        import host.watcher.host_watcher as hw_module
+
+        # Create minimal workflow config
+        workflow_path = tmp_path / "WORKFLOW.md"
+        workflow_path.write_text("""---
+agent:
+  kind: claude-code
+tracker:
+  kind: static
+---
+Test prompt
+""")
+
+        sessions_dir = tmp_path / ".nightshift" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        repo_dir = tmp_path
+
+        # Mock load_workflow to return a minimal config
+        from core.config import WorkflowConfig, AgentConfig, TrackerConfig
+        mock_config = WorkflowConfig(
+            agent=AgentConfig(kind="static"),
+            tracker=TrackerConfig(kind="static", sync=False),
+            prompt_template="test",
+        )
+        monkeypatch.setattr(hw_module, "load_workflow", lambda p: mock_config)
+        monkeypatch.setattr(hw_module, "create_tracker", lambda c, repo_dir: MockTracker())
+        monkeypatch.setattr(hw_module, "repair_lamport_clocks", lambda p: None)
+
+        watcher = HostWatcher(sessions_dir, repo_dir, auto_start=False,
+                              workflow_path=workflow_path)
+        shutdown = threading.Event()
+
+        # Run watcher in a thread
+        def run_watcher():
+            watcher.run(shutdown_event=shutdown)
+
+        watcher_thread = threading.Thread(target=run_watcher)
+        watcher_thread.start()
+
+        try:
+            # Wait for watcher to start and socket server to be created
+            for _ in range(20):
+                if watcher._socket_server and watcher._socket_server.is_alive():
+                    break
+                time.sleep(0.1)
+
+            assert watcher._socket_server is not None
+            assert watcher._socket_server.is_alive()
+
+            sock_path = watcher._socket_server.socket_path
+
+            # Kill the socket server thread by closing its socket and triggering accept
+            watcher._socket_server._server_sock.close()
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                client.settimeout(0.5)
+                client.connect(str(sock_path))
+                client.close()
+            except OSError:
+                pass
+
+            # Wait for thread to die
+            for _ in range(10):
+                if not watcher._socket_server.is_alive():
+                    break
+                time.sleep(0.1)
+            assert not watcher._socket_server.is_alive(), \
+                "Socket server thread should have died after socket close"
+
+            # Wait for the watcher's health check to restart it
+            # (happens each main loop iteration, every MAIN_LOOP_SLEEP_S seconds)
+            for _ in range(30):
+                if watcher._socket_server.is_alive():
+                    break
+                time.sleep(0.2)
+
+            assert watcher._socket_server.is_alive(), \
+                "Socket server should have been restarted by watcher health check"
+
+        finally:
+            shutdown.set()
+            watcher_thread.join(timeout=10)

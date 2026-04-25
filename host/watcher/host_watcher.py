@@ -12,6 +12,8 @@ from host.constants import (
     REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME,
     BACKGROUND_LAUNCH_CHECK_S, REVIEW_SESSION_PREFIX, RECENTLY_LAUNCHED_FILENAME,
     ORPHAN_GRACE_PERIOD_S,
+    SOCKET_SERVER_RESTART_BACKOFF_BASE_S, SOCKET_SERVER_RESTART_BACKOFF_CAP_S,
+    SOCKET_SERVER_MAX_RESTARTS,
 )
 from host.session_utils import read_state, update_status
 from core.config import load_workflow, create_tracker, WorkflowConfig
@@ -134,6 +136,8 @@ class HostWatcher:
         self._writer: TrackerWriter | None = None
         self._socket_server: TrackerSocketServer | None = None
         self._proxy: QueueTrackerProxy | None = None
+        self._socket_restart_count = 0
+        self._socket_last_restart: float = 0.0
 
         tg_level = self._telegram_level_from_config()
         self.telegram = TelegramRelay(
@@ -320,6 +324,7 @@ class HostWatcher:
             if self._reload.is_set():
                 self._reload.clear()
                 self.reload_config()
+            self._check_socket_server_health()
             tg_answers, tg_reviews = (
                 self.telegram.poll_all(self.qa._paused) if self.telegram.enabled else ({}, {})
             )
@@ -392,6 +397,50 @@ class HostWatcher:
             log.error(f"[{sid}] Failed to launch {cmd}: {e}")
             if f is not None:
                 f.close()
+
+    def _check_socket_server_health(self):
+        """Check if socket server is alive and restart if dead.
+
+        Uses exponential backoff if it keeps dying. After MAX_RESTARTS,
+        logs an error but does not attempt further restarts until the
+        backoff period has elapsed.
+        """
+        if self._socket_server is None:
+            return
+
+        if self._socket_server.is_alive():
+            return
+
+        now = time.time()
+
+        # Check backoff: wait longer between restart attempts
+        if self._socket_restart_count > 0:
+            backoff = min(
+                SOCKET_SERVER_RESTART_BACKOFF_BASE_S * (2 ** (self._socket_restart_count - 1)),
+                SOCKET_SERVER_RESTART_BACKOFF_CAP_S
+            )
+            if now - self._socket_last_restart < backoff:
+                return
+
+        # Check if we've hit the max restart limit
+        if self._socket_restart_count >= SOCKET_SERVER_MAX_RESTARTS:
+            # Reset counter after cap period to allow eventual retry
+            if now - self._socket_last_restart >= SOCKET_SERVER_RESTART_BACKOFF_CAP_S:
+                log.warning("Socket server restart limit reached, resetting counter after backoff")
+                self._socket_restart_count = 0
+            else:
+                return
+
+        log.error("Tracker socket server thread died, restarting "
+                  f"(attempt {self._socket_restart_count + 1})")
+        try:
+            self._socket_server.restart()
+            self._socket_restart_count += 1
+            self._socket_last_restart = now
+        except Exception as e:
+            log.error(f"Failed to restart socket server: {e}")
+            self._socket_restart_count += 1
+            self._socket_last_restart = now
 
     def check_background_launches(self):
         """Poll recently launched background processes for early exit.

@@ -56,6 +56,9 @@ USAGE_LOG_FILENAME = "usage.jsonl"  # Append-only usage log in .nightshift/
 TRACKER_SOCKET_FILENAME = "tracker.sock"  # Unix socket in .nightshift/
 TRACKER_WRITER_QUEUE_SIZE = 100          # Bounded queue to prevent memory issues
 TRACKER_SOCKET_MAX_WORKERS = 4           # ThreadPool for socket connections
+SOCKET_SERVER_RESTART_BACKOFF_BASE_S = 5  # Base backoff for socket server restart
+SOCKET_SERVER_RESTART_BACKOFF_CAP_S = 300  # Max backoff (5 min)
+SOCKET_SERVER_MAX_RESTARTS = 10           # Stop restarting after this many failures
 
 # ── Recently launched persistence ─────────────────────
 RECENTLY_LAUNCHED_FILENAME = "recently_launched.json"  # Persisted launch timestamps
