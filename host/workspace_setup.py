@@ -12,18 +12,22 @@ from pathlib import Path
 
 from core.constants import MERGE_NEEDED_FILENAME
 from host.git_utils import fetch_and_resolve_ref
-from host.session_utils import force_remove_dir
+from host.session_utils import force_remove_dir, safe_prune
 
 
 def create_worktree(repo: Path, wt_path: Path, branch: str,
                     base_branch: str, session_dir: Path, issue_id: str):
-    """Create a fresh git worktree and initialize session state."""
+    """Create a fresh git worktree and initialize session state.
+
+    WT-6: Uses safe_prune instead of global prune to prevent collateral damage
+    to other worktrees with corrupted .git files.
+    """
     session_dir.mkdir(parents=True, exist_ok=True)
 
     if wt_path.exists():
         force_remove_dir(wt_path)
-    subprocess.run(["git", "worktree", "prune"],
-                   capture_output=True, cwd=str(repo))
+    # WT-6: Use safe_prune to fix corrupted gitdirs first and check active sessions
+    safe_prune(repo)
 
     subprocess.run(["git", "branch", branch, base_branch],
                    capture_output=True, cwd=str(repo))

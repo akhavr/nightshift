@@ -2,6 +2,7 @@
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -176,6 +177,44 @@ class TestMergeBaseIntoWorktree:
                                           session_dir=session_dir)
 
         assert result == "noop"
+
+
+class TestCreateWorktreeNoCollateralPrune:
+    """WT-6: Tests that create_worktree doesn't cause collateral damage."""
+
+    def test_create_worktree_no_collateral_prune(self, tmp_path):
+        """create_worktree should use safe_prune, not global prune.
+
+        When another session has a corrupted .git file, global prune would
+        delete its metadata. safe_prune fixes corrupted files first.
+        """
+        repo, run = _init_repo(tmp_path)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        wt_path = tmp_path / "worktree"
+
+        # Track subprocess calls to verify no global prune
+        original_run = subprocess.run
+        prune_calls = []
+
+        def tracking_run(args, **kwargs):
+            if args[:2] == ["git", "worktree"] and "prune" in args:
+                prune_calls.append(args)
+            return original_run(args, **kwargs)
+
+        from host.workspace_setup import create_worktree
+
+        with patch("host.workspace_setup.subprocess.run", side_effect=tracking_run):
+            with patch("host.workspace_setup.safe_prune") as mock_safe_prune:
+                create_worktree(repo, wt_path, "agent/test-branch",
+                                "master", session_dir, "test-issue-123")
+
+        # Should have called safe_prune (the safe helper)
+        mock_safe_prune.assert_called_once_with(repo)
+
+        # Should NOT have called bare `git worktree prune` directly
+        # (safe_prune may call it internally after safety checks)
+        assert prune_calls == []
 
 
 class TestSyncReviewWorktree:

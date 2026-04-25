@@ -15,13 +15,16 @@ from host.session_utils import (
     _git_repo_root,
     archive_session,
     clear_completed_at,
+    fix_all_corrupted_gitdirs,
     force_remove_dir,
     get_repo_root,
+    has_active_sessions,
     increment_orphan_resumes,
     increment_auth_retries,
     increment_provider_outage_retries,
     read_state,
     remove_worktree,
+    safe_prune,
     sessions_dir,
     update_state_fields,
     update_status,
@@ -383,10 +386,8 @@ class TestRemoveWorktree:
         # First call: git worktree remove
         assert calls[0].args[0] == ["git", "worktree", "remove", str(wt), "--force"]
         assert calls[0].kwargs.get("cwd") == str(repo)
-        # Second call: git worktree prune
-        assert calls[1].args[0] == ["git", "worktree", "prune"]
-        # Third call: git branch -D
-        assert calls[2].args[0] == ["git", "branch", "-D", "agent/my-branch"]
+        # Second call: git branch -D (WT-6: no global prune anymore)
+        assert calls[1].args[0] == ["git", "branch", "-D", "agent/my-branch"]
 
     def test_failed_worktree_remove_triggers_force_remove(self, tmp_path):
         repo = tmp_path / "repo"
@@ -417,13 +418,14 @@ class TestRemoveWorktree:
         with patch("host.session_utils.subprocess.run", return_value=success_result) as mock_run:
             remove_worktree(repo, wt, "agent/branch")
 
-        # Only prune and branch -D should be called (not worktree remove)
+        # Only branch -D should be called (not worktree remove, not prune per WT-6)
         cmds = [c.args[0] for c in mock_run.call_args_list]
         assert ["git", "worktree", "remove", str(wt), "--force"] not in cmds
-        assert ["git", "worktree", "prune"] in cmds
+        assert ["git", "worktree", "prune"] not in cmds  # WT-6: no global prune
         assert ["git", "branch", "-D", "agent/branch"] in cmds
 
-    def test_always_runs_prune_and_branch_delete(self, tmp_path):
+    def test_always_runs_branch_delete(self, tmp_path):
+        """WT-6: remove_worktree always deletes the branch (but no global prune)."""
         repo = tmp_path / "repo"
         wt = tmp_path / "worktree"
         # wt does not exist — so worktree remove is skipped
@@ -435,7 +437,7 @@ class TestRemoveWorktree:
             remove_worktree(repo, wt, "my-branch")
 
         cmds = [c.args[0] for c in mock_run.call_args_list]
-        assert ["git", "worktree", "prune"] in cmds
+        assert ["git", "worktree", "prune"] not in cmds  # WT-6: no global prune
         assert ["git", "branch", "-D", "my-branch"] in cmds
 
     def test_worktree_remove_uses_correct_cwd(self, tmp_path):
@@ -465,6 +467,29 @@ class TestRemoveWorktree:
 
         for c in mock_run.call_args_list:
             assert c.kwargs.get("cwd") == str(repo)
+
+    def test_remove_worktree_no_global_prune(self, tmp_path):
+        """WT-6: remove_worktree should NOT call global `git worktree prune`.
+
+        Global prune can delete metadata for other worktrees with corrupted
+        .git files, causing collateral damage to running sessions.
+        """
+        repo = tmp_path / "repo"
+        wt = tmp_path / "worktree"
+        wt.mkdir()
+
+        success_result = MagicMock()
+        success_result.returncode = 0
+
+        with patch("host.session_utils.subprocess.run", return_value=success_result) as mock_run:
+            remove_worktree(repo, wt, "agent/branch")
+
+        cmds = [c.args[0] for c in mock_run.call_args_list]
+        # Should NOT call global prune
+        assert ["git", "worktree", "prune"] not in cmds
+        # Should still call worktree remove and branch delete
+        assert ["git", "worktree", "remove", str(wt), "--force"] in cmds
+        assert ["git", "branch", "-D", "agent/branch"] in cmds
 
 
 # ── archive_session ──────────────────────────────────────────────────────────
@@ -652,3 +677,196 @@ class TestLockedStateOperations:
 
         state = read_state(tmp_path)
         assert state == {"status": "working"}
+
+
+# ── Safe prune (WT-6) ─────────────────────────────────────────────────────────
+
+class TestSafePrune:
+    """Tests for WT-6 safe worktree prune with defense in depth."""
+
+    def test_prune_skips_active_sessions(self, tmp_path):
+        """WT-6: safe_prune should NOT prune if any session is active."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        sessions = repo / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+
+        # Create an active session
+        active = sessions / "abc123"
+        active.mkdir()
+        (active / "state.json").write_text(json.dumps({"status": "working"}))
+
+        with patch("host.session_utils.subprocess.run") as mock_run:
+            safe_prune(repo)
+
+        # Should NOT have called git worktree prune
+        cmds = [c.args[0] for c in mock_run.call_args_list]
+        assert ["git", "worktree", "prune"] not in cmds
+
+    def test_prune_runs_when_no_active_sessions(self, tmp_path):
+        """safe_prune runs when all sessions are inactive."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        sessions = repo / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+
+        # Create an inactive session
+        inactive = sessions / "abc123"
+        inactive.mkdir()
+        (inactive / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+
+        with patch("host.session_utils.subprocess.run") as mock_run:
+            safe_prune(repo)
+
+        cmds = [c.args[0] for c in mock_run.call_args_list]
+        assert ["git", "worktree", "prune"] in cmds
+
+    def test_prune_fixes_corrupted_gitdir_first(self, tmp_path):
+        """WT-6: safe_prune fixes corrupted .git files before pruning."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".nightshift" / "sessions").mkdir(parents=True)
+
+        # Create worktree dir structure
+        worktrees_dir = repo / "worktrees"
+        worktrees_dir.mkdir()
+        wt = worktrees_dir / "agent-abc123"
+        wt.mkdir()
+
+        # Create corrupted .git file pointing to container path
+        git_file = wt / ".git"
+        git_file.write_text("gitdir: /repo-git/worktrees/agent-abc123\n")
+
+        # Create matching host gitdir
+        host_gitdir = repo / ".git" / "worktrees" / "agent-abc123"
+        host_gitdir.mkdir(parents=True)
+
+        # Mock subprocess.run but let file operations happen
+        def mock_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            if args == ["git", "worktree", "list", "--porcelain"]:
+                # Porcelain format: "worktree /path\nHEAD ...\n\n"
+                result.stdout = f"worktree {wt}\nHEAD abc123\nbranch refs/heads/agent-abc123\n\n"
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("host.session_utils.subprocess.run", side_effect=mock_run):
+            safe_prune(repo)
+
+        # The corrupted .git should be fixed before prune
+        fixed_content = git_file.read_text()
+        assert "/repo-git/" not in fixed_content
+        assert str(host_gitdir) in fixed_content
+
+
+class TestHasActiveSessions:
+    """Tests for has_active_sessions helper."""
+
+    def test_returns_true_for_working(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+        session = sessions / "abc123"
+        session.mkdir()
+        (session / "state.json").write_text(json.dumps({"status": "working"}))
+
+        assert has_active_sessions(tmp_path) is True
+
+    def test_returns_true_for_starting(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+        session = sessions / "abc123"
+        session.mkdir()
+        (session / "state.json").write_text(json.dumps({"status": "starting"}))
+
+        assert has_active_sessions(tmp_path) is True
+
+    def test_returns_true_for_reviewing(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+        session = sessions / "abc123"
+        session.mkdir()
+        (session / "state.json").write_text(json.dumps({"status": "reviewing"}))
+
+        assert has_active_sessions(tmp_path) is True
+
+    def test_returns_false_for_waiting_review(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+        session = sessions / "abc123"
+        session.mkdir()
+        (session / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+
+        assert has_active_sessions(tmp_path) is False
+
+    def test_returns_false_when_no_sessions(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+
+        assert has_active_sessions(tmp_path) is False
+
+
+class TestFixAllCorruptedGitdirs:
+    """Tests for fix_all_corrupted_gitdirs helper."""
+
+    def test_fixes_container_path_in_git_file(self, tmp_path):
+        """Fixes .git file pointing to /repo-git/ container path."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        worktrees_dir = repo / "worktrees"
+        wt = worktrees_dir / "agent-abc123"
+        wt.mkdir(parents=True)
+
+        # Corrupted .git file
+        git_file = wt / ".git"
+        git_file.write_text("gitdir: /repo-git/worktrees/agent-abc123\n")
+
+        # Matching host gitdir
+        host_gitdir = repo / ".git" / "worktrees" / "agent-abc123"
+        host_gitdir.mkdir(parents=True)
+
+        def mock_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            if args == ["git", "worktree", "list", "--porcelain"]:
+                result.stdout = f"worktree {wt}\nHEAD abc123\nbranch refs/heads/agent-abc123\n\n"
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("host.session_utils.subprocess.run", side_effect=mock_run):
+            fix_all_corrupted_gitdirs(repo)
+
+        fixed_content = git_file.read_text()
+        assert "/repo-git/" not in fixed_content
+        assert str(host_gitdir) in fixed_content
+
+    def test_skips_already_valid_git_files(self, tmp_path):
+        """Leaves valid .git files unchanged."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        worktrees_dir = repo / "worktrees"
+        wt = worktrees_dir / "agent-abc123"
+        wt.mkdir(parents=True)
+
+        # Valid .git file
+        host_gitdir = repo / ".git" / "worktrees" / "agent-abc123"
+        host_gitdir.mkdir(parents=True)
+        original = f"gitdir: {host_gitdir}\n"
+        git_file = wt / ".git"
+        git_file.write_text(original)
+
+        def mock_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            if args == ["git", "worktree", "list", "--porcelain"]:
+                result.stdout = f"worktree {wt}\nHEAD abc123\nbranch refs/heads/agent-abc123\n\n"
+            else:
+                result.stdout = ""
+            return result
+
+        with patch("host.session_utils.subprocess.run", side_effect=mock_run):
+            fix_all_corrupted_gitdirs(repo)
+
+        assert git_file.read_text() == original
