@@ -59,6 +59,9 @@ TRACKER_SOCKET_MAX_WORKERS = 4           # ThreadPool for socket connections
 SOCKET_SERVER_RESTART_BACKOFF_BASE_S = 5  # Base backoff for socket server restart
 SOCKET_SERVER_RESTART_BACKOFF_CAP_S = 300  # Max backoff (5 min)
 SOCKET_SERVER_MAX_RESTARTS = 10           # Stop restarting after this many failures
+TRACKER_RELOAD_MAX_ATTEMPTS = 3           # Retry tracker creation on SIGHUP
+TRACKER_RELOAD_BACKOFF_BASE_S = 0.5       # Base backoff between retries
+TRACKER_TERMINATION_WAIT_S = 0.5          # Wait for old tracker to fully terminate
 
 # ── Recently launched persistence ─────────────────────
 RECENTLY_LAUNCHED_FILENAME = "recently_launched.json"  # Persisted launch timestamps
