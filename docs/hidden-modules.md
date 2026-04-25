@@ -66,12 +66,16 @@ tests/test_post_run.py::test_notify_done_uses_transition
 **Files:** core/state_machine.py, core/state.py, core/post_run.py
 
 **Implementation:**
-1. SSM.TERMINAL_STATES = {'waiting:review', 'accepted', 'rejected', 'closed'}
-2. Transition to terminal state atomically sets completed_at
-3. Remove mark_done(), mark_completed() - use transition()
-4. post_run.notify_done() calls state_mgr.transition('waiting:review')
+1. SSM.TERMINAL_STATES = {'accepted', 'rejected', 'closed'}
+2. SSM.COMPLETION_STATES = {'waiting:review', 'waiting:human-review'} — completed_at set but resumable
+3. Transition to terminal state atomically sets completed_at
+4. Transition to completion state sets completed_at but allows resume (clears on resume)
+5. Remove mark_done(), mark_completed() - use transition()
+6. post_run.notify_done() calls state_mgr.transition('waiting:review')
 
 **Wired:** The race condition (status="working" + completed_at set) is impossible by construction.
+
+**Note:** `waiting:review` is NOT terminal — it can transition to `reviewing` or back to `working` (rebase conflict, revise verdict). Only `accepted`, `rejected`, `closed` are truly terminal.
 
 ---
 
@@ -214,6 +218,40 @@ tests/watcher/test_session_monitor.py::test_cleanup_only_when_coder_transitioned
 **Wired:** Review sessions auto-cleanup after verdict applied. Status output stays clean.
 
 **Note:** This also fixes the "stale status after accept" UX issue - completed sessions won't linger in `nightshift status` output.
+
+---
+
+### SSM-11: Resume from completion states (rebase/revise fix)
+
+**Problem:** When coder completes, `completed_at` is set and status becomes `waiting:review`. If pre-review rebase conflicts (or revise verdict issued), watcher tries to resume coder but resume logic rejects because `completed_at` is set. This creates a loop: rebase fails → resume blocked → revert to waiting:review → rebase fails → loop.
+
+**Root cause:** `waiting:review` was incorrectly treated as terminal. Resume logic checks `completed_at` to block resume of "completed" sessions, but completion states need to be resumable.
+
+**Tests:**
+```
+tests/test_state_machine.py::test_completion_state_allows_resume
+tests/test_state_machine.py::test_terminal_state_blocks_resume
+tests/test_state_machine.py::test_resume_clears_completed_at
+tests/watcher/test_review_orchestrator.py::test_rebase_conflict_resumes_coder
+tests/watcher/test_verdict_handler.py::test_revise_resumes_coder
+```
+
+**Files:** core/state_machine.py, core/state.py, host/watcher/review_orchestrator.py, host/watcher/verdict_handler.py
+
+**Implementation:**
+1. Distinguish TERMINAL_STATES (truly done) from COMPLETION_STATES (done but resumable)
+2. Resume logic checks TERMINAL_STATES, not completed_at
+3. On resume from completion state, clear completed_at
+4. review_orchestrator: on rebase conflict, transition to 'working' (clears completed_at)
+5. verdict_handler: on revise, transition to 'working' (clears completed_at)
+
+**Wired:** Rebase conflicts and revise verdicts properly resume coder. No more loops.
+
+**Related gaps this fixes:**
+- Rebase conflict after coder completion
+- Revise verdict resumes blocked coder
+- Auth-failure retry from suspended state
+- Orphan recovery from reviewing state
 
 ---
 
@@ -498,6 +536,33 @@ tests/test_workspace_transaction.py::test_rebase_with_conflict_aborts
 
 ---
 
+### WT-6: Safe worktree prune (no collateral damage)
+
+**Problem:** `git worktree prune` is called in `session_utils.remove_worktree()` and `workspace_setup.create_worktree()`. It's a **global** operation that prunes ALL orphaned worktrees, not just the one being removed/created.
+
+If any worktree has a corrupted `.git` file (pointing to `/repo-git/...` container path), prune sees it as orphaned and deletes its metadata — even if it's actively in use by a running container.
+
+**Observed failure:** Session A cleanup runs prune → deletes metadata for corrupted session B → session B's commits become unreachable.
+
+**Tests:**
+```
+tests/test_session_utils_host.py::test_remove_worktree_no_global_prune
+tests/test_session_utils_host.py::test_prune_skips_active_sessions
+tests/test_session_utils_host.py::test_prune_fixes_corrupted_gitdir_first
+tests/test_workspace_setup.py::test_create_worktree_no_collateral_prune
+```
+
+**Files:** host/session_utils.py, host/workspace_setup.py, host/rebase.py
+
+**Implementation (defense in depth - all 3):**
+1. **Don't call global prune** — use `git worktree remove <path>` for specific worktree only, not global prune
+2. **Fix corrupted .git files first** — before any prune, scan all worktrees and fix `/repo-git/...` paths to host paths (reuse `_fix_container_gitdir()` from rebase.py)
+3. **Check session status before prune** — skip prune if any session is `working`, `starting`, `reviewing` (active states)
+
+**Wired:** Cleanup of one session never damages another. Corrupted worktrees are healed, not pruned.
+
+---
+
 ## Execution Order
 
 Priority based on impact and dependencies:
@@ -506,15 +571,17 @@ Priority based on impact and dependencies:
 |-------|--------|-------------|
 | 1 | SSM-1 to SSM-3 | Race condition eliminated |
 | 2 | SSM-4 to SSM-9 | Full SSM integration |
+| 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix |
 | 3 | AES-1 to AES-2 | Event foundation + ClaudeCode |
 | 4 | AES-3 to AES-6 | All agents unified |
-| 5 | WT-0, WT-1, WT-1.5 | Git state self-healing (PARTIAL: 88acf5d done) |
+| 5 | WT-0, WT-1, WT-1.5, WT-6 | Git state self-healing + safe prune (88acf5d, 4e37a29 done) |
 | 6 | WT-2 to WT-5 | Full transactional git |
 
-**Total: 24 issues, each TDD, each wired to real flow.**
+**Total: 27 issues, each TDD, each wired to real flow.**
 
 After Phase 1 (3 issues): Race condition fixed structurally.
 After Phase 2 (6 more): SSM complete, lifecycle explicit.
+After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup.
 After Phase 4 (6 more): Adding new agents is trivial.
-After Phase 5 (3 issues): Git state self-heals from container corruption. WT-1.5 partially done (88acf5d merged).
+After Phase 5 (4 issues): Git state self-heals from container corruption, safe prune prevents collateral damage. WT-1.5 done (88acf5d), env var fix done (4e37a29).
 After Phase 6 (5 more): Git operations are bulletproof.
