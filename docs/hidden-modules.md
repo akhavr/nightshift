@@ -87,6 +87,8 @@ tests/test_post_run.py::test_notify_done_uses_transition
 
 ### SSM-4: Hooks for logging and notifications
 
+**Issue:** d2000b5c84aa
+
 **Tests:**
 ```
 tests/test_state_machine.py::test_on_enter_hook_called
@@ -108,6 +110,8 @@ tests/test_state.py::test_transition_logs_state_change
 
 ### SSM-5: Watcher uses SSM-aware StateManager
 
+**Issue:** 57561f29274b
+
 **Tests:**
 ```
 tests/watcher/test_session_monitor.py::test_orphan_check_uses_state_manager
@@ -125,6 +129,8 @@ tests/watcher/test_session_monitor.py::test_consistent_status_read
 ---
 
 ### SSM-6: Q&A flow uses SSM transitions
+
+**Issue:** 954974afa32b
 
 **Tests:**
 ```
@@ -144,6 +150,8 @@ tests/watcher/test_qa_handler.py::test_qa_validates_transition
 ---
 
 ### SSM-7: Review flow uses SSM transitions
+
+**Issue:** 9ed266080dbd
 
 **Tests:**
 ```
@@ -166,6 +174,8 @@ tests/watcher/test_verdict_handler.py::test_reject_transitions_to_rejected
 
 ### SSM-8: CLI commands use SSM transitions
 
+**Issue:** ab92d978d314
+
 **Tests:**
 ```
 tests/test_cli_commands.py::test_accept_validates_state
@@ -186,6 +196,8 @@ tests/test_cli_commands.py::test_resume_validates_state
 ---
 
 ### SSM-9: Remove legacy status code
+
+**Issue:** f90977b5544b
 
 **Tests:**
 ```
