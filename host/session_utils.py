@@ -234,6 +234,114 @@ def _issue_id_prefix_match(issue_id: str, existing_ids: set[str]) -> bool:
     )
 
 
+# ── Safe worktree prune (WT-6) ──────────────────────────
+
+# Container mount point for .git directory - used to detect corrupted gitdir paths
+CONTAINER_GIT_PATH = "/repo-git/"
+
+# Session statuses that indicate active work (should not prune while these exist)
+ACTIVE_STATUSES = {"working", "starting", "reviewing"}
+
+
+def has_active_sessions(repo: Path) -> bool:
+    """Check if any session is actively running (working, starting, reviewing)."""
+    sessions = repo / ".nightshift" / "sessions"
+    if not sessions.exists():
+        return False
+
+    for session_dir in sessions.iterdir():
+        state_file = session_dir / "state.json"
+        if not state_file.exists():
+            continue
+        try:
+            state = json.loads(state_file.read_text())
+            status = state.get("status", "")
+            if status in ACTIVE_STATUSES:
+                return True
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning("Failed to read %s: %s", state_file, e)
+            continue
+    return False
+
+
+def fix_all_corrupted_gitdirs(repo: Path) -> None:
+    """Fix all worktrees with corrupted .git files pointing to container paths.
+
+    After container exit, the .git file may point to /repo-git/... instead of
+    the host path. This scans all worktrees and fixes them before any prune.
+    """
+    # Get list of worktrees
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    if result.returncode != 0:
+        log.warning("Failed to list worktrees: %s", result.stderr)
+        return
+
+    for line in result.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        wt_path = Path(line.split(" ", 1)[1])
+        _fix_corrupted_gitdir(wt_path, repo)
+
+
+def _fix_corrupted_gitdir(worktree_path: Path, repo_root: Path) -> None:
+    """Fix gitdir path if corrupted by container (points to /repo-git/).
+
+    Reuses the logic from host/rebase.py but as a standalone helper.
+    """
+    git_file = worktree_path / ".git"
+    if not git_file.is_file():
+        return
+
+    try:
+        content = git_file.read_text()
+    except OSError as e:
+        log.warning("Cannot read %s: %s", git_file, e)
+        return
+
+    if CONTAINER_GIT_PATH not in content:
+        return  # Already has a valid host path
+
+    worktree_name = worktree_path.name
+    host_gitdir = repo_root / ".git" / "worktrees" / worktree_name
+
+    if not host_gitdir.exists():
+        log.warning("Cannot fix gitdir: %s does not exist", host_gitdir)
+        return
+
+    new_content = f"gitdir: {host_gitdir}\n"
+    try:
+        git_file.write_text(new_content)
+        log.info("Fixed container gitdir in %s -> %s", git_file, host_gitdir)
+    except OSError as e:
+        log.warning("Cannot write %s: %s", git_file, e)
+
+
+def safe_prune(repo: Path) -> None:
+    """Safely prune worktrees with defense-in-depth.
+
+    WT-6: Before calling global prune:
+    1. Fix all corrupted .git files (pointing to /repo-git/)
+    2. Skip prune if any session is active (working, starting, reviewing)
+
+    This prevents collateral damage where prune deletes metadata for
+    worktrees that appear orphaned due to corrupted gitdir paths.
+    """
+    # Defense 1: Fix corrupted .git files before prune can see them as orphaned
+    fix_all_corrupted_gitdirs(repo)
+
+    # Defense 2: Don't prune if sessions are actively running
+    if has_active_sessions(repo):
+        log.debug("Skipping worktree prune: active sessions exist")
+        return
+
+    # Now safe to prune
+    subprocess.run(["git", "worktree", "prune"],
+                   capture_output=True, cwd=str(repo))
+
+
 # ── Worktree cleanup ────────────────────────────────────
 
 def force_remove_dir(path: Path) -> None:
@@ -254,15 +362,21 @@ def force_remove_dir(path: Path) -> None:
 
 
 def remove_worktree(repo: Path, wt: Path, branch: str) -> None:
-    """Remove a git worktree and its branch, handling broken .git and root-owned files."""
+    """Remove a git worktree and its branch, handling broken .git and root-owned files.
+
+    WT-6: Does NOT call global `git worktree prune` because it can cause
+    collateral damage to other worktrees with corrupted .git files. The
+    `git worktree remove --force` command is sufficient for specific removal.
+    """
     if wt.exists():
+        # Fix corrupted gitdir before attempting remove (WT-6)
+        _fix_corrupted_gitdir(wt, repo)
         result = subprocess.run(
             ["git", "worktree", "remove", str(wt), "--force"],
             capture_output=True, cwd=str(repo),
         )
         if result.returncode != 0:
             force_remove_dir(wt)
-    subprocess.run(["git", "worktree", "prune"],
-                   capture_output=True, cwd=str(repo))
+    # WT-6: No global prune here - it can delete metadata for other worktrees
     subprocess.run(["git", "branch", "-D", branch],
                    capture_output=True, cwd=str(repo))

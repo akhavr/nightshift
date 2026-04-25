@@ -52,8 +52,9 @@ def sample_issue():
 
 class TestCreateWorktree:
 
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_creates_worktree_and_writes_state(self, mock_run, tmp_path):
+    def test_creates_worktree_and_writes_state(self, mock_run, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -63,9 +64,9 @@ class TestCreateWorktree:
         issue_id = "abc123def456"
 
         # Simulate subprocess calls:
-        # 1. git worktree prune  -> ok
-        # 2. git branch          -> ok
-        # 3. git worktree add    -> ok (creates the wt dir with a file)
+        # 1. git branch          -> ok
+        # 2. git worktree add    -> ok (creates the wt dir with a file)
+        # (WT-6: safe_prune is mocked, not called via subprocess)
         def side_effect(cmd, **kwargs):
             result = MagicMock(returncode=0, stderr="", stdout="")
             if cmd[1] == "worktree" and cmd[2] == "add":
@@ -92,23 +93,25 @@ class TestCreateWorktree:
         assert state["checkpoints"] == []
         assert state["human_answers"] == []
 
-        # Correct git commands were called
-        assert mock_run.call_count == 3
-        assert mock_run.call_args_list[0][0][0] == ["git", "worktree", "prune"]
-        assert mock_run.call_args_list[1][0][0] == ["git", "branch", branch, base_branch]
-        assert mock_run.call_args_list[2][0][0] == ["git", "worktree", "add", str(wt_path), branch]
+        # WT-6: safe_prune is called instead of direct git worktree prune
+        mock_safe_prune.assert_called_once_with(repo)
 
+        # Correct git commands were called
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0][0][0] == ["git", "branch", branch, base_branch]
+        assert mock_run.call_args_list[1][0][0] == ["git", "worktree", "add", str(wt_path), branch]
+
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_exits_on_worktree_failure(self, mock_run, tmp_path):
+    def test_exits_on_worktree_failure(self, mock_run, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
         session_dir = tmp_path / "session"
 
         mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
-        # Third call (worktree add) fails
+        # WT-6: safe_prune is mocked, so only 2 subprocess calls
         mock_run.side_effect = [
-            MagicMock(returncode=0),  # prune
             MagicMock(returncode=0),  # branch
             MagicMock(returncode=1, stderr="fatal: already exists"),  # worktree add
         ]
@@ -117,8 +120,9 @@ class TestCreateWorktree:
             create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_exits_on_empty_worktree(self, mock_run, tmp_path):
+    def test_exits_on_empty_worktree(self, mock_run, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -138,9 +142,10 @@ class TestCreateWorktree:
             create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.force_remove_dir")
     @patch("host.workspace_setup.subprocess.run")
-    def test_removes_existing_worktree_dir(self, mock_run, mock_force_rm, tmp_path):
+    def test_removes_existing_worktree_dir(self, mock_run, mock_force_rm, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
