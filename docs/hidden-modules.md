@@ -10,7 +10,9 @@ Three modules with clean interfaces hiding inside nightshift. This document defi
 
 **Solution:** Explicit FSM with atomic transitions.
 
-### SSM-1: SSM class with validation wired into StateManager
+### SSM-1: SSM class with validation wired into StateManager [DONE]
+
+**Issue:** b5e7ac61001a (implemented via 0250e161a6d2)
 
 **Tests (write first, must fail):**
 ```
@@ -33,7 +35,9 @@ tests/test_state.py::test_update_status_accepts_valid_transition
 
 ---
 
-### SSM-2: SSM owns status, JSON is persistence only
+### SSM-2: SSM owns status, JSON is persistence only [DONE]
+
+**Issue:** 0250e161a6d2
 
 **Tests:**
 ```
@@ -53,7 +57,9 @@ tests/test_state.py::test_transition_persists_to_json
 
 ---
 
-### SSM-3: Atomic mark_done via SSM (race condition eliminated)
+### SSM-3: Atomic mark_done via SSM (race condition eliminated) [DONE]
+
+**Issue:** 43e781891181 (commit 07d05553)
 
 **Tests:**
 ```
@@ -221,7 +227,9 @@ tests/watcher/test_session_monitor.py::test_cleanup_only_when_coder_transitioned
 
 ---
 
-### SSM-11: Resume from completion states (rebase/revise fix)
+### SSM-11: Resume from completion states (rebase/revise fix) [DONE]
+
+**Issue:** f2a6311 (commit 329f6522)
 
 **Problem:** When coder completes, `completed_at` is set and status becomes `waiting:review`. If pre-review rebase conflicts (or revise verdict issued), watcher tries to resume coder but resume logic rejects because `completed_at` is set. This creates a loop: rebase fails → resume blocked → revert to waiting:review → rebase fails → loop.
 
@@ -431,7 +439,9 @@ tests/test_workspace_transaction.py::test_nested_transactions_error
 
 ---
 
-### WT-1.5: Host-side gitdir sanitization (defense in depth)
+### WT-1.5: Host-side gitdir sanitization (defense in depth) [DONE]
+
+**Issue:** abdbb1e
 
 **Problem:** Container may crash before cleanup. Host operations fail with "not a git repository" or `core.worktree` pollution breaks all git commands.
 
@@ -536,7 +546,9 @@ tests/test_workspace_transaction.py::test_rebase_with_conflict_aborts
 
 ---
 
-### WT-6: Safe worktree prune (no collateral damage)
+### WT-6: Safe worktree prune (no collateral damage) [DONE]
+
+**Issue:** 89f882f
 
 **Problem:** `git worktree prune` is called in `session_utils.remove_worktree()` and `workspace_setup.create_worktree()`. It's a **global** operation that prunes ALL orphaned worktrees, not just the one being removed/created.
 
@@ -567,21 +579,24 @@ tests/test_workspace_setup.py::test_create_worktree_no_collateral_prune
 
 Priority based on impact and dependencies:
 
-| Phase | Issues | Key Outcome |
-|-------|--------|-------------|
-| 1 | SSM-1 to SSM-3 | Race condition eliminated |
-| 2 | SSM-4 to SSM-9 | Full SSM integration |
-| 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix |
-| 3 | AES-1 to AES-2 | Event foundation + ClaudeCode |
-| 4 | AES-3 to AES-6 | All agents unified |
-| 5 | WT-0, WT-1, WT-1.5, WT-6 | Git state self-healing + safe prune (88acf5d, 4e37a29 done) |
-| 6 | WT-2 to WT-5 | Full transactional git |
+| Phase | Issues | Key Outcome | Status |
+|-------|--------|-------------|--------|
+| 1 | SSM-1 to SSM-3 | Race condition eliminated | **DONE** |
+| 2 | SSM-4 to SSM-9 | Full SSM integration | TODO |
+| 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix | SSM-11 DONE, SSM-10 TODO |
+| 3 | AES-1 to AES-2 | Event foundation + ClaudeCode | TODO |
+| 4 | AES-3 to AES-6 | All agents unified | TODO |
+| 5 | WT-0, WT-1, WT-1.5, WT-1.6, WT-1.7, WT-6 | Git state self-healing + safe prune | **DONE** |
+| 6 | WT-2 to WT-5 | Full transactional git | TODO |
 
 **Total: 27 issues, each TDD, each wired to real flow.**
 
-After Phase 1 (3 issues): Race condition fixed structurally.
+**Completed:** SSM-1, SSM-2, SSM-3, SSM-11, WT-1.5, WT-1.6, WT-1.7, WT-6 (8 issues)
+**Remaining:** SSM-4 to SSM-10, AES-1 to AES-6, WT-0 to WT-5 (19 issues)
+
+After Phase 1 (3 issues): Race condition fixed structurally. **DONE**
 After Phase 2 (6 more): SSM complete, lifecycle explicit.
-After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup.
+After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup. (SSM-11 done)
 After Phase 4 (6 more): Adding new agents is trivial.
-After Phase 5 (4 issues): Git state self-heals from container corruption, safe prune prevents collateral damage. WT-1.5 done (88acf5d), env var fix done (4e37a29).
+After Phase 5 (6 issues): Git state self-heals from container corruption, safe prune prevents collateral damage. **DONE**
 After Phase 6 (5 more): Git operations are bulletproof.
