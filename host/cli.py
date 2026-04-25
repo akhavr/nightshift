@@ -925,6 +925,7 @@ def cmd_accept(a):
         cost_line = ""
 
     archive_session(session_dir, r)
+    shutil.rmtree(session_dir, ignore_errors=True)
     remove_worktree(r, wt, branch)
     _cleanup_review_artifacts(r, sid, config)
 
