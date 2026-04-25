@@ -169,3 +169,99 @@ class TestMergeBaseIntoWorktree:
                                           session_dir=session_dir)
 
         assert result == "noop"
+
+
+class TestSyncReviewWorktree:
+    """Tests for syncing review worktree on resume after coder rebase."""
+
+    def test_sync_review_worktree_updates_to_agent_head(self, tmp_path):
+        """When coder rebases, review worktree is synced to new agent HEAD."""
+        repo, run = _init_repo(tmp_path)
+
+        # Create agent worktree and make a commit
+        agent_wt = _create_worktree(repo, run, "agent/test123")
+        agent_run = lambda *args: subprocess.run(
+            args, cwd=str(agent_wt), capture_output=True, text=True,
+        )
+        (agent_wt / "agent_work.txt").write_text("v1\n")
+        agent_run("git", "add", ".")
+        agent_run("git", "commit", "-m", "agent work v1")
+        old_commit = agent_run("git", "rev-parse", "HEAD").stdout.strip()
+
+        # Create review worktree based on agent branch
+        review_wt = repo.parent / "review_wt"
+        run("git", "branch", "review/test123", "agent/test123")
+        run("git", "worktree", "add", str(review_wt), "review/test123")
+        review_session = tmp_path / "review_session"
+        review_session.mkdir()
+        (review_session / "diff.patch").write_text("old diff")
+        (review_session / "issue.json").write_text('{"old": "data"}')
+
+        # Coder rebases - adds another commit
+        (agent_wt / "agent_work.txt").write_text("v2\n")
+        agent_run("git", "add", ".")
+        agent_run("git", "commit", "-m", "agent work v2")
+        new_commit = agent_run("git", "rev-parse", "HEAD").stdout.strip()
+        assert old_commit != new_commit
+
+        # Coder session has updated issue.json
+        coder_session = tmp_path / "coder_session"
+        coder_session.mkdir()
+        (coder_session / "issue.json").write_text('{"new": "data"}')
+
+        from host.workspace_setup import sync_review_worktree
+
+        sync_review_worktree(repo, review_wt, review_session,
+                             coder_session, "test123")
+
+        # Review worktree should be at the new commit
+        review_run = lambda *args: subprocess.run(
+            args, cwd=str(review_wt), capture_output=True, text=True,
+        )
+        current_commit = review_run("git", "rev-parse", "HEAD").stdout.strip()
+        assert current_commit == new_commit
+
+        # diff.patch should be regenerated
+        diff = (review_session / "diff.patch").read_text()
+        assert "v2" in diff or len(diff) > len("old diff")
+
+        # issue.json should be copied from coder session
+        issue_data = (review_session / "issue.json").read_text()
+        assert '{"new": "data"}' == issue_data
+
+    def test_sync_review_worktree_when_agent_not_changed(self, tmp_path):
+        """When agent hasn't changed, sync is a noop but still succeeds."""
+        repo, run = _init_repo(tmp_path)
+
+        agent_wt = _create_worktree(repo, run, "agent/test123")
+        agent_run = lambda *args: subprocess.run(
+            args, cwd=str(agent_wt), capture_output=True, text=True,
+        )
+        (agent_wt / "agent_work.txt").write_text("v1\n")
+        agent_run("git", "add", ".")
+        agent_run("git", "commit", "-m", "agent work v1")
+        agent_commit = agent_run("git", "rev-parse", "HEAD").stdout.strip()
+
+        # Create review worktree at same commit
+        review_wt = repo.parent / "review_wt"
+        run("git", "branch", "review/test123", "agent/test123")
+        run("git", "worktree", "add", str(review_wt), "review/test123")
+        review_session = tmp_path / "review_session"
+        review_session.mkdir()
+        (review_session / "diff.patch").write_text("existing diff")
+
+        coder_session = tmp_path / "coder_session"
+        coder_session.mkdir()
+        (coder_session / "issue.json").write_text('{"data": "same"}')
+
+        from host.workspace_setup import sync_review_worktree
+
+        sync_review_worktree(repo, review_wt, review_session,
+                             coder_session, "test123")
+
+        # Should still be at agent commit
+        review_run = lambda *args: subprocess.run(
+            args, cwd=str(review_wt), capture_output=True, text=True,
+        )
+        current_commit = review_run("git", "rev-parse", "HEAD").stdout.strip()
+        assert current_commit == agent_commit
