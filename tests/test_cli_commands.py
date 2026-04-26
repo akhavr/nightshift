@@ -616,14 +616,6 @@ def test_cmd_init_overwrites_hook_with_force(tmp_path, capsys):
     assert "conflict marker" in content.lower() or "<<<<<<<" in content
 
 
-def _clean_git_env():
-    """Return env dict with GIT_DIR/GIT_WORK_TREE removed for isolated test repos."""
-    env = os.environ.copy()
-    env.pop("GIT_DIR", None)
-    env.pop("GIT_WORK_TREE", None)
-    return env
-
-
 def test_pre_commit_hook_rejects_conflict_markers(tmp_path):
     """The pre-commit hook should reject commits with conflict markers."""
     repo, _ = _init_repo(tmp_path)
