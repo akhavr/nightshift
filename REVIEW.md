@@ -163,19 +163,6 @@ Every merge goes to master and stays. Flag and reject: duplicated logic,
 missing features from the issue spec, untested code paths, CLAUDE.md drift,
 silent exception swallowing.
 
-## Feedback Logging
-
-When issuing `@nightshift revise`, append a YAML entry to `.nightshift/coder-issues.yaml`:
-```yaml
-- category: <bug|incomplete|style|test|docs|other>
-  session: {{ session_id }}
-  date: {{ date }}
-  file: <path>
-  line: <number or range>
-  detail: <one-line description of the issue>
-```
-This logs patterns in coder mistakes for later analysis.
-
 ## Boundaries
 
 Your only actions are reviewing code and outputting a verdict (`@nightshift approve` or `@nightshift revise`). Do NOT close issues, change labels, push code, manage git-bug state, or perform any tracker operations. The host handles all lifecycle management after your verdict.
