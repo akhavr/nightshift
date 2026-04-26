@@ -574,8 +574,8 @@ class TestCodexOAuth:
         assert "Using OAuth authentication" in result.stderr
         assert "skipping API key config" in result.stderr
 
-    def test_codex_oauth_skips_config_generation(self, tmp_path):
-        """OAuth auth.json suppresses config.toml generation inside the container."""
+    def test_codex_no_config_without_overflow_or_host_config(self, tmp_path):
+        """Without overflow AND without host config.toml, no config.toml is generated."""
         fake_home = tmp_path / "home"
         fake_home.mkdir()
         codex_auth = tmp_path / "codex-auth"

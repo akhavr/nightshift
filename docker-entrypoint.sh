@@ -28,7 +28,7 @@ if [ -d /claude-auth ]; then
 fi
 
 # Copy Codex login credentials from read-only mount to writable HOME.
-# If OAuth auth.json is present, skip API key config generation entirely.
+# OAuth (auth.json) skips API key export; config.toml is handled separately.
 CODEX_OAUTH_PRESENT=0
 if [ -d /codex-auth ]; then
     mkdir -p "$HOME/.codex"
