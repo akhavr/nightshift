@@ -591,6 +591,79 @@ class TestUsageBuffering:
         assert len(agent._extra_events) == 0
 
 
+# ── stream_events() / JSONL parsing ───────────────────────
+
+
+class TestStreamParsing:
+    def test_stream_yields_agent_events(self):
+        agent = CodexAgent()
+        lines = [
+            _ev("thread.started", thread_id="019d-abc-123") + "\n",
+            _item_ev("item.started", "command_execution", command="pwd", status="in_progress") + "\n",
+            _item_ev(
+                "item.completed",
+                "command_execution",
+                command="pwd",
+                aggregated_output="/workspace\n",
+                exit_code=0,
+                status="completed",
+            ) + "\n",
+            _ev("turn.completed", usage={"input_tokens": 120, "output_tokens": 8}) + "\n",
+        ]
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.stdout = iter(lines)
+        mock_proc.returncode = 0
+        agent._process = mock_proc
+        agent._last_event = 0
+
+        events = list(agent.stream_events())
+
+        assert all(isinstance(event, AgentEvent) for event in events)
+        assert [event.type for event in events] == [
+            AgentEventType.SYSTEM,
+            AgentEventType.TOOL_CALL,
+            AgentEventType.TOOL_RESULT,
+            AgentEventType.TEXT,
+            AgentEventType.PROCESS_EXIT,
+        ]
+        assert events[0].content == "thread:019d-abc-123"
+        assert events[2].content.startswith("exit=0")
+        assert events[3].content == "@@DONE@@"
+        assert events[3].metadata["usage"]["input_tokens"] == 120
+
+    def test_jsonl_parsed_to_events(self):
+        agent = CodexAgent()
+        raw_events = [
+            _ev("thread.started", thread_id="019d-abc-123"),
+            _item_ev("item.started", "command_execution", command="ls", status="in_progress"),
+            _item_ev(
+                "item.completed",
+                "command_execution",
+                command="ls",
+                aggregated_output="a.py\nb.py\n",
+                exit_code=0,
+                status="completed",
+            ),
+            _ev("turn.completed", usage={"input_tokens": 42, "output_tokens": 3}),
+        ]
+
+        events = [agent._parse(raw) for raw in raw_events]
+
+        assert all(isinstance(event, AgentEvent) for event in events if event is not None)
+        assert [event.type for event in events if event is not None] == [
+            AgentEventType.SYSTEM,
+            AgentEventType.TOOL_CALL,
+            AgentEventType.TOOL_RESULT,
+            AgentEventType.TEXT,
+        ]
+        assert events[0].raw == raw_events[0]
+        assert events[1].content == "ls"
+        assert events[2].content.startswith("exit=0")
+        assert events[3].metadata["usage"]["output_tokens"] == 3
+
+
 # ── Registry ─────────────────────────────────────────────
 
 
