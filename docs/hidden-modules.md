@@ -285,6 +285,8 @@ tests/watcher/test_verdict_handler.py::test_revise_resumes_coder
 
 ### AES-1: AgentEvent dataclass and enum
 
+**Issue:** 6c728b5705ff
+
 **Tests:**
 ```
 tests/test_agent_events.py::test_event_creation
@@ -305,6 +307,8 @@ tests/test_agent_events.py::test_event_from_dict
 ---
 
 ### AES-2: ClaudeCodeAgent emits AgentEvent
+
+**Issue:** b4b4727a0036
 
 **Tests:**
 ```
@@ -327,6 +331,8 @@ tests/test_claude_code_agent.py::test_auth_failure_becomes_auth_event
 
 ### AES-3: OpenHandsAgent emits AgentEvent
 
+**Issue:** f24ab295e335
+
 **Tests:**
 ```
 tests/test_openhands_agent.py::test_stream_yields_agent_events
@@ -346,6 +352,8 @@ tests/test_openhands_agent.py::test_action_becomes_tool_call
 
 ### AES-4: CodexAgent emits AgentEvent
 
+**Issue:** 80ed0c0df6ac
+
 **Tests:**
 ```
 tests/test_codex_agent.py::test_stream_yields_agent_events
@@ -363,6 +371,8 @@ tests/test_codex_agent.py::test_jsonl_parsed_to_events
 ---
 
 ### AES-5: SessionRunner consumes AgentEvent stream
+
+**Issue:** de4037a7f524
 
 **Tests:**
 ```
@@ -384,6 +394,8 @@ tests/test_session_runner.py::test_agent_agnostic_event_loop
 ---
 
 ### AES-6: File signals become events
+
+**Issue:** 59384e5f4429
 
 **Tests:**
 ```
