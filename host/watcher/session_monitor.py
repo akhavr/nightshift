@@ -13,6 +13,7 @@ from host.constants import (
     PROVIDER_OUTAGE_RETRY_INTERVAL_S, MAX_PROVIDER_OUTAGE_RETRIES,
     REVIEW_SESSION_PREFIX, LAUNCH_GRACE_PERIOD_S,
     ZOMBIE_CHECK_INTERVAL_S, ZOMBIE_TIMEOUT_MULTIPLIER, DEFAULT_STALL_TIMEOUT_S,
+    BLOCKED_LABEL_PREFIX,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -31,6 +32,11 @@ _ACTIVE_STATUSES = ("working", "starting", "waiting:answer")
 
 # Directory containing the host package (host/)
 _HOST_DIR = Path(__file__).resolve().parent.parent
+
+
+def is_blocked(labels: list[str]) -> bool:
+    """Check if issue has any blocked:<id> labels."""
+    return any(l.startswith(BLOCKED_LABEL_PREFIX) for l in labels)
 
 
 def _pkg():
@@ -116,6 +122,41 @@ class SessionMonitor:
             # No verdict found or no coder session - just clean up the review session
             if self._review_orchestrator:
                 self._review_orchestrator.cleanup_review_session(sid, session_dir)
+
+    def cleanup_stale_blocked_labels(self):
+        """Remove blocked:<id> labels where the blocking issue is already closed.
+
+        Called on watcher startup to handle stale labels from watcher downtime.
+        """
+        try:
+            tracker = self._get_tracker()
+            all_issues = tracker.list_issues()  # Both open and closed
+        except Exception as e:
+            log.warning(f"Stale blocked cleanup: tracker poll failed: {e}")
+            return
+
+        # Build set of closed issue ID prefixes
+        closed_prefixes: set[str] = {
+            i.id[:SHORT_ID_LEN] for i in all_issues if i.status == "closed"
+        }
+
+        # Scan open issues for stale blocked labels
+        for issue in all_issues:
+            if issue.status != "open":
+                continue
+
+            for label in issue.labels:
+                if not label.startswith(BLOCKED_LABEL_PREFIX):
+                    continue
+
+                blocker_id = label[len(BLOCKED_LABEL_PREFIX):]
+                if blocker_id in closed_prefixes:
+                    try:
+                        tracker.remove_label(issue.id, label)
+                        log.info(f"Unblocked {issue.identifier}: removed stale {label}")
+                    except Exception as e:
+                        log.warning(f"Failed to remove stale label {label} from "
+                                    f"{issue.identifier}: {e}")
 
     def check_orphaned_sessions(self):
         """Detect sessions with status 'working' but no running container -- auto-resume."""
@@ -737,6 +778,11 @@ class SessionMonitor:
 
         for issue in issues:
             if _issue_id_prefix_match(issue.id, existing_issue_ids):
+                continue
+
+            # Skip issues blocked by dependencies
+            if is_blocked(issue.labels):
+                log.debug(f"Auto-start: skipping {issue.identifier} (blocked by dependency)")
                 continue
 
             if active_count >= asc.max_concurrent:

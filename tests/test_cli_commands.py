@@ -22,10 +22,13 @@ from host.cli import (
     cmd_revise,
     cmd_cleanup,
     cmd_usage,
+    cmd_blocked,
     _read_issue_title,
     _truncate_title,
     _format_history_line,
+    _unblock_dependents,
 )
+from core.protocols import TrackerIssue
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -1568,3 +1571,166 @@ def test_resume_validates_state(tmp_path, capsys):
     assert "accepted" in err
     # Should mention it's a terminal state or cannot resume
     assert "terminal" in err.lower() or "cannot" in err.lower() or "resume" in err.lower()
+
+
+
+# ── cmd_blocked ─────────────────────────────────────────────────────────────
+
+
+def test_blocked_command_lists_blocked_issues(tmp_path, capsys):
+    """cmd_blocked should list issues with blocked:<id> labels."""
+    repo, run = _init_repo(tmp_path)
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    blocked_issue = TrackerIssue(
+        id="blocked123456",
+        identifier="blocked12345",
+        title="Issue blocked by dependency",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:dep123456"],
+    )
+    unblocked_issue = TrackerIssue(
+        id="unblocked1234",
+        identifier="unblocked123",
+        title="Issue not blocked",
+        body="",
+        status="open",
+        labels=["nightshift"],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue, unblocked_issue]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+    ):
+        cmd_blocked(_make_args(workflow=None))
+
+    out = capsys.readouterr().out
+    # Should show blocked issue
+    assert "blocked12345" in out
+    assert "dep123456" in out
+    # Should NOT show unblocked issue
+    assert "unblocked" not in out
+
+
+def test_blocked_command_empty(tmp_path, capsys):
+    """cmd_blocked shows message when no issues are blocked."""
+    repo, run = _init_repo(tmp_path)
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = []
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+    ):
+        cmd_blocked(_make_args(workflow=None))
+
+    out = capsys.readouterr().out
+    assert "No blocked issues" in out
+
+
+# ── accept unblocks dependents ──────────────────────────────────────────────
+
+
+def test_accept_unblocks_dependents(tmp_path, capsys):
+    """cmd_accept should remove blocked:<accepted-id> labels from other issues."""
+    repo, run = _init_repo(tmp_path)
+    sid = "accepted1234"
+
+    # Create session
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    # Issue that was blocked by the one being accepted
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:accepted1234"],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.resolve_merge_ref", return_value=f"agent/{sid}"),
+        patch("host.cli.check_branch_not_behind_base", return_value=None),
+        patch("host.cli.merge_with_rebase_fallback"),
+        patch("host.cli.verify_no_conflict_markers"),
+        patch("host.cli.remove_worktree"),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    # Should have removed the blocked label
+    mock_tracker.remove_label.assert_called_once_with(
+        "dependent1234", "blocked:accepted1234"
+    )
+    out = capsys.readouterr().out
+    assert "Unblocked dependent123" in out
+
+
+def test_unblock_dependents_direct():
+    """Test _unblock_dependents helper directly."""
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:closed123456"],  # 12-char prefix
+    )
+    unrelated_issue = TrackerIssue(
+        id="unrelated1234",
+        identifier="unrelated123",
+        title="Unrelated issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:other1234567"],  # Different prefix
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue, unrelated_issue]
+
+    _unblock_dependents(mock_tracker, "closed12345678")  # Full ID, truncated to 12
+
+    # Should only remove the matching label
+    mock_tracker.remove_label.assert_called_once_with(
+        "dependent1234", "blocked:closed123456"
+    )
+

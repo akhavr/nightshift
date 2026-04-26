@@ -404,6 +404,36 @@ class TestCheckBackgroundLaunches:
 class TestStartupCleanup:
     """Verify stale review sessions are cleaned up on watcher startup."""
 
+    def test_startup_cleans_stale_blocked(self, tmp_path):
+        """HostWatcher.run() should call cleanup_stale_blocked_labels on startup."""
+        import threading
+
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        w = HostWatcher(sessions, repo, auto_start=False)
+
+        # Track if cleanup was called
+        cleanup_called = False
+
+        def mock_cleanup():
+            nonlocal cleanup_called
+            cleanup_called = True
+
+        w.monitor.cleanup_stale_blocked_labels = mock_cleanup
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+
+        # Pre-set shutdown so we exit immediately after startup
+        shutdown_event = threading.Event()
+        shutdown_event.set()
+
+        with patch("host.watcher.host_watcher.repair_lamport_clocks"):
+            w.run(shutdown_event=shutdown_event)
+
+        assert cleanup_called is True
+
     def test_run_calls_cleanup_stale_review_sessions(self, tmp_path):
         """HostWatcher.run() should call cleanup_stale_review_sessions() on startup."""
         import threading
@@ -411,13 +441,15 @@ class TestStartupCleanup:
         w = _make_watcher(tmp_path)
         w.telegram.enabled = False
 
-        # Mock the cleanup method to track if it's called
+        # Mock the cleanup methods to track if they're called
         cleanup_called = []
         original_cleanup = w.monitor.cleanup_stale_review_sessions
         def mock_cleanup():
             cleanup_called.append(True)
             original_cleanup()
         w.monitor.cleanup_stale_review_sessions = mock_cleanup
+        # Also mock cleanup_stale_blocked_labels to avoid tracker calls
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
 
         # Create a shutdown event that triggers immediately
         shutdown = threading.Event()

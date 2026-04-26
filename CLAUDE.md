@@ -30,6 +30,7 @@ nightshift issue <args...>               # pass args to tracker CLI with lock re
 nightshift watcher                       # start host watcher (pause/unpause, Telegram)
 nightshift usage [issue-id]               # show token usage and cost per session
 nightshift export-training-data          # export finetuning data from session logs
+nightshift blocked                       # list issues blocked by dependencies
 
 # Monitor sessions (Claude Code skill)
 # Use /nightshift-watch to poll status, review diffs, and accept/reject/revise.

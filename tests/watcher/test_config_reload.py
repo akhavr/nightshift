@@ -264,6 +264,9 @@ class TestRunReloadIntegration:
     def test_run_default_reload_event(self, tmp_path):
         """run() creates a default reload event if none passed."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()  # exit immediately
         w.run(shutdown_event=ev)

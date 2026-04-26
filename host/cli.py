@@ -24,6 +24,7 @@ from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import (
     SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN,
     HISTORY_FOLLOW_POLL_S, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME,
+    BLOCKED_LABEL_PREFIX,
 )
 from core.upgrade import (
     read_template_version, get_canonical_version,
@@ -436,6 +437,39 @@ def cmd_status(a):
         except Exception as e:
             logging.error("Failed reading session status from %s: %s", f, e)
             print(f"{sid:<14} {'<error>':<26}")
+
+
+def cmd_blocked(a):
+    """List issues blocked by dependencies."""
+    r = repo_root()
+    config = load_workflow(_resolve_workflow(a))
+    try:
+        tracker = get_tracker_with_fallback(config, r)
+        issues = tracker.list_issues(status="open")
+    except Exception as e:
+        print(f"Failed to fetch issues: {e}", file=sys.stderr)
+        return
+
+    # Collect issues with blocked labels
+    blocked_issues = []
+    for issue in issues:
+        blocked_by = [l[len(BLOCKED_LABEL_PREFIX):]
+                      for l in issue.labels if l.startswith(BLOCKED_LABEL_PREFIX)]
+        if blocked_by:
+            blocked_issues.append((issue, blocked_by))
+
+    if not blocked_issues:
+        print("No blocked issues.")
+        return
+
+    print(f"{'ISSUE':<14} {'BLOCKED BY':<14} TITLE")
+    for issue, blockers in blocked_issues:
+        title = issue.title[:50] if len(issue.title) > 50 else issue.title
+        for i, blocker in enumerate(blockers):
+            if i == 0:
+                print(f"{issue.identifier:<14} {blocker:<14} {title}")
+            else:
+                print(f"{'':<14} {blocker:<14}")
 
 
 def cmd_logs(a):
@@ -903,6 +937,27 @@ def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
         print(f"Cleaned up review session for {coder_sid}")
 
 
+def _unblock_dependents(tracker, closed_issue_id: str) -> None:
+    """Remove blocked:<id> labels from issues that depended on the closed issue."""
+    prefix = closed_issue_id[:SHORT_ID_LEN]
+    blocked_label = f"{BLOCKED_LABEL_PREFIX}{prefix}"
+
+    try:
+        issues = tracker.list_issues(status="open")
+    except Exception as e:
+        print(f"Warning: failed to scan for blocked issues: {e}", file=sys.stderr)
+        return
+
+    for issue in issues:
+        if blocked_label in issue.labels:
+            try:
+                tracker.remove_label(issue.id, blocked_label)
+                print(f"Unblocked {issue.identifier} (dependency {prefix} closed)")
+            except Exception as e:
+                print(f"Warning: failed to remove {blocked_label} from "
+                      f"{issue.identifier}: {e}", file=sys.stderr)
+
+
 def cmd_accept(a):
     """Merge agent branch into base branch, then clean up."""
     r = repo_root()
@@ -959,6 +1014,7 @@ def cmd_accept(a):
         tracker = get_tracker_with_fallback(config, r)
         tracker.set_status(a.issue_id, "closed")
         tracker.add_comment(a.issue_id, f"✅ Accepted and merged into `{base}`.")
+        _unblock_dependents(tracker, a.issue_id)
         tracker.sync()
     except Exception as e:
         print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
@@ -1420,6 +1476,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sp = s.add_parser("status")
     sp.set_defaults(func=cmd_status)
+
+    sp = s.add_parser("blocked", help="List issues blocked by dependencies")
+    sp.set_defaults(func=cmd_blocked)
 
     sp = s.add_parser("logs")
     sp.add_argument("issue_id")
