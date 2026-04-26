@@ -13,13 +13,12 @@ _CODEX_CONFIG_SCRIPT = """\
 #!/bin/sh
 mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ "$AGENT_KIND" = "codex" ]; then
-    CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
-    if [ -z "$CODEX_KEY" ]; then
-        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
-    elif [ -n "$CODEX_BASE_URL" ]; then
-        export CODEX_API_KEY="$CODEX_KEY"
-        cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${CODEX_MODEL:-gpt-5.4}"
+    # Step 1: Generate config.toml if model override or custom provider specified
+    if [ -n "$CODEX_BASE_URL" ] || [ -n "$CODEX_MODEL" ]; then
+        if [ -n "$CODEX_BASE_URL" ]; then
+            # Custom provider with base URL
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL:-o3}"
 model_provider = "custom"
 
 [model_providers.custom]
@@ -27,10 +26,33 @@ name = "Custom"
 base_url = "${CODEX_BASE_URL}"
 env_key = "CODEX_API_KEY"
 CODEXCFG
+        else
+            # Model override only, use OpenAI provider
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL}"
+model_provider = "openai"
+CODEXCFG
+        fi
+    fi
+
+    # Step 2: API key config
+    CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
+    if [ -z "$CODEX_KEY" ]; then
+        echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
+    elif [ -n "$CODEX_BASE_URL" ]; then
+        export CODEX_API_KEY="$CODEX_KEY"
     else
         export OPENAI_API_KEY="$CODEX_KEY"
         # Echo exported var so tests can verify
         echo "OPENAI_API_KEY=$OPENAI_API_KEY"
+        # Only generate default config if no model override was specified in Step 1
+        # AND no host config.toml was copied from /codex-auth
+        if [ -z "$CODEX_MODEL" ] && [ ! -f "$HOME/.codex/config.toml" ]; then
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "gpt-4o-mini"
+model_provider = "openai"
+CODEXCFG
+        fi
     fi
 fi
 """
@@ -126,14 +148,17 @@ def _run_config_script(tmp_path: Path, env_overrides: dict) -> tuple[Path, str, 
 
 class TestCodexConfigGeneration:
 
-    def test_codex_api_key_only_no_config_toml(self, tmp_path):
-        """With CODEX_API_KEY but no CODEX_BASE_URL, no config.toml generated, OPENAI_API_KEY exported."""
+    def test_codex_api_key_only_generates_default_config(self, tmp_path):
+        """With CODEX_API_KEY but no CODEX_BASE_URL, default config.toml generated, OPENAI_API_KEY exported."""
         config_path, stdout, _ = _run_config_script(tmp_path, {
             "AGENT_KIND": "codex",
             "CODEX_API_KEY": "sk-openai-test",
         })
 
-        assert not config_path.exists()
+        assert config_path.exists()
+        content = config_path.read_text()
+        assert 'model = "gpt-4o-mini"' in content
+        assert 'model_provider = "openai"' in content
         assert "OPENAI_API_KEY=sk-openai-test" in stdout
 
     def test_codex_base_url_generates_config(self, tmp_path):
@@ -164,7 +189,7 @@ class TestCodexConfigGeneration:
         assert "qwen/qwen3-coder" in content
 
     def test_codex_model_default(self, tmp_path):
-        """Without CODEX_MODEL, default model is gpt-5.4."""
+        """Without CODEX_MODEL, default model is o3 for custom provider."""
         config_path, _, _ = _run_config_script(tmp_path, {
             "AGENT_KIND": "codex",
             "CODEX_API_KEY": "sk-test",
@@ -172,17 +197,20 @@ class TestCodexConfigGeneration:
         })
 
         content = config_path.read_text()
-        assert 'model = "gpt-5.4"' in content
+        assert 'model = "o3"' in content
 
     def test_codex_api_key_fallback_to_openai(self, tmp_path):
-        """Without CODEX_API_KEY, OPENAI_API_KEY is used."""
+        """Without CODEX_API_KEY, OPENAI_API_KEY is used and default config generated."""
         config_path, stdout, _ = _run_config_script(tmp_path, {
             "AGENT_KIND": "codex",
             "OPENAI_API_KEY": "sk-openai-fallback",
         })
 
-        # No CODEX_BASE_URL → no config.toml, but OPENAI_API_KEY exported
-        assert not config_path.exists()
+        # No CODEX_BASE_URL → default config.toml generated, OPENAI_API_KEY exported
+        assert config_path.exists()
+        content = config_path.read_text()
+        assert 'model = "gpt-4o-mini"' in content
+        assert 'model_provider = "openai"' in content
         assert "OPENAI_API_KEY=sk-openai-fallback" in stdout
 
     def test_codex_api_key_fallback_with_base_url(self, tmp_path):
@@ -231,8 +259,10 @@ class TestCodexConfigGeneration:
             "OPENAI_API_KEY": "sk-openai-key",
         })
 
-        # No base URL → OPENAI_API_KEY exported with CODEX_API_KEY value
-        assert not config_path.exists()
+        # No base URL → default config.toml, OPENAI_API_KEY exported with CODEX_API_KEY value
+        assert config_path.exists()
+        content = config_path.read_text()
+        assert 'model = "gpt-4o-mini"' in content
         assert "OPENAI_API_KEY=sk-codex-key" in stdout
 
     def test_local_inference_config(self, tmp_path):

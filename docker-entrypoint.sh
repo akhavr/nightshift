@@ -113,7 +113,8 @@ CODEXCFG
             # OpenAI native: export key and generate default config if no model override
             export OPENAI_API_KEY="$CODEX_KEY"
             # Only generate default config if no model override was specified in Step 1
-            if [ -z "$CODEX_MODEL" ]; then
+            # AND no host config.toml was copied from /codex-auth
+            if [ -z "$CODEX_MODEL" ] && [ ! -f "$HOME/.codex/config.toml" ]; then
                 cat > "$HOME/.codex/config.toml" << CODEXCFG
 model = "gpt-4o-mini"
 model_provider = "openai"
