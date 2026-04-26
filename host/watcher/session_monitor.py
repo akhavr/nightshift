@@ -264,9 +264,9 @@ class SessionMonitor:
         orphan_resumes = session_state.orphan_resumes
         if orphan_resumes >= MAX_ORPHAN_RESUMES:
             if is_review_session:
-                self._handle_review_orphan_limit(sid, session_dir, session_state, issue_id)
+                self._handle_review_orphan_limit(sid, session_dir, issue_id)
             else:
-                self._handle_coder_orphan_limit(sid, session_dir, session_state, issue_id)
+                self._handle_coder_orphan_limit(sid, session_dir, issue_id)
             return
 
         new_count = increment_orphan_resumes(session_dir)
@@ -367,7 +367,7 @@ class SessionMonitor:
         return True
 
     def _handle_coder_orphan_limit(self, sid: str, session_dir: Path,
-                                    state: dict, issue_id: str):
+                                    issue_id: str):
         """Suspend a coder session as too-complex after hitting the orphan limit."""
         log.error(f"[{sid}] Hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
                   f"Task may be too complex — stopping.")
@@ -387,7 +387,7 @@ class SessionMonitor:
             level=NotificationLevel.ACTIONS)
 
     def _handle_review_orphan_limit(self, sid: str, session_dir: Path,
-                                     state: dict, issue_id: str):
+                                     issue_id: str):
         """Handle a review session that hit the orphan limit: fail and fall back to human review."""
         coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
         log.error(f"[{sid}] Review session hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
