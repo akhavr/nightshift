@@ -105,6 +105,7 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("waiting:human-review", "accepted"),
     ("waiting:human-review", "rejected"),
     ("waiting:human-review", "working"),
+    ("waiting:human-review", "error:merge-conflict"),  # conflict markers during accept
     # reviewing -> waiting:review (review done)
     ("reviewing", "reviewing"),  # self-transition for re-launch
     ("reviewing", "waiting:review"),
