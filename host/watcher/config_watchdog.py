@@ -47,8 +47,8 @@ class ConfigWatchdog:
         if self._config_path.exists():
             try:
                 self._last_mtime = self._config_path.stat().st_mtime
-            except OSError:
-                pass
+            except OSError as e:
+                log.debug(f"Could not stat {self._config_path}: {e}")
 
         while not self._shutdown.is_set():
             self._check_config()
@@ -61,7 +61,8 @@ class ConfigWatchdog:
 
         try:
             current_mtime = self._config_path.stat().st_mtime
-        except OSError:
+        except OSError as e:
+            log.debug(f"Could not stat {self._config_path}: {e}")
             return
 
         if self._last_mtime is None:
