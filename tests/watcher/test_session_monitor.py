@@ -1485,3 +1485,157 @@ class TestBranchVerification:
 
         # Should resume because branch exists
         assert "abc" in launched
+
+
+# ---------------------------------------------------------------------------
+# Zombie container detection tests
+# ---------------------------------------------------------------------------
+
+class TestZombieContainerDetection:
+    """Detect containers that are running but stuck (no events for extended time)."""
+
+    def test_detects_stuck_container(self, tmp_path, caplog):
+        """Container running but no events for > stall_timeout * 2 -> warning logged."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log (stale for 700s with default 300s stall_timeout)
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should have logged a warning about the stuck container
+        assert any("may be stuck" in record.message and "abc" in record.message
+                   for record in caplog.records)
+
+    def test_no_alert_on_active_container(self, tmp_path, caplog):
+        """Container running with recent events -> no warning."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create a recent raw-output.log (updated just now)
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        # mtime is now by default
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT have logged any warning about stuck container
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_no_alert_when_container_not_running(self, tmp_path, caplog):
+        """Container not running (handled by orphan detector) -> no zombie alert."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log zombie warning (orphan detector handles non-running containers)
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_no_alert_without_raw_output_log(self, tmp_path, caplog):
+        """No raw-output.log file -> no zombie alert (just started)."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        # No raw-output.log created
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log zombie warning
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_skipped_within_check_interval(self, tmp_path, caplog):
+        """Zombie check skipped if called within the check interval."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = time.time()  # just checked
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log warning because we're within the check interval
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_non_working_status_skipped(self, tmp_path, caplog):
+        """Sessions not in working/starting status are skipped."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log zombie warning for non-working session
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_notifies_telegram_on_stuck_container(self, tmp_path):
+        """Stuck container detection should also notify via Telegram."""
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should have sent a Telegram notification
+        assert any("stuck" in n.lower() or "zombie" in n.lower() for n in notified)

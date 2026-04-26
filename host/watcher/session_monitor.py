@@ -12,6 +12,7 @@ from host.constants import (
     MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
     PROVIDER_OUTAGE_RETRY_INTERVAL_S, MAX_PROVIDER_OUTAGE_RETRIES,
     REVIEW_SESSION_PREFIX, LAUNCH_GRACE_PERIOD_S,
+    ZOMBIE_CHECK_INTERVAL_S, ZOMBIE_TIMEOUT_MULTIPLIER, DEFAULT_STALL_TIMEOUT_S,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -61,6 +62,8 @@ class SessionMonitor:
         self._last_auto_start_poll = 0.0
         self._last_auth_retry_check = 0.0
         self._last_provider_outage_check = 0.0
+        self._last_zombie_check = 0.0
+        self._alerted_zombies: set[str] = set()  # Avoid duplicate alerts
 
     def cleanup_stale_review_sessions(self):
         """Clean up review sessions with completed_at set but not yet cleaned up.
@@ -504,6 +507,97 @@ class SessionMonitor:
             self._recently_launched[sid] = time.time()
 
             self._resume_session(sid, issue_id, reason="provider-outage retry")
+
+    def check_zombie_containers(self):
+        """Detect containers that are running but stuck (no events for extended time).
+
+        A zombie container is one where:
+        - Session status is 'working' or 'starting'
+        - Docker container is running
+        - No events for longer than stall_timeout_s * ZOMBIE_TIMEOUT_MULTIPLIER
+
+        This differs from orphan detection: orphans have no container running,
+        zombies have a running container that's stuck (infinite loop, deadlock).
+        """
+        now = time.time()
+        if now - self._last_zombie_check < ZOMBIE_CHECK_INTERVAL_S:
+            return
+        self._last_zombie_check = now
+
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not (session_dir / "state.json").exists():
+                continue
+            self._check_session_for_zombie(session_dir, sid, now)
+
+    def _check_session_for_zombie(self, session_dir: Path, sid: str, now: float):
+        """Check a single session for zombie container behavior."""
+        try:
+            state = read_state(session_dir)
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{sid}] Failed to read state for zombie check: {e}")
+            return
+
+        status = state.get("status")
+        if status not in ("working", "starting"):
+            # Only check sessions that should be actively producing events
+            return
+
+        # Check if container is actually running
+        container = f"nightshift-{sid}"
+        if _pkg().docker_container_status(container) not in ("running",):
+            # Container not running — orphan detector handles this
+            return
+
+        # Check last event time via raw-output.log mtime
+        last_event_time = self._get_last_event_time(session_dir)
+        if last_event_time is None:
+            # No raw-output.log yet — session just started
+            return
+
+        stall_timeout = DEFAULT_STALL_TIMEOUT_S
+        try:
+            config = load_workflow(self.workflow_path)
+            stall_timeout = config.agent.stall_timeout_s
+        except Exception as e:
+            log.debug(f"[{sid}] Could not load workflow config for stall timeout: {e}")
+
+        zombie_threshold = stall_timeout * ZOMBIE_TIMEOUT_MULTIPLIER
+        elapsed = now - last_event_time
+
+        if elapsed > zombie_threshold:
+            # Avoid duplicate alerts for the same session
+            if sid in self._alerted_zombies:
+                return
+            self._alerted_zombies.add(sid)
+
+            log.warning(f"[{sid}] Container may be stuck: no events for {elapsed:.0f}s "
+                        f"(threshold: {zombie_threshold:.0f}s)")
+            self.telegram.notify(
+                f"⚠️ `{sid}` container may be stuck — no events for {elapsed:.0f}s. "
+                f"Consider checking logs or restarting.",
+                level=NotificationLevel.ACTIONS)
+        else:
+            # Container is active — clear from alerted set if it was there
+            self._alerted_zombies.discard(sid)
+
+    def _get_last_event_time(self, session_dir: Path) -> float | None:
+        """Get the timestamp of the last event from raw-output.log mtime.
+
+        Returns None if the file doesn't exist.
+        """
+        raw_log = session_dir / "raw-output.log"
+        if not raw_log.exists():
+            return None
+        try:
+            return raw_log.stat().st_mtime
+        except OSError:
+            return None
 
     def check_closed_issues(self):
         """Detect sessions whose issues have been closed -- clean up worktree + session."""

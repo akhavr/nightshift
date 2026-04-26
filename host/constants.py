@@ -68,3 +68,8 @@ TRACKER_TERMINATION_WAIT_S = 0.5          # Wait for old tracker to fully termin
 
 # ── Recently launched persistence ─────────────────────
 RECENTLY_LAUNCHED_FILENAME = "recently_launched.json"  # Persisted launch timestamps
+
+# ── Zombie container detection ────────────────────────
+ZOMBIE_CHECK_INTERVAL_S = 60       # How often to check for zombie containers
+ZOMBIE_TIMEOUT_MULTIPLIER = 2     # Alert if no events for stall_timeout_s * this multiplier
+DEFAULT_STALL_TIMEOUT_S = 300     # Fallback stall timeout when config unavailable

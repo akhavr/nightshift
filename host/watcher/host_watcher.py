@@ -364,6 +364,7 @@ class HostWatcher:
             self.monitor.check_orphaned_sessions()
             self.monitor.check_auth_failures()
             self.monitor.check_provider_outages()
+            self.monitor.check_zombie_containers()
             self.monitor.check_closed_issues()
             if self.auto_start:
                 self.monitor.check_new_issues()
