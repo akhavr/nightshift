@@ -1713,7 +1713,7 @@ def test_unblock_dependents_direct():
         title="Dependent issue",
         body="",
         status="open",
-        labels=["nightshift", "blocked:closed12345"],
+        labels=["nightshift", "blocked:closed123456"],  # 12-char prefix
     )
     unrelated_issue = TrackerIssue(
         id="unrelated1234",
@@ -1721,16 +1721,16 @@ def test_unblock_dependents_direct():
         title="Unrelated issue",
         body="",
         status="open",
-        labels=["nightshift", "blocked:other123456"],
+        labels=["nightshift", "blocked:other1234567"],  # Different prefix
     )
 
     mock_tracker = MagicMock()
     mock_tracker.list_issues.return_value = [blocked_issue, unrelated_issue]
 
-    _unblock_dependents(mock_tracker, "closed12345678")  # Full ID
+    _unblock_dependents(mock_tracker, "closed12345678")  # Full ID, truncated to 12
 
     # Should only remove the matching label
     mock_tracker.remove_label.assert_called_once_with(
-        "dependent1234", "blocked:closed12345"
+        "dependent1234", "blocked:closed123456"
     )
 
