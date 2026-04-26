@@ -104,20 +104,33 @@ ALERT: core.worktree=/workspace detected in .git/config!
 
 **Bug:** ConfigWatchdog only LOGS the problem but doesn't auto-fix. Filed as issue to add auto-sanitization.
 
-### Root Cause (Under Investigation)
+### Root Cause: Git Config Resolution in Worktrees
 
-Despite mounting `/repo-git/config:ro` (read-only), `core.worktree=/workspace` still appears in the main repo's config. Potential causes:
+When `GIT_DIR` points to a worktree, `git config` writes go to the **main repo's config**, not a worktree-specific config:
 
-1. **Host-side operations**: Some host operation (rebase, merge, worktree commands) might write to the config before/after the container runs
-2. **Mount bypass**: The read-only overlay might not work in all Docker scenarios
-3. **Timing issue**: Config could be written between container start and mount setup
+```bash
+# Container sets:
+export GIT_DIR=/repo-git/worktrees/agent-xxx
+export GIT_WORK_TREE=/workspace
 
-Timeline from watcher logs shows corruption occurs around container startup:
+# Any git config write:
+git config core.worktree /workspace
+# Writes to /repo-git/config (main repo!) not worktree config
 ```
-18:52:58,764 [core.hooks] Running before_run hook...
-19:52:59,878 [watcher] .git/config modified at 19:52:59  <-- 1 hour timezone offset
-19:52:59,878 [watcher] ALERT: core.worktree=/workspace detected
-```
+
+This happens because:
+1. Worktrees don't have their own config file by default
+2. Git follows `commondir` (which contains `../..`) to find the main repo
+3. Config writes go to the main repo's `.git/config`
+
+**The read-only mount `/repo-git/config:ro` should block this**, but evidence shows writes still occur:
+- Watcher logs show "Sanitized core.worktree=/workspace (exit)" - container successfully UNSETS the config
+- Container runs `git config --unset core.worktree` which requires write access
+
+**Open question**: Why does the read-only mount not block writes? Possibilities:
+1. Mount order issue (`:rw` applied after `:ro`)
+2. Git using a different write path (temp file + rename)
+3. Race condition during container startup
 
 ### Current Mitigations
 
