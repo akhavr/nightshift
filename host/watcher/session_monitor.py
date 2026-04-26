@@ -564,8 +564,8 @@ class SessionMonitor:
         try:
             config = load_workflow(self.workflow_path)
             stall_timeout = config.agent.stall_timeout_s
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"[{sid}] Could not load workflow config for stall timeout: {e}")
 
         zombie_threshold = stall_timeout * ZOMBIE_TIMEOUT_MULTIPLIER
         elapsed = now - last_event_time
