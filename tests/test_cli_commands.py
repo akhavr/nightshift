@@ -558,6 +558,95 @@ def test_cmd_init_no_duplicate_gitignore_entries(tmp_path, capsys):
     assert gitignore_content.count(".env\n") == 1
 
 
+def test_cmd_init_installs_pre_commit_hook(tmp_path, capsys):
+    """init installs pre-commit hook that rejects conflict markers."""
+    repo, run = _init_repo(tmp_path)
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    hook_path = repo / ".git" / "hooks" / "pre-commit"
+    assert hook_path.exists()
+    assert hook_path.stat().st_mode & 0o111  # executable
+    content = hook_path.read_text()
+    assert "conflict marker" in content.lower() or "<<<<<<<" in content
+
+
+def test_cmd_init_does_not_overwrite_hook_without_force(tmp_path, capsys):
+    """init skips existing pre-commit hook when --force is not set."""
+    repo, run = _init_repo(tmp_path)
+    hook_dir = repo / ".git" / "hooks"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hook_dir / "pre-commit"
+    hook_path.write_text("#!/bin/bash\n# custom hook\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    # Original hook should be preserved
+    assert "custom hook" in hook_path.read_text()
+    out = capsys.readouterr().out
+    assert "already exists" in out
+
+
+def test_cmd_init_overwrites_hook_with_force(tmp_path, capsys):
+    """init overwrites existing pre-commit hook when --force is set."""
+    repo, run = _init_repo(tmp_path)
+    hook_dir = repo / ".git" / "hooks"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hook_dir / "pre-commit"
+    hook_path.write_text("#!/bin/bash\n# custom hook\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=True, workflow_path=None))
+
+    # Hook should be overwritten with nightshift version
+    content = hook_path.read_text()
+    assert "custom hook" not in content
+    assert "conflict marker" in content.lower() or "<<<<<<<" in content
+
+
+def test_pre_commit_hook_rejects_conflict_markers(tmp_path):
+    """The pre-commit hook should reject commits with conflict markers."""
+    repo, run = _init_repo(tmp_path)
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    # Create a file with conflict markers
+    conflict_file = repo / "conflict.txt"
+    conflict_file.write_text("before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n")
+    run("git", "add", "conflict.txt")
+
+    # Commit should fail due to hook
+    result = subprocess.run(
+        ["git", "commit", "-m", "should fail"],
+        cwd=str(repo), capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert "conflict marker" in result.stderr.lower() or "conflict marker" in result.stdout.lower()
+
+
+def test_pre_commit_hook_allows_clean_commits(tmp_path):
+    """The pre-commit hook should allow commits without conflict markers."""
+    repo, run = _init_repo(tmp_path)
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    # Create a clean file
+    clean_file = repo / "clean.txt"
+    clean_file.write_text("no conflicts here\n")
+    run("git", "add", "clean.txt")
+
+    # Commit should succeed
+    result = subprocess.run(
+        ["git", "commit", "-m", "should pass"],
+        cwd=str(repo), capture_output=True, text=True
+    )
+    assert result.returncode == 0
+
+
 # ── cmd_revise ────────────────────────────────────────────────────────────────
 
 

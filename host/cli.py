@@ -620,6 +620,24 @@ def _update_gitignore(root: Path):
         print(".gitignore already has nightshift entries")
 
 
+def _install_pre_commit_hook(root: Path, force: bool = False):
+    """Install pre-commit hook to reject conflict markers."""
+    hook_src = Path(__file__).resolve().parent.parent / "hooks" / "pre-commit"
+    if not hook_src.exists():
+        print(f"Warning: pre-commit hook source not found at {hook_src}", file=sys.stderr)
+        return
+
+    hook_dst = root / ".git" / "hooks" / "pre-commit"
+    if hook_dst.exists() and not force:
+        print(f"Pre-commit hook already exists at {hook_dst}. Use --force to overwrite.")
+        return
+
+    hook_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(hook_src, hook_dst)
+    hook_dst.chmod(0o755)
+    print(f"Installed pre-commit hook (rejects conflict markers)")
+
+
 def cmd_init(a):
     """Scaffold WORKFLOW.md and .env.example in the current repo."""
     try:
@@ -668,6 +686,7 @@ def cmd_init(a):
     print(f"Created {aw_dir.parent}")
 
     _update_gitignore(root)
+    _install_pre_commit_hook(root, a.force)
 
     print("\nNext steps:")
     print(f"  1. Review and customize {workflow_path.name} (notifications, auto_start, base_branch)")
