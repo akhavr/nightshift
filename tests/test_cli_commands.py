@@ -43,12 +43,21 @@ def _make_args(**kwargs):
     return args
 
 
+def _clean_git_env():
+    """Return env dict with GIT_DIR/GIT_WORK_TREE removed for isolated test repos."""
+    env = os.environ.copy()
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    return env
+
+
 def _init_repo(tmp_path):
     """Create a git repo with an initial commit on main."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    env = _clean_git_env()
     run = lambda *args: subprocess.run(
-        args, cwd=str(repo), capture_output=True, text=True
+        args, cwd=str(repo), capture_output=True, text=True, env=env,
     )
     run("git", "init")
     run("git", "config", "user.email", "test@test.com")
