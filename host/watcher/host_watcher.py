@@ -17,7 +17,7 @@ from host.constants import (
     TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
     TRACKER_TERMINATION_WAIT_S,
 )
-from host.session_utils import read_state, update_status, has_active_sessions, get_active_session_ids
+from host.session_utils import read_state, update_status, get_active_session_ids
 from core.config import load_workflow, create_tracker, WorkflowConfig
 from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
