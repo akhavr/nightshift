@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
+from core.state_machine import SessionStateMachine, TERMINAL_STATES
 from core.post_run import format_cost_line, format_token_count
 from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
@@ -54,6 +55,28 @@ from host.session_utils import (
     read_state, write_state, update_status,
     force_remove_dir, remove_worktree,
 )
+
+
+def _validate_transition(sid: str, target_state: str) -> None:
+    """Validate that SSM allows transition to target_state. Exits on invalid."""
+    session_dir = repo_root() / ".nightshift" / "sessions" / sid
+    if not session_dir.exists():
+        return  # Let the command handle missing sessions
+    try:
+        state = read_state(session_dir)
+    except Exception as e:
+        logging.warning("Could not read state for session %s: %s", sid[:12], e)
+        return  # Let the command handle corrupt state
+    current = state.get("status", "starting")
+    ssm = SessionStateMachine(initial_state=current)
+    if not ssm.can_transition(target_state):
+        if current in TERMINAL_STATES:
+            print(f"Cannot {target_state} session '{sid[:12]}': already in terminal state '{current}'",
+                  file=sys.stderr)
+        else:
+            print(f"Cannot transition from '{current}' to '{target_state}' for session '{sid[:12]}'",
+                  file=sys.stderr)
+        sys.exit(1)
 
 
 def repo_root() -> Path:
@@ -289,6 +312,8 @@ def cmd_start(a):
 
 
 def cmd_resume(a):
+    sid = resolve_session(a.issue_id)
+    _validate_transition(sid, "working")
     subprocess.run(_build_resume_launch_cmd(a.issue_id, getattr(a, "workflow", None)))
 
 
@@ -882,6 +907,7 @@ def cmd_accept(a):
     """Merge agent branch into base branch, then clean up."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
+    _validate_transition(sid, "accepted")
     config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
     base = config.workspace.base_branch
@@ -946,6 +972,7 @@ def cmd_reject(a):
     """Discard agent work: remove worktree, branch, and session."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
+    _validate_transition(sid, "rejected")
     config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
 

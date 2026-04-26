@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from typing import Optional, Generator
 
 from core.protocols import UsageData
 from core.state_machine import SessionStateMachine, STATES
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -89,7 +92,19 @@ class StateManager:
             st = SessionState(**json.load(f))
         if self._ssm is None:
             self._ssm = SessionStateMachine(initial_state=st.status)
+            self._register_logging_hooks()
         return st
+
+    def _register_logging_hooks(self) -> None:
+        """Register hooks to log all state transitions."""
+        for state in STATES:
+            self._ssm.register_hook(state, "enter", self._log_transition)
+
+    def _log_transition(self, ctx: dict) -> None:
+        """Log a state transition."""
+        logger.info(
+            "session state: %s -> %s", ctx["from_state"], ctx["to_state"]
+        )
 
     @property
     def status(self) -> str:
@@ -119,10 +134,15 @@ class StateManager:
         This prevents race conditions where a concurrent reader (e.g., the watcher)
         could read state between separate update_status() and mark_completed() calls
         and overwrite one of the changes.
+
+        Status transition is validated through the SSM before writing.
         """
         with state_lock(self.session_dir):
+            if self._ssm is None:
+                self.load_state()  # initializes _ssm
+            self._ssm.transition(status)  # validates transition
             st = self.load_state()
-            st.status = status
+            st.status = self._ssm.state
             st.completed_at = datetime.now(timezone.utc).isoformat()
             self._write(st)
 

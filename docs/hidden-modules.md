@@ -587,6 +587,28 @@ tests/test_workspace_setup.py::test_create_worktree_no_collateral_prune
 
 ---
 
+## SSM Dependency Chain
+
+**IMPORTANT:** SSM issues must be completed in order. Each issue depends on the previous one.
+
+```
+SSM-4 → SSM-5 → SSM-6 → SSM-7 → SSM-8 → SSM-9 → SSM-10
+```
+
+| Issue | Depends On | Description |
+|-------|------------|-------------|
+| SSM-4 | SSM-3 (done) | Hooks for logging and notifications |
+| SSM-5 | SSM-4 | Watcher uses SSM-aware StateManager |
+| SSM-6 | SSM-5 | Q&A flow uses SSM transitions |
+| SSM-7 | SSM-6 | Review flow uses SSM transitions |
+| SSM-8 | SSM-7 | CLI commands use SSM transitions |
+| SSM-9 | SSM-8 | Remove legacy status code |
+| SSM-10 | SSM-9 | Auto-cleanup stale review sessions |
+
+**When labeling for nightshift:** Only label the next issue in the chain once the previous one is accepted. Do not label multiple SSM issues at once.
+
+---
+
 ## Execution Order
 
 Priority based on impact and dependencies:

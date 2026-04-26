@@ -93,21 +93,16 @@ def write_state(session_dir: Path, state: dict) -> None:
 
 
 def update_status(session_dir: Path, status: str) -> None:
-    """Read state.json, validate transition via SSM, update and write back (locked).
+    """Read state.json, validate and update the status field via SSM, and write back (locked).
 
-    SSM-7: All status updates must go through SSM validation to ensure
-    only valid state transitions are allowed.
-
-    Raises:
-        InvalidTransition: if the transition is not allowed by the SSM
-        ValueError: if status is not a known state
+    All status changes go through the SessionStateMachine for validation.
+    Raises InvalidTransition if the transition is not allowed.
     """
     with state_lock(session_dir):
         state = read_state(session_dir)
-        current_status = state.get("status", "starting")
-        ssm = SessionStateMachine(initial_state=current_status)
-        ssm.transition(status)  # raises InvalidTransition if not allowed
-        state["status"] = status
+        ssm = SessionStateMachine(initial_state=state.get("status", "starting"))
+        ssm.transition(status)  # validates transition
+        state["status"] = ssm.state
         write_state(session_dir, state)
 
 
@@ -139,9 +134,17 @@ def increment_provider_outage_retries(session_dir: Path) -> int:
 
 
 def update_state_fields(session_dir: Path, **fields) -> None:
-    """Atomically update arbitrary fields in state.json (locked)."""
+    """Atomically update arbitrary fields in state.json (locked).
+
+    If 'status' is in fields, the transition is validated via SSM.
+    Raises InvalidTransition if the status transition is not allowed.
+    """
     with state_lock(session_dir):
         state = read_state(session_dir)
+        if "status" in fields:
+            ssm = SessionStateMachine(initial_state=state.get("status", "starting"))
+            ssm.transition(fields["status"])  # validates transition
+            fields["status"] = ssm.state
         state.update(fields)
         write_state(session_dir, state)
 

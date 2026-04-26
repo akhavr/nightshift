@@ -517,12 +517,52 @@ class HostWatcher:
         Git-bug lock can get stuck if a process crashes holding it.
         This monitors the lock file age and logs a warning if it's been
         held longer than LOCK_TIMEOUT_S. Does not halt - just warns.
+
+        If the lock file contains a PID, logs the process command line
+        and parent process info to help identify what's holding the lock.
         """
         lock_file = self.repo_dir / ".git" / "git-bug" / "lock"
         if lock_file.exists():
             age = time.time() - lock_file.stat().st_mtime
             if age > LOCK_TIMEOUT_S:
-                log.warning("git-bug lock held for %.0fs, may be stuck", age)
+                try:
+                    pid = int(lock_file.read_text().strip())
+                    # Get process command line
+                    ps_result = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "args=,ppid="],
+                        capture_output=True, text=True
+                    )
+                    ps_output = ps_result.stdout.strip()
+                    if ps_output:
+                        # Parse cmdline and ppid from output
+                        # Format is: "cmdline ppid" where ppid is the last field
+                        parts = ps_output.rsplit(None, 1)
+                        if len(parts) == 2:
+                            cmdline, ppid_str = parts
+                            # Get parent process command line
+                            parent_result = subprocess.run(
+                                ["ps", "-p", ppid_str, "-o", "args="],
+                                capture_output=True, text=True
+                            )
+                            parent_cmdline = parent_result.stdout.strip() or "unknown"
+                            log.warning(
+                                "git-bug lock held for %.0fs by pid %d (%s), "
+                                "parent pid %s (%s)",
+                                age, pid, cmdline, ppid_str, parent_cmdline
+                            )
+                        else:
+                            log.warning(
+                                "git-bug lock held for %.0fs by pid %d (%s)",
+                                age, pid, ps_output or "unknown"
+                            )
+                    else:
+                        # Process not found (dead)
+                        log.warning(
+                            "git-bug lock held for %.0fs by pid %d (process not found)",
+                            age, pid
+                        )
+                except (ValueError, OSError) as e:
+                    log.warning("git-bug lock held for %.0fs, may be stuck (%s)", age, e)
 
     def check_background_launches(self):
         """Poll recently launched background processes for early exit.

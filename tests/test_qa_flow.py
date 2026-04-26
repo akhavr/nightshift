@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from core.constants import TITLE_TRUNCATE_LEN
 from core.protocols import Workspace
 from core.state import StateManager, SessionState
@@ -110,3 +112,69 @@ class TestDeliverAnswer:
         deliver_answer("the answer", agent, sm)
         assert sm.load_state().status == "suspended:answer-ready"
         assert len(agent.inputs_sent) == 0
+
+
+class TestSSMTransitions:
+    """Test that Q&A flow uses SSM-validated transitions."""
+
+    def test_question_transitions_to_waiting(self, tmp_path):
+        """handle_question() must transition to waiting:question via SSM."""
+        _, tracker, notifier, sm, issue = _setup(tmp_path)
+        pending = []
+
+        # Verify initial state is working
+        assert sm.load_state().status == "working"
+
+        handle_question("What color?", sm, tracker, notifier, issue, pending)
+
+        # Verify SSM-controlled transition occurred
+        assert sm.load_state().status == "waiting:question"
+        # Verify SSM state is in sync
+        assert sm._ssm is not None
+        assert sm._ssm.state == "waiting:question"
+
+    def test_answer_transitions_to_working(self, tmp_path):
+        """deliver_answer() must transition to working via SSM from waiting:question."""
+        agent, _, _, sm, issue = _setup(tmp_path)
+
+        # Set up state: session is in waiting:question
+        sm.update_status("waiting:question")
+        assert sm.load_state().status == "waiting:question"
+
+        deliver_answer("the answer", agent, sm)
+
+        # Verify SSM-controlled transition occurred
+        assert sm.load_state().status == "working"
+        assert sm._ssm.state == "working"
+
+    def test_question_rejects_invalid_transition(self, tmp_path):
+        """handle_question() from invalid state raises InvalidTransition."""
+        from core.state_machine import InvalidTransition
+
+        _, tracker, notifier, sm, issue = _setup(tmp_path)
+        pending = []
+
+        # Set state to one that cannot transition to waiting:question
+        # (accepted is terminal, no outgoing transitions)
+        state = sm.load_state()
+        state.status = "accepted"
+        sm._write(state)
+        sm._ssm = None  # reset SSM cache
+
+        with pytest.raises(InvalidTransition):
+            handle_question("What color?", sm, tracker, notifier, issue, pending)
+
+    def test_answer_rejects_invalid_transition(self, tmp_path):
+        """deliver_answer() from invalid state raises InvalidTransition."""
+        from core.state_machine import InvalidTransition
+
+        agent, _, _, sm, _ = _setup(tmp_path)
+
+        # Set state to one that cannot transition to working
+        state = sm.load_state()
+        state.status = "accepted"
+        sm._write(state)
+        sm._ssm = None  # reset SSM cache
+
+        with pytest.raises(InvalidTransition):
+            deliver_answer("the answer", agent, sm)
