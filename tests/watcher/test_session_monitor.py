@@ -3,6 +3,7 @@
 import json
 import sys
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1289,6 +1290,107 @@ class TestStaleReviewSessionCleanup:
         # Coder session should NOT be removed
         mock_rmtree.assert_not_called()
         assert coder_sd.exists()
+
+
+# ---------------------------------------------------------------------------
+# Completed review cleanup after verdict tests
+# ---------------------------------------------------------------------------
+
+class TestCompletedReviewCleanupAfterVerdict:
+    """Auto-cleanup of completed review sessions after verdict processing."""
+
+    def _completed_at(self, seconds_ago: int) -> str:
+        return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+
+    def test_cleanup_completed_review_after_verdict(self, tmp_path):
+        """Completed review sessions should be archived after the coder transitions."""
+        w = _make_watcher(tmp_path)
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:human-review",
+                                 issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is True
+        assert not review_sd.exists()
+        archive_dir = w.monitor.repo_dir / ".nightshift" / "archive" / "review-abc"
+        assert archive_dir.exists()
+        assert (archive_dir / "state.json").exists()
+        mock_remove_worktree.assert_called_once()
+        assert coder_sd.exists()
+
+    def test_no_cleanup_active_review(self, tmp_path):
+        """Active review sessions must not be cleaned up."""
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is False
+        assert review_sd.exists()
+        mock_remove_worktree.assert_not_called()
+        mock_rmtree.assert_not_called()
+
+    def test_cleanup_only_when_coder_transitioned(self, tmp_path):
+        """Completed review cleanup waits until the coder has left waiting:review."""
+        w = _make_watcher(tmp_path)
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is False
+        assert review_sd.exists()
+        mock_remove_worktree.assert_not_called()
+
+        state = json.loads((coder_sd / "state.json").read_text())
+        state["status"] = "working"
+        (coder_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is True
+        assert not review_sd.exists()
+        mock_remove_worktree.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

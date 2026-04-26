@@ -5,6 +5,7 @@ import logging
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from host.constants import (
@@ -20,6 +21,7 @@ from core.constants import TITLE_TRUNCATE_LEN
 from core.state import StateManager
 from host.session_utils import (
     read_state, update_status, _issue_id_prefix_match,
+    archive_session,
     increment_orphan_resumes, update_state_fields,
 )
 from core.config import load_workflow
@@ -33,6 +35,7 @@ _ACTIVE_STATUSES = ("working", "starting", "waiting:answer")
 
 # Directory containing the host package (host/)
 _HOST_DIR = Path(__file__).resolve().parent.parent
+REVIEW_CLEANUP_GRACE_PERIOD_S = 60
 
 
 def is_blocked(labels: list[str]) -> bool:
@@ -44,6 +47,84 @@ def _pkg():
     """Lazy import of host.watcher package for test-patchable names."""
     import host.watcher as _w
     return _w
+
+
+def _parse_completed_at(timestamp: str) -> float | None:
+    """Parse a completed_at timestamp into a unix epoch seconds value."""
+    if not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except ValueError:
+        return None
+
+
+def cleanup_completed_review_session(review_dir: Path, coder_dir: Path | None = None,
+                                     *, repo_dir: Path | None = None,
+                                     workflow_path: Path | None = None,
+                                     grace_period_s: int = REVIEW_CLEANUP_GRACE_PERIOD_S) -> bool:
+    """Archive and remove a completed review session once the coder has moved on.
+
+    Returns True when the review session was archived and cleaned up.
+    """
+    if not review_dir.exists() or not (review_dir / "state.json").exists():
+        return False
+
+    review_sid = review_dir.name
+    if not review_sid.startswith(REVIEW_SESSION_PREFIX):
+        return False
+
+    try:
+        review_state = read_state(review_dir)
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning(f"[{review_sid}] Failed to read review state for cleanup: {e}")
+        return False
+
+    completed_at = _parse_completed_at(review_state.get("completed_at", ""))
+    if completed_at is None:
+        return False
+    if time.time() - completed_at < grace_period_s:
+        return False
+
+    coder_sid = review_sid[len(REVIEW_SESSION_PREFIX):]
+    if coder_dir is None:
+        coder_dir = review_dir.parent / coder_sid
+    if not coder_dir.exists() or not (coder_dir / "state.json").exists():
+        return False
+
+    try:
+        coder_state = read_state(coder_dir)
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning(f"[{coder_sid}] Failed to read coder state for review cleanup: {e}")
+        return False
+
+    if coder_state.get("status") == "waiting:review":
+        return False
+
+    if repo_dir is None:
+        try:
+            repo_dir = review_dir.parents[2]
+        except IndexError:
+            return False
+
+    if workflow_path is None:
+        workflow_path = repo_dir / "WORKFLOW.md"
+
+    review_md = repo_dir / "REVIEW.md"
+    try:
+        config = load_workflow(review_md) if review_md.exists() else load_workflow(workflow_path)
+        worktree = repo_dir / config.workspace.root / f"{REVIEW_SESSION_PREFIX}{coder_sid}"
+        archive_session(review_dir, repo_dir)
+        _pkg().remove_worktree(repo_dir, worktree, f"review/{coder_sid}")
+        _pkg().shutil.rmtree(review_dir, ignore_errors=True)
+        log.info(f"[{review_sid}] Archived and cleaned up completed review session")
+        return True
+    except Exception as e:
+        log.error(f"[{review_sid}] Failed to clean up completed review session: {e}")
+        return False
 
 
 class SessionMonitor:
@@ -70,6 +151,7 @@ class SessionMonitor:
         self._last_auth_retry_check = 0.0
         self._last_provider_outage_check = 0.0
         self._last_zombie_check = 0.0
+        self._last_review_cleanup_check = 0.0
         self._alerted_zombies: set[str] = set()  # Avoid duplicate alerts
 
     def cleanup_stale_review_sessions(self):
@@ -124,6 +206,29 @@ class SessionMonitor:
             if self._review_orchestrator:
                 self._review_orchestrator.cleanup_review_session(sid, session_dir)
 
+    def cleanup_completed_review_sessions(self):
+        """Clean up completed review sessions after the verdict has been processed."""
+        if not self.sessions_dir.exists():
+            return False
+
+        cleaned_any = False
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not sid.startswith(REVIEW_SESSION_PREFIX):
+                continue
+            if not (session_dir / "state.json").exists():
+                continue
+            cleaned = cleanup_completed_review_session(
+                session_dir,
+                self.sessions_dir / sid[len(REVIEW_SESSION_PREFIX):],
+                repo_dir=self.repo_dir,
+                workflow_path=self.workflow_path,
+            )
+            cleaned_any = cleaned_any or cleaned
+        return cleaned_any
+
     def cleanup_stale_blocked_labels(self):
         """Remove blocked:<id> labels where the blocking issue is already closed.
 
@@ -176,6 +281,10 @@ class SessionMonitor:
             if not (session_dir / "state.json").exists():
                 continue
             self.maybe_resume_orphan(session_dir, sid, now)
+
+        if now - self._last_review_cleanup_check >= REVIEW_POLL_INTERVAL_S:
+            self._last_review_cleanup_check = now
+            self.cleanup_completed_review_sessions()
 
     def maybe_resume_orphan(self, session_dir: Path, sid: str, now: float):
         """Check a single session and auto-resume if orphaned."""
