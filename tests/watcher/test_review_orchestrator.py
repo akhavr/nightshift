@@ -43,12 +43,14 @@ class TestSSMTransitions:
     def test_launch_from_invalid_state_raises(self, tmp_path):
         """Launching review from invalid state should raise InvalidTransition.
 
-        SSM-7: Only waiting:review -> reviewing is valid.
+        SSM-7: Only waiting:review -> reviewing is valid (plus working->reviewing
+        for revert, and reviewing->reviewing for re-launch).
         """
         from host.session_utils import update_status
 
         w = _make_watcher(tmp_path)
-        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        # Use 'starting' which cannot transition to 'reviewing'
+        sd = _make_session(w.sessions_dir, "abc", status="starting", issue_id="issue-abc")
 
         with pytest.raises(InvalidTransition):
             update_status(sd, "reviewing")
