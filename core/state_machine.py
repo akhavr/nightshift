@@ -53,6 +53,7 @@ STATES: frozenset[str] = frozenset({
 TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     # self-transitions (no-op resets/confirmations)
     ("working", "working"),
+    ("working", "reviewing"),  # revert on failed revise launch
     # starting -> working (normal startup)
     ("starting", "working"),
     # starting -> suspended states (early failures)
@@ -84,6 +85,7 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("waiting:question", "suspended:answer-ready"),
     # waiting:review -> reviewing (review started)
     ("waiting:review", "reviewing"),
+    ("waiting:review", "waiting:review"),  # self-transition for error recovery
     # waiting:review -> working (resumed for revision)
     ("waiting:review", "working"),
     # waiting:review -> accepted/rejected (human decision)
