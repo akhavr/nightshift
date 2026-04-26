@@ -128,6 +128,7 @@ def attempt_pre_review_rebase(
 
     log.info(f"Pre-review rebase onto {base_branch} in {worktree_path}...")
     result = _rebase(worktree_path, base_branch)
+    used_merge_fallback = False
 
     if not result.success:
         log.warning(f"Rebase failed, falling back to merge: {result.conflict_details}")
@@ -135,14 +136,17 @@ def attempt_pre_review_rebase(
         if not merge_result.success:
             log.warning(f"Merge also failed: {merge_result.conflict_details}")
             return _build_merge_conflict_prompt(base_branch, merge_result)
+        used_merge_fallback = True
 
     if test_command:
         test_failure = _run_test_command(worktree_path, test_command, test_timeout_s)
         if test_failure:
-            log.warning(f"Post-rebase tests failed: {test_failure}")
-            return _build_test_failure_prompt(base_branch, test_failure)
+            op = "merge" if used_merge_fallback else "rebase"
+            log.warning(f"Post-{op} tests failed: {test_failure}")
+            return _build_test_failure_prompt(base_branch, test_failure, used_merge_fallback)
 
-    log.info("Pre-review rebase succeeded")
+    op = "merge fallback" if used_merge_fallback else "rebase"
+    log.info(f"Pre-review {op} succeeded")
     return None
 
 
@@ -335,11 +339,22 @@ def _build_merge_conflict_prompt(base_branch: str, result: MergeResult) -> str:
     )
 
 
-def _build_test_failure_prompt(base_branch: str, test_output: str) -> str:
-    """Build a resume prompt telling the agent to fix post-rebase test failures."""
+def _build_test_failure_prompt(
+    base_branch: str, test_output: str, was_merged: bool = False
+) -> str:
+    """Build a resume prompt telling the agent to fix post-rebase/merge test failures."""
+    if was_merged:
+        header = (
+            f"POST-MERGE TEST FAILURE: The latest {base_branch} was successfully "
+            f"merged into your branch, but the test suite now fails."
+        )
+    else:
+        header = (
+            f"POST-REBASE TEST FAILURE: Your branch was successfully rebased onto "
+            f"the latest {base_branch}, but the test suite now fails."
+        )
     return (
-        f"POST-REBASE TEST FAILURE: Your branch was successfully rebased onto "
-        f"the latest {base_branch}, but the test suite now fails.\n\n"
+        f"{header}\n\n"
         f"Test output:\n{test_output}\n\n"
         f"Please:\n"
         f"1. Investigate and fix the test failures\n"

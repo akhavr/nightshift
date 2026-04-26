@@ -69,7 +69,7 @@ class TestAttemptPreReviewRebase:
         assert "@@DONE@@" in result
 
     def test_test_failure_after_merge_fallback(self, tmp_path):
-        """Test failure after merge fallback returns a prompt."""
+        """Test failure after merge fallback returns a prompt with correct wording."""
         with patch("host.rebase._rebase") as mock_rebase, \
              patch("host.rebase._merge") as mock_merge, \
              patch("host.rebase._run_test_command",
@@ -80,7 +80,8 @@ class TestAttemptPreReviewRebase:
             result = attempt_pre_review_rebase(
                 tmp_path, "master", test_command="pytest")
         assert result is not None
-        assert "POST-REBASE TEST FAILURE" in result
+        assert "POST-MERGE TEST FAILURE" in result
+        assert "merged into your branch" in result
         assert "FAILED test_foo" in result
 
     def test_test_failure_returns_prompt(self, tmp_path):
@@ -406,6 +407,16 @@ class TestBuildPrompts:
         assert "master" in prompt
         assert "test output here" in prompt
         assert "@@DONE@@" in prompt
+        assert "POST-REBASE TEST FAILURE" in prompt
+        assert "rebased onto" in prompt
+
+    def test_test_failure_prompt_after_merge(self):
+        prompt = _build_test_failure_prompt("master", "test output here", was_merged=True)
+        assert "master" in prompt
+        assert "test output here" in prompt
+        assert "@@DONE@@" in prompt
+        assert "POST-MERGE TEST FAILURE" in prompt
+        assert "merged into your branch" in prompt
 
     def test_merge_conflict_prompt_includes_branch(self):
         result = MergeResult(success=False, conflict_details="merge conflicts here")
