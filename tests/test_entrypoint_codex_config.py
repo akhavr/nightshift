@@ -46,12 +46,13 @@ if [ -d /codex-auth ]; then
     cp /codex-auth/config.toml "$HOME/.codex/" 2>/dev/null || true
     if [ -f "$HOME/.codex/auth.json" ]; then
         CODEX_OAUTH_PRESENT=1
+        echo "Codex: OAuth auth.json found, using OAuth authentication" >&2
     fi
 fi
 mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ "$AGENT_KIND" = "codex" ]; then
     if [ "$CODEX_OAUTH_PRESENT" = "1" ]; then
-        :
+        echo "Codex: Skipping API key config (OAuth auth.json present)" >&2
     else
         CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
         if [ -z "$CODEX_KEY" ]; then
@@ -354,6 +355,65 @@ class TestCodexAuthCopy:
 
 
 class TestCodexOAuth:
+
+    def test_oauth_auth_logged(self, tmp_path):
+        """OAuth auth.json detection is logged to stderr."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        (codex_auth / "auth.json").write_text('{"auth_mode": "oauth"}')
+
+        script_text = _CODEX_OAUTH_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "oauth_test.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(fake_home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "AGENT_KIND": "codex",
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "Codex: OAuth auth.json found" in result.stderr
+
+    def test_oauth_skip_api_key_logged(self, tmp_path):
+        """Skipping API key config is logged when OAuth auth.json present."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        (codex_auth / "auth.json").write_text('{"auth_mode": "oauth"}')
+
+        script_text = _CODEX_OAUTH_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "oauth_test.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(fake_home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "AGENT_KIND": "codex",
+            "CODEX_API_KEY": "sk-test",
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        assert "Codex: Skipping API key config" in result.stderr
 
     def test_codex_oauth_skips_config_generation(self, tmp_path):
         """OAuth auth.json suppresses config.toml generation inside the container."""
