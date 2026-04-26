@@ -14,8 +14,7 @@ from host.constants import (
     REVIEW_SESSION_PREFIX,
 )
 from core.protocols import NotificationLevel
-from host.session_utils import read_state, update_status as _update_status, clear_completed_at
-from host.rebase import attempt_pre_review_rebase
+from host.session_utils import read_state, update_status as _update_status
 from core.config import load_workflow
 from core.review import parse_nightshift_command
 from host.watcher.lifecycle_comments import post_done, read_checkpoint_count
@@ -164,12 +163,6 @@ class ReviewOrchestrator:
             self._escalate_to_human(sid, session_dir, issue_id, max_rounds)
             return
 
-        # Pre-review rebase: runs on host to avoid bind-mount issues
-        rebase_prompt = self._attempt_rebase_before_review(sid, session_dir, issue_id)
-        if rebase_prompt is not None:
-            self._resume_coder_for_rebase(sid, session_dir, issue_id, rebase_prompt)
-            return
-
         review_sid = f"{REVIEW_SESSION_PREFIX}{sid}"
 
         # Clean up stale review session if it exists with completed_at set
@@ -199,76 +192,6 @@ class ReviewOrchestrator:
                 _update_status(session_dir, "waiting:review")
         except Exception as e:
             log.error(f"[{sid}] Review launch error: {e} -- reverting to waiting:review")
-            _update_status(session_dir, "waiting:review")
-
-    def _attempt_rebase_before_review(self, sid: str, session_dir: Path,
-                                       issue_id: str) -> str | None:
-        """Run pre-review rebase on the host side. Returns resume prompt or None.
-
-        Rebase runs on the host (not in container) to avoid bind-mount issues
-        where git cannot unlink mounted files like WORKFLOW.md.
-        """
-        try:
-            coder_config = load_workflow(self.workflow_path)
-        except Exception as e:
-            log.warning(f"[{sid}] Failed to load WORKFLOW.md for rebase: {e}")
-            return None  # Skip rebase on config error, let review proceed
-
-        worktree_path = self.repo_dir / coder_config.workspace.root / f"agent-{sid}"
-        if not worktree_path.exists():
-            log.warning(f"[{sid}] Worktree not found at {worktree_path}, skipping rebase")
-            return None
-
-        base_branch = coder_config.workspace.base_branch
-        test_command = coder_config.workspace.test_command
-        test_timeout = coder_config.workspace.test_timeout_s
-
-        return attempt_pre_review_rebase(
-            worktree_path, base_branch, test_command, test_timeout,
-            repo_root=self.repo_dir)
-
-    def _resume_coder_for_rebase(self, sid: str, session_dir: Path,
-                                  issue_id: str, resume_prompt: str):
-        """Resume the coder session to fix rebase/test failures."""
-        if not session_dir.exists():
-            log.warning(f"[{sid[:12]}] Session directory missing, skipping rebase resume")
-            return
-
-        log.info(f"[{sid}] Rebase needed — resuming coder to fix")
-
-        # Write resume prompt
-        (session_dir / "resume-prompt.md").write_text(resume_prompt)
-        # Clear completed_at when resuming from completion states (SSM-11)
-        clear_completed_at(session_dir)
-        _update_status(session_dir, "working")
-
-        # Post tracker comment
-        try:
-            tracker = self._get_tracker()
-            tracker.add_comment(issue_id, "🔄 Rebase needed — resuming agent to fix...")
-        except Exception as e:
-            log.warning(f"[{sid}] Failed to post rebase comment: {e}")
-
-        # Notify
-        self.telegram.notify(
-            f"🔄 `{sid}` needs rebase — resuming coder",
-            level=NotificationLevel.ACTIONS)
-
-        # Launch coder resume
-        cmd = [
-            sys.executable,
-            str(_HOST_DIR / "launch.py"),
-            issue_id,
-            "--resume",
-        ]
-        try:
-            if self._launch_background(cmd, sid):
-                self._recently_launched[sid] = time.time()
-            else:
-                log.warning(f"[{sid}] Coder relaunch for rebase failed -- reverting to waiting:review")
-                _update_status(session_dir, "waiting:review")
-        except Exception as e:
-            log.error(f"[{sid}] Coder relaunch error: {e} -- reverting to waiting:review")
             _update_status(session_dir, "waiting:review")
 
     def _escalate_to_human(self, sid: str, session_dir: Path,
