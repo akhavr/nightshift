@@ -75,10 +75,12 @@ fi
 # regardless of OAuth presence. Only skip API key export when OAuth is present.
 mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ "$AGENT_KIND" = "codex" ]; then
-    # Step 1: Generate config.toml if overflow provider specified (independent of OAuth)
-    if [ -n "$CODEX_BASE_URL" ]; then
-        echo "Codex: Generating config.toml for overflow (model=${CODEX_MODEL:-o3})" >&2
-        cat > "$HOME/.codex/config.toml" << CODEXCFG
+    # Step 1: Generate config.toml if model override or custom provider specified (independent of OAuth)
+    if [ -n "$CODEX_BASE_URL" ] || [ -n "$CODEX_MODEL" ]; then
+        if [ -n "$CODEX_BASE_URL" ]; then
+            # Custom provider with base URL
+            echo "Codex: Generating config.toml for custom provider (model=${CODEX_MODEL:-o3})" >&2
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
 model = "${CODEX_MODEL:-o3}"
 model_provider = "custom"
 
@@ -87,6 +89,14 @@ name = "Custom"
 base_url = "${CODEX_BASE_URL}"
 env_key = "CODEX_API_KEY"
 CODEXCFG
+        else
+            # Model override only, use OpenAI provider
+            echo "Codex: Generating config.toml for openai provider (model=${CODEX_MODEL})" >&2
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL}"
+model_provider = "openai"
+CODEXCFG
+        fi
     fi
 
     # Step 2: API key config only needed when OAuth not present
@@ -100,12 +110,15 @@ CODEXCFG
             # Custom provider: export the key for the config.toml env_key reference
             export CODEX_API_KEY="$CODEX_KEY"
         else
-            # OpenAI native: generate config.toml with openai provider and export key
+            # OpenAI native: export key and generate default config if no model override
             export OPENAI_API_KEY="$CODEX_KEY"
-            cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${CODEX_MODEL:-gpt-4o-mini}"
+            # Only generate default config if no model override was specified in Step 1
+            if [ -z "$CODEX_MODEL" ]; then
+                cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "gpt-4o-mini"
 model_provider = "openai"
 CODEXCFG
+            fi
         fi
     fi
     # Register MCP signal server so Codex can call nightshift_done/checkpoint/question
