@@ -38,6 +38,9 @@ STATES: frozenset[str] = frozenset({
     "suspended:unexpected",
     "suspended:answer-ready",
     "suspended:review-no-verdict",
+    "suspended:branch-missing",
+    "suspended:too-complex",
+    "suspended:review-failed",
     "done:pending-review",
     "cancelled:external",
     "reviewing",
@@ -73,6 +76,7 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("working", "suspended:unexpected"),
     ("working", "suspended:answer-ready"),
     ("working", "suspended:review-no-verdict"),
+    ("working", "suspended:review-failed"),  # review session hits orphan limit
     ("working", "cancelled:external"),
     # waiting:question -> working (answer received)
     ("waiting:question", "working"),
@@ -91,8 +95,10 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("waiting:human-review", "rejected"),
     ("waiting:human-review", "working"),
     # reviewing -> waiting:review (review done)
+    ("reviewing", "reviewing"),  # self-transition for re-launch
     ("reviewing", "waiting:review"),
     ("reviewing", "waiting:human-review"),
+    ("reviewing", "working"),  # revise verdict -> resume coder
     # reviewing -> suspended (review failures)
     ("reviewing", "suspended:auth-failure"),
     ("reviewing", "suspended:context-limit"),
@@ -112,10 +118,24 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("suspended:answer-ready", "working"),
     ("suspended:review-no-verdict", "waiting:human-review"),
     ("suspended:review-no-verdict", "working"),
+    # suspended:branch-missing -> working (manual resume after branch recreated)
+    ("suspended:branch-missing", "working"),
+    # suspended:too-complex -> working (manual resume after task split)
+    ("suspended:too-complex", "working"),
+    # suspended:review-failed -> working (manual resume)
+    ("suspended:review-failed", "working"),
+    # working -> new suspended states
+    ("working", "suspended:branch-missing"),
+    ("working", "suspended:too-complex"),
+    # reviewing -> suspended:review-failed
+    ("reviewing", "suspended:review-failed"),
     # fallback to suspended:unexpected (safety net for unhandled states)
     ("suspended:hook-failure", "suspended:unexpected"),
     ("suspended:max-resumes", "suspended:unexpected"),
     ("suspended:review-no-verdict", "suspended:unexpected"),
+    ("suspended:branch-missing", "suspended:unexpected"),
+    ("suspended:too-complex", "suspended:unexpected"),
+    ("suspended:review-failed", "suspended:unexpected"),
     ("waiting:question", "suspended:unexpected"),
     ("waiting:review", "suspended:unexpected"),
     ("waiting:human-review", "suspended:unexpected"),
