@@ -181,7 +181,6 @@ class TestQAValidatesTransition:
     def test_qa_validates_transition(self, tmp_path):
         """QA handler validates state is waiting:question before delivering answer."""
         import json
-        from host import session_utils
 
         w = _make_watcher(tmp_path)
         sd = _make_session(w.sessions_dir, "abc")
