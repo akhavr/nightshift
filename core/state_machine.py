@@ -86,10 +86,14 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("waiting:review", "rejected"),
     # waiting:review -> human-review (escalation)
     ("waiting:review", "waiting:human-review"),
+    # waiting:review -> error:merge-conflict (conflict markers found during accept)
+    ("waiting:review", "error:merge-conflict"),
     # waiting:human-review -> accepted/rejected
     ("waiting:human-review", "accepted"),
     ("waiting:human-review", "rejected"),
     ("waiting:human-review", "working"),
+    # waiting:human-review -> error:merge-conflict (conflict markers found during accept)
+    ("waiting:human-review", "error:merge-conflict"),
     # reviewing -> waiting:review (review done)
     ("reviewing", "waiting:review"),
     ("reviewing", "waiting:human-review"),
