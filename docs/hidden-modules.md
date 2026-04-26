@@ -217,6 +217,8 @@ tests/test_codebase_audit.py::test_no_direct_status_writes
 
 ### SSM-10: Auto-cleanup stale review sessions
 
+**Issue:** 83f750cd84e5
+
 **Problem:** Completed review sessions (review-<id>) linger in `waiting:review` status after verdict processed. Manual `nightshift cleanup` required. Discovered when multiple stale reviews cluttered status output.
 
 **Tests:**
