@@ -4,6 +4,7 @@ Builds the `docker run` command for launching the agent container.
 """
 
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -11,6 +12,8 @@ from pathlib import Path
 from core.config.models import OverflowConfig
 from core.constants import *
 from host.docker_utils import docker_remove
+
+logger = logging.getLogger(__name__)
 
 
 _PASSTHROUGH_ENV_VARS = (
@@ -28,6 +31,25 @@ _PASSTHROUGH_ENV_VARS = (
     # OpenCode with OpenRouter models
     "OPENROUTER_API_KEY",
 )
+
+# Keys to exclude when Codex OAuth is present (would override OAuth auth)
+_CODEX_OAUTH_EXCLUDES = {"CODEX_API_KEY", "OPENAI_API_KEY"}
+
+
+def _codex_oauth_present() -> bool:
+    """Check if Codex OAuth credentials are configured.
+
+    Returns True if ~/.codex/auth.json exists and contains tokens.
+    """
+    auth_file = Path.home() / ".codex" / "auth.json"
+    if not auth_file.exists():
+        return False
+    try:
+        data = json.loads(auth_file.read_text())
+        return bool(data.get("tokens"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to parse Codex auth.json: %s", e)
+        return False
 
 
 def _auth_mounts() -> list[str]:
@@ -59,8 +81,16 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
             Passed as AGENT_KIND env var so docker-entrypoint.sh can
             configure agent-specific settings.
     """
+    # Determine which vars to exclude (Codex OAuth takes precedence over API keys)
+    exclude_vars: set[str] = set()
+    if agent_kind == "codex" and _codex_oauth_present():
+        exclude_vars = _CODEX_OAUTH_EXCLUDES
+        logger.info("Codex OAuth detected; excluding API keys from env passthrough")
+
     notify_env = []
     for var in _PASSTHROUGH_ENV_VARS:
+        if var in exclude_vars:
+            continue
         val = os.environ.get(var, "")
         if val:
             notify_env += ["-e", f"{var}={val}"]

@@ -239,6 +239,8 @@ Container naming: coder containers are `nightshift-<short-id>`, review container
 
 `docker-entrypoint.sh` sets `GIT_DIR` and `GIT_WORK_TREE` environment variables to point to the mounted `/repo-git/worktrees/agent-<short-id>` and `/workspace`, enabling git operations inside the container without modifying the `.git` file. It also generates `~/.codex/config.toml` for Codex agent sessions: when overflow is active (`CODEX_BASE_URL` or `CODEX_MODEL` set), config.toml is generated regardless of OAuth presence — `CODEX_BASE_URL` produces a custom provider config, while `CODEX_MODEL` alone produces an openai provider config. OAuth and model config are independent: OAuth presence skips API key export (not config generation). Without overflow, the fallback chain `CODEX_API_KEY` → `OPENAI_API_KEY` provides the key. `AGENT_KIND` is passed from `host/docker_cmd.py` based on the workflow's `agent.kind` setting.
 
+**Codex OAuth exclusion**: `docker_cmd.py`'s `_codex_oauth_present()` checks for `~/.codex/auth.json` with valid tokens. When OAuth is detected for Codex agent sessions, `CODEX_API_KEY` and `OPENAI_API_KEY` are excluded from environment variable passthrough to the container — this prevents API keys from overriding OAuth authentication.
+
 When launching the watcher from a different repo (e.g. `nightshift watcher` from `jessica-ng/`), `cli.py` injects `PYTHONPATH` pointing to the agent-worker root so `python -m host.watcher` resolves correctly.
 
 ## git-bug
