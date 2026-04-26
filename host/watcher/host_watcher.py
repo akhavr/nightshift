@@ -17,7 +17,7 @@ from host.constants import (
     TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
     TRACKER_TERMINATION_WAIT_S,
 )
-from host.session_utils import read_state, update_status, has_active_sessions
+from host.session_utils import read_state, update_status, has_active_sessions, ACTIVE_STATUSES
 from core.config import load_workflow, create_tracker, WorkflowConfig
 from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
@@ -491,9 +491,10 @@ class HostWatcher:
             try:
                 state = json.loads(state_file.read_text())
                 status = state.get("status", "")
-                if status in ("working", "starting", "reviewing"):
+                if status in ACTIVE_STATUSES:
                     active_sids.append(state.get("issue_id", session_dir.name))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"Failed to read state for worktree check ({session_dir.name}): {e}")
                 continue
 
         log.critical(
