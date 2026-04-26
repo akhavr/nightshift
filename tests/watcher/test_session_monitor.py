@@ -1689,3 +1689,65 @@ class TestMissingSessionDirHandled:
 
         # Should still launch (the launch itself will handle missing session)
         assert "abc" in launched
+
+
+# ---------------------------------------------------------------------------
+# SSM-5: StateManager usage tests
+# ---------------------------------------------------------------------------
+
+class TestStateManagerUsage:
+    """Verify session_monitor uses StateManager instead of raw JSON reads."""
+
+    def test_orphan_check_uses_state_manager(self, tmp_path):
+        """Orphan detection should use StateManager for loading state."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        state_managers_loaded = []
+
+        # Patch StateManager to track when it's loaded
+        original_state_manager = __import__('core.state', fromlist=['StateManager']).StateManager
+        class TrackedStateManager(original_state_manager):
+            def __init__(self, session_dir):
+                state_managers_loaded.append(str(session_dir))
+                super().__init__(session_dir)
+
+        with patch("host.watcher.session_monitor.StateManager", TrackedStateManager), \
+             patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
+            w.monitor.check_orphaned_sessions()
+
+        # StateManager should have been used to load the session state
+        assert any("abc" in path for path in state_managers_loaded), \
+            f"StateManager should be used for session 'abc', got: {state_managers_loaded}"
+
+    def test_consistent_status_read(self, tmp_path):
+        """Status should be read via StateManager.status property for SSM consistency."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        status_reads = []
+
+        # Patch StateManager.status property to track reads
+        original_state_manager = __import__('core.state', fromlist=['StateManager']).StateManager
+        class TrackedStateManager(original_state_manager):
+            @property
+            def status(self):
+                result = super().status
+                status_reads.append(result)
+                return result
+
+        with patch("host.watcher.session_monitor.StateManager", TrackedStateManager), \
+             patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
+            w.monitor.check_orphaned_sessions()
+
+        # Status should have been read via the status property
+        assert "working" in status_reads, \
+            f"Status should be read via StateManager.status, got: {status_reads}"
