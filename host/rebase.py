@@ -158,65 +158,6 @@ class RebaseResult:
         self.conflict_details = conflict_details
 
 
-def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
-    """Fetch latest base branch and rebase the worktree branch onto it."""
-    # Stash uncommitted changes before rebase (e.g., WORKFLOW.md local config)
-    stash_result = subprocess.run(
-        ["git", "stash", "--include-untracked", "-m", "pre-rebase-stash"],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-    had_stash = "No local changes" not in stash_result.stdout
-
-    # Fetch latest from remote (ignore failure — remote may not exist)
-    fetch_result = subprocess.run(
-        ["git", "fetch", "origin", base_branch],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-    # Use fetched remote ref if available, otherwise local base branch
-    rebase_target = f"origin/{base_branch}" if fetch_result.returncode == 0 else base_branch
-
-    result = subprocess.run(
-        ["git", "rebase", rebase_target],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        if had_stash:
-            pop_result = subprocess.run(
-                ["git", "stash", "pop"],
-                cwd=str(worktree_path), capture_output=True, text=True,
-            )
-            if pop_result.returncode != 0:
-                log.warning(f"Stash pop failed (conflicts?): {pop_result.stderr}")
-        return RebaseResult(success=True)
-
-    # Collect conflict details before aborting
-    diff_result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=U"],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-    conflict_files = diff_result.stdout.strip()
-    details = f"Rebase failed.\nstderr: {result.stderr.strip()}"
-    if conflict_files:
-        details += f"\nConflicting files:\n{conflict_files}"
-
-    # Abort the failed rebase to restore a clean state
-    subprocess.run(
-        ["git", "rebase", "--abort"],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-
-    # Restore stashed changes after abort
-    if had_stash:
-        pop_result = subprocess.run(
-            ["git", "stash", "pop"],
-            cwd=str(worktree_path), capture_output=True, text=True,
-        )
-        if pop_result.returncode != 0:
-            log.warning(f"Stash pop failed after rebase abort: {pop_result.stderr}")
-
-    return RebaseResult(success=False, conflict_details=details)
-
-
 class MergeResult:
     """Result of a merge operation."""
 
@@ -225,62 +166,94 @@ class MergeResult:
         self.conflict_details = conflict_details
 
 
-def _merge(worktree_path: Path, base_branch: str) -> MergeResult:
-    """Fetch latest base branch and merge it into the worktree branch."""
-    # Stash uncommitted changes before merge (e.g., WORKFLOW.md local config)
+def _stash_changes(worktree_path: Path, label: str) -> bool:
+    """Stash uncommitted changes before rebase/merge. Returns True if stash was created."""
     stash_result = subprocess.run(
-        ["git", "stash", "--include-untracked", "-m", "pre-merge-stash"],
+        ["git", "stash", "--include-untracked", "-m", f"pre-{label}-stash"],
         cwd=str(worktree_path), capture_output=True, text=True,
     )
-    had_stash = "No local changes" not in stash_result.stdout
+    return "No local changes" not in stash_result.stdout
 
-    # Fetch latest from remote (ignore failure — remote may not exist)
+
+def _fetch_and_get_target(worktree_path: Path, base_branch: str) -> str:
+    """Fetch latest from remote and return target ref. Falls back to local branch."""
     fetch_result = subprocess.run(
         ["git", "fetch", "origin", base_branch],
         cwd=str(worktree_path), capture_output=True, text=True,
     )
-    # Use fetched remote ref if available, otherwise local base branch
-    merge_target = f"origin/{base_branch}" if fetch_result.returncode == 0 else base_branch
+    return f"origin/{base_branch}" if fetch_result.returncode == 0 else base_branch
 
-    result = subprocess.run(
-        ["git", "merge", merge_target, "-m", f"Merge {merge_target} into agent branch"],
+
+def _pop_stash_if_needed(worktree_path: Path, had_stash: bool, context: str) -> None:
+    """Pop stash if one was created. Logs warning on failure."""
+    if not had_stash:
+        return
+    pop_result = subprocess.run(
+        ["git", "stash", "pop"],
         cwd=str(worktree_path), capture_output=True, text=True,
     )
-    if result.returncode == 0:
-        if had_stash:
-            pop_result = subprocess.run(
-                ["git", "stash", "pop"],
-                cwd=str(worktree_path), capture_output=True, text=True,
-            )
-            if pop_result.returncode != 0:
-                log.warning(f"Stash pop failed (conflicts?): {pop_result.stderr}")
-        return MergeResult(success=True)
+    if pop_result.returncode != 0:
+        log.warning(f"Stash pop failed {context}: {pop_result.stderr}")
 
-    # Collect conflict details before aborting
+
+def _collect_conflict_details(worktree_path: Path, operation: str, stderr: str) -> str:
+    """Collect conflicting files and build details string."""
     diff_result = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=U"],
         cwd=str(worktree_path), capture_output=True, text=True,
     )
     conflict_files = diff_result.stdout.strip()
-    details = f"Merge failed.\nstderr: {result.stderr.strip()}"
+    details = f"{operation} failed.\nstderr: {stderr.strip()}"
     if conflict_files:
         details += f"\nConflicting files:\n{conflict_files}"
+    return details
 
-    # Abort the failed merge to restore a clean state
+
+def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
+    """Fetch latest base branch and rebase the worktree branch onto it."""
+    had_stash = _stash_changes(worktree_path, "rebase")
+    target = _fetch_and_get_target(worktree_path, base_branch)
+
+    result = subprocess.run(
+        ["git", "rebase", target],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
+        return RebaseResult(success=True)
+
+    details = _collect_conflict_details(worktree_path, "Rebase", result.stderr)
+
+    subprocess.run(
+        ["git", "rebase", "--abort"],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+
+    _pop_stash_if_needed(worktree_path, had_stash, "after rebase abort")
+    return RebaseResult(success=False, conflict_details=details)
+
+
+def _merge(worktree_path: Path, base_branch: str) -> MergeResult:
+    """Fetch latest base branch and merge it into the worktree branch."""
+    had_stash = _stash_changes(worktree_path, "merge")
+    target = _fetch_and_get_target(worktree_path, base_branch)
+
+    result = subprocess.run(
+        ["git", "merge", target, "-m", f"Merge {target} into agent branch"],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
+        return MergeResult(success=True)
+
+    details = _collect_conflict_details(worktree_path, "Merge", result.stderr)
+
     subprocess.run(
         ["git", "merge", "--abort"],
         cwd=str(worktree_path), capture_output=True, text=True,
     )
 
-    # Restore stashed changes after abort
-    if had_stash:
-        pop_result = subprocess.run(
-            ["git", "stash", "pop"],
-            cwd=str(worktree_path), capture_output=True, text=True,
-        )
-        if pop_result.returncode != 0:
-            log.warning(f"Stash pop failed after merge abort: {pop_result.stderr}")
-
+    _pop_stash_if_needed(worktree_path, had_stash, "after merge abort")
     return MergeResult(success=False, conflict_details=details)
 
 
