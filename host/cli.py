@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
-from core.state_machine import SessionStateMachine, InvalidTransition, TERMINAL_STATES
+from core.state_machine import SessionStateMachine, TERMINAL_STATES
 from core.post_run import format_cost_line, format_token_count
 from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
