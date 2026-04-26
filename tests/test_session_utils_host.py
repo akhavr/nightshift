@@ -98,13 +98,13 @@ class TestWriteState:
 
 class TestUpdateStatus:
     def test_updates_status_field(self, tmp_path):
-        (tmp_path / "state.json").write_text(json.dumps({"status": "running", "issue_id": "1"}))
-        update_status(tmp_path, "done")
+        (tmp_path / "state.json").write_text(json.dumps({"status": "working", "issue_id": "1"}))
+        update_status(tmp_path, "waiting:review")
         state = read_state(tmp_path)
-        assert state["status"] == "done"
+        assert state["status"] == "waiting:review"
 
     def test_preserves_other_fields(self, tmp_path):
-        original = {"status": "running", "issue_id": "abc", "turns": 7}
+        original = {"status": "working", "issue_id": "abc", "turns": 7}
         (tmp_path / "state.json").write_text(json.dumps(original))
         update_status(tmp_path, "waiting:review")
         state = read_state(tmp_path)
@@ -113,12 +113,21 @@ class TestUpdateStatus:
 
     def test_raises_when_state_missing(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            update_status(tmp_path, "done")
+            update_status(tmp_path, "waiting:review")
 
-    def test_can_set_arbitrary_status_string(self, tmp_path):
-        (tmp_path / "state.json").write_text(json.dumps({"status": "running"}))
+    def test_validates_transition_via_ssm(self, tmp_path):
+        """update_status validates transitions through the SSM."""
+        from core.state_machine import InvalidTransition
+        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
         update_status(tmp_path, "waiting:question")
         assert read_state(tmp_path)["status"] == "waiting:question"
+
+    def test_rejects_invalid_transition(self, tmp_path):
+        """update_status raises InvalidTransition for invalid state changes."""
+        from core.state_machine import InvalidTransition
+        (tmp_path / "state.json").write_text(json.dumps({"status": "accepted"}))
+        with pytest.raises(InvalidTransition):
+            update_status(tmp_path, "working")
 
 
 # ── get_repo_root ─────────────────────────────────────────────────────────────
@@ -633,10 +642,10 @@ class TestLockedStateOperations:
             "status": "working", "orphan_resumes": 0, "other": "value"
         }))
 
-        update_state_fields(tmp_path, status="suspended", orphan_resumes=5)
+        update_state_fields(tmp_path, status="suspended:unexpected", orphan_resumes=5)
 
         state = read_state(tmp_path)
-        assert state["status"] == "suspended"
+        assert state["status"] == "suspended:unexpected"
         assert state["orphan_resumes"] == 5
         assert state["other"] == "value"
 
@@ -644,14 +653,21 @@ class TestLockedStateOperations:
         """update_state_fields should create state.json.lock file."""
         (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
 
-        update_state_fields(tmp_path, status="done")
+        update_state_fields(tmp_path, status="waiting:review")
         assert (tmp_path / "state.json.lock").exists()
+
+    def test_update_state_fields_rejects_invalid_transition(self, tmp_path):
+        """update_state_fields raises InvalidTransition for invalid status changes."""
+        from core.state_machine import InvalidTransition
+        (tmp_path / "state.json").write_text(json.dumps({"status": "accepted"}))
+        with pytest.raises(InvalidTransition):
+            update_state_fields(tmp_path, status="working", orphan_resumes=0)
 
     def test_update_status_creates_lock_file(self, tmp_path):
         """update_status should create state.json.lock file."""
         (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
 
-        update_status(tmp_path, "done")
+        update_status(tmp_path, "waiting:review")
         assert (tmp_path / "state.json.lock").exists()
 
     def test_clear_completed_at_removes_field(self, tmp_path):

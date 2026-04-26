@@ -119,10 +119,15 @@ class StateManager:
         This prevents race conditions where a concurrent reader (e.g., the watcher)
         could read state between separate update_status() and mark_completed() calls
         and overwrite one of the changes.
+
+        Status transition is validated through the SSM before writing.
         """
         with state_lock(self.session_dir):
+            if self._ssm is None:
+                self.load_state()  # initializes _ssm
+            self._ssm.transition(status)  # validates transition
             st = self.load_state()
-            st.status = status
+            st.status = self._ssm.state
             st.completed_at = datetime.now(timezone.utc).isoformat()
             self._write(st)
 
