@@ -78,6 +78,7 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("working", "suspended:review-no-verdict"),
     ("working", "suspended:review-failed"),  # review session hits orphan limit
     ("working", "cancelled:external"),
+    ("working", "error:merge-conflict"),
     # waiting:question -> working (answer received)
     ("waiting:question", "working"),
     ("waiting:question", "suspended:answer-ready"),
