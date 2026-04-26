@@ -85,7 +85,7 @@ tests/test_post_run.py::test_notify_done_uses_transition
 
 ---
 
-### SSM-4: Hooks for logging and notifications
+### SSM-4: Hooks for logging and notifications [DONE]
 
 **Issue:** d2000b5c84aa
 
@@ -108,7 +108,7 @@ tests/test_state.py::test_transition_logs_state_change
 
 ---
 
-### SSM-5: Watcher uses SSM-aware StateManager
+### SSM-5: Watcher uses SSM-aware StateManager [DONE]
 
 **Issue:** 57561f29274b
 
@@ -128,7 +128,7 @@ tests/watcher/test_session_monitor.py::test_consistent_status_read
 
 ---
 
-### SSM-6: Q&A flow uses SSM transitions
+### SSM-6: Q&A flow uses SSM transitions [DONE]
 
 **Issue:** 954974afa32b
 
@@ -149,7 +149,7 @@ tests/watcher/test_qa_handler.py::test_qa_validates_transition
 
 ---
 
-### SSM-7: Review flow uses SSM transitions
+### SSM-7: Review flow uses SSM transitions [DONE]
 
 **Issue:** 9ed266080dbd
 
@@ -172,7 +172,7 @@ tests/watcher/test_verdict_handler.py::test_reject_transitions_to_rejected
 
 ---
 
-### SSM-8: CLI commands use SSM transitions
+### SSM-8: CLI commands use SSM transitions [DONE]
 
 **Issue:** ab92d978d314
 
@@ -195,7 +195,7 @@ tests/test_cli_commands.py::test_resume_validates_state
 
 ---
 
-### SSM-9: Remove legacy status code
+### SSM-9: Remove legacy status code [DONE]
 
 **Issue:** f90977b5544b
 
@@ -215,7 +215,7 @@ tests/test_codebase_audit.py::test_no_direct_status_writes
 
 ---
 
-### SSM-10: Auto-cleanup stale review sessions
+### SSM-10: Auto-cleanup stale review sessions [DONE]
 
 **Issue:** 83f750cd84e5
 
@@ -630,8 +630,8 @@ Priority based on impact and dependencies:
 | Phase | Issues | Key Outcome | Status |
 |-------|--------|-------------|--------|
 | 1 | SSM-1 to SSM-3 | Race condition eliminated | **DONE** |
-| 2 | SSM-4 to SSM-9 | Full SSM integration | TODO |
-| 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix | SSM-11 DONE, SSM-10 TODO |
+| 2 | SSM-4 to SSM-9 | Full SSM integration | **DONE** |
+| 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix | **DONE** |
 | 3 | AES-1 to AES-2 | Event foundation + ClaudeCode | TODO |
 | 4 | AES-3 to AES-6 | All agents unified | TODO |
 | 5 | WT-0, WT-1, WT-1.5, WT-1.6, WT-1.7, WT-6 | Git state self-healing + safe prune | **DONE** |
@@ -639,12 +639,12 @@ Priority based on impact and dependencies:
 
 **Total: 27 issues, each TDD, each wired to real flow.**
 
-**Completed:** SSM-1, SSM-2, SSM-3, SSM-11, WT-1.5, WT-1.6, WT-1.7, WT-6 (8 issues)
-**Remaining:** SSM-4 to SSM-10, AES-1 to AES-6, WT-0 to WT-5 (19 issues)
+**Completed:** SSM-1 to SSM-11, WT-1.5, WT-1.6, WT-1.7, WT-6 (15 issues)
+**Remaining:** AES-1 to AES-6, WT-0 to WT-5 (12 issues)
 
 After Phase 1 (3 issues): Race condition fixed structurally. **DONE**
-After Phase 2 (6 more): SSM complete, lifecycle explicit.
-After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup. (SSM-11 done)
+After Phase 2 (6 more): SSM complete, lifecycle explicit. **DONE**
+After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup. **DONE**
 After Phase 4 (6 more): Adding new agents is trivial.
 After Phase 5 (6 issues): Git state self-heals from container corruption, safe prune prevents collateral damage. **DONE**
 After Phase 6 (5 more): Git operations are bulletproof.
