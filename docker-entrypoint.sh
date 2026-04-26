@@ -68,22 +68,17 @@ OHWRAP
 fi
 
 # Generate Codex config from env vars.
-# CODEX_API_KEY → OPENAI_API_KEY fallback chain.
-# If CODEX_BASE_URL is set → generate config.toml with custom provider.
-# If CODEX_BASE_URL not set → export OPENAI_API_KEY, Codex uses OpenAI natively.
-# Skip entirely if OAuth auth.json is present.
+# OAuth (auth.json) and model config (config.toml) are INDEPENDENT:
+# - OAuth provides authentication credentials
+# - config.toml provides model selection (overflow or native)
+# When overflow is active (CODEX_BASE_URL/CODEX_MODEL set), generate config.toml
+# regardless of OAuth presence. Only skip API key export when OAuth is present.
 mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ "$AGENT_KIND" = "codex" ]; then
-    if [ "$CODEX_OAUTH_PRESENT" = "1" ]; then
-        echo "Codex: Skipping API key config (OAuth auth.json present)" >&2
-    else
-        CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
-        if [ -z "$CODEX_KEY" ]; then
-            echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
-        elif [ -n "$CODEX_BASE_URL" ]; then
-            # Custom provider: generate config.toml
-            export CODEX_API_KEY="$CODEX_KEY"
-            cat > "$HOME/.codex/config.toml" << CODEXCFG
+    # Step 1: Generate config.toml if overflow provider specified (independent of OAuth)
+    if [ -n "$CODEX_BASE_URL" ]; then
+        echo "Codex: Generating config.toml for overflow (model=${CODEX_MODEL:-o3})" >&2
+        cat > "$HOME/.codex/config.toml" << CODEXCFG
 model = "${CODEX_MODEL:-o3}"
 model_provider = "custom"
 
@@ -92,9 +87,25 @@ name = "Custom"
 base_url = "${CODEX_BASE_URL}"
 env_key = "CODEX_API_KEY"
 CODEXCFG
+    fi
+
+    # Step 2: API key config only needed when OAuth not present
+    if [ "$CODEX_OAUTH_PRESENT" = "1" ]; then
+        echo "Codex: Using OAuth authentication (skipping API key config)" >&2
+    else
+        CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
+        if [ -z "$CODEX_KEY" ]; then
+            echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
+        elif [ -n "$CODEX_BASE_URL" ]; then
+            # Custom provider: export the key for the config.toml env_key reference
+            export CODEX_API_KEY="$CODEX_KEY"
         else
-            # OpenAI native: just export the key, no config.toml needed
+            # OpenAI native: generate config.toml with openai provider and export key
             export OPENAI_API_KEY="$CODEX_KEY"
+            cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL:-gpt-4o-mini}"
+model_provider = "openai"
+CODEXCFG
         fi
     fi
     # Register MCP signal server so Codex can call nightshift_done/checkpoint/question

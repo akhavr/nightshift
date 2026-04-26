@@ -37,6 +37,9 @@ fi
 
 
 # Script that covers the combined OAuth + config-generation flow from docker-entrypoint.sh.
+# OAuth (auth.json) and model config (config.toml) are INDEPENDENT:
+# - OAuth provides authentication credentials
+# - config.toml provides model selection (overflow or native)
 _CODEX_OAUTH_SCRIPT = """\
 #!/bin/sh
 CODEX_OAUTH_PRESENT=0
@@ -51,16 +54,11 @@ if [ -d /codex-auth ]; then
 fi
 mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ "$AGENT_KIND" = "codex" ]; then
-    if [ "$CODEX_OAUTH_PRESENT" = "1" ]; then
-        echo "Codex: Skipping API key config (OAuth auth.json present)" >&2
-    else
-        CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
-        if [ -z "$CODEX_KEY" ]; then
-            echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
-        elif [ -n "$CODEX_BASE_URL" ]; then
-            export CODEX_API_KEY="$CODEX_KEY"
-            cat > "$HOME/.codex/config.toml" << CODEXCFG
-model = "${CODEX_MODEL:-gpt-5.4}"
+    # Step 1: Generate config.toml if overflow provider specified (independent of OAuth)
+    if [ -n "$CODEX_BASE_URL" ]; then
+        echo "Codex: Generating config.toml for overflow (model=${CODEX_MODEL:-o3})" >&2
+        cat > "$HOME/.codex/config.toml" << CODEXCFG
+model = "${CODEX_MODEL:-o3}"
 model_provider = "custom"
 
 [model_providers.custom]
@@ -68,6 +66,17 @@ name = "Custom"
 base_url = "${CODEX_BASE_URL}"
 env_key = "CODEX_API_KEY"
 CODEXCFG
+    fi
+
+    # Step 2: API key config only needed when OAuth not present
+    if [ "$CODEX_OAUTH_PRESENT" = "1" ]; then
+        echo "Codex: Using OAuth authentication (skipping API key config)" >&2
+    else
+        CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
+        if [ -z "$CODEX_KEY" ]; then
+            echo "WARNING: AGENT_KIND=codex but no CODEX_API_KEY or OPENAI_API_KEY set — Codex CLI will fail" >&2
+        elif [ -n "$CODEX_BASE_URL" ]; then
+            export CODEX_API_KEY="$CODEX_KEY"
         else
             export OPENAI_API_KEY="$CODEX_KEY"
             cat > "$HOME/.codex/config.toml" << CODEXCFG
@@ -354,6 +363,97 @@ class TestCodexAuthCopy:
         assert not (fake_home / ".codex" / "config.toml").exists()
 
 
+class TestCodexOAuthOverflowConflict:
+    """Tests for OAuth + overflow config conflict (issue: OAuth auth and model config are independent)."""
+
+    def test_overflow_model_with_oauth_generates_config(self, tmp_path):
+        """When overflow is active (CODEX_MODEL/CODEX_BASE_URL), config.toml generated EVEN with OAuth.
+
+        OAuth provides authentication; overflow provides model selection. They're independent.
+        Host's config.toml with hardcoded 'model_provider = openai' must NOT override overflow settings.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        # OAuth auth.json present
+        (codex_auth / "auth.json").write_text('{"auth_mode": "oauth", "refresh_token": "token"}')
+        # Host config.toml with hardcoded settings we want to OVERRIDE
+        (codex_auth / "config.toml").write_text('model = "gpt-4o"\nmodel_provider = "openai"')
+
+        script_text = _CODEX_OAUTH_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "oauth_overflow.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(fake_home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "AGENT_KIND": "codex",
+            "CODEX_MODEL": "qwen/qwen3-coder",  # Overflow model
+            "CODEX_BASE_URL": "https://openrouter.ai/api/v1",  # Overflow provider
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        config_path = fake_home / ".codex" / "config.toml"
+        assert config_path.exists()
+        content = config_path.read_text()
+        # Must have overflow model, not host's gpt-4o
+        assert "qwen/qwen3-coder" in content
+        assert 'model_provider = "custom"' in content
+        assert "openrouter.ai" in content
+        # Must NOT have host's hardcoded openai provider
+        assert 'model_provider = "openai"' not in content
+
+    def test_oauth_without_overflow_uses_host_config(self, tmp_path):
+        """When OAuth present but NO overflow (no CODEX_MODEL/CODEX_BASE_URL), host config.toml is used.
+
+        This is the normal case: OAuth for auth, host's config.toml for model selection.
+        """
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        codex_auth = tmp_path / "codex-auth"
+        codex_auth.mkdir()
+        # OAuth auth.json present
+        (codex_auth / "auth.json").write_text('{"auth_mode": "oauth", "refresh_token": "token"}')
+        # Host config.toml with user's preferred model
+        (codex_auth / "config.toml").write_text('model = "o3"\nmodel_provider = "openai"')
+
+        script_text = _CODEX_OAUTH_SCRIPT.replace("/codex-auth", str(codex_auth))
+        script = tmp_path / "oauth_no_overflow.sh"
+        script.write_text(script_text)
+        script.chmod(0o755)
+
+        env = {
+            "HOME": str(fake_home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "AGENT_KIND": "codex",
+            # NO CODEX_MODEL or CODEX_BASE_URL — no overflow
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0
+        config_path = fake_home / ".codex" / "config.toml"
+        # Host config.toml should be preserved (copied from codex-auth, NOT overwritten)
+        assert config_path.exists()
+        content = config_path.read_text()
+        assert "o3" in content  # Host's model
+        assert 'model_provider = "openai"' in content  # Host's provider
+
+
 class TestCodexOAuth:
 
     def test_oauth_auth_logged(self, tmp_path):
@@ -413,7 +513,8 @@ class TestCodexOAuth:
         )
 
         assert result.returncode == 0
-        assert "Codex: Skipping API key config" in result.stderr
+        assert "Using OAuth authentication" in result.stderr
+        assert "skipping API key config" in result.stderr
 
     def test_codex_oauth_skips_config_generation(self, tmp_path):
         """OAuth auth.json suppresses config.toml generation inside the container."""
