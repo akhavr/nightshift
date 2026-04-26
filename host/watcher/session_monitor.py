@@ -2,6 +2,7 @@
 
 import json
 import logging
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -204,6 +205,16 @@ class SessionMonitor:
         if self._check_done_signals(session_dir, sid):
             return
 
+        # Verify the agent branch still exists before attempting resume
+        if not self._verify_branch_exists(state):
+            log.warning(f"[{sid}] Branch missing — suspending session")
+            update_state_fields(session_dir, status="suspended:branch-missing")
+            self.telegram.notify(
+                f"🔀 `{sid}` branch missing — session suspended. "
+                f"Recreate the branch and `nightshift resume`.",
+                level=NotificationLevel.ACTIONS)
+            return
+
         orphan_resumes = state.get("orphan_resumes", 0)
         if orphan_resumes >= MAX_ORPHAN_RESUMES:
             if is_review_session:
@@ -357,6 +368,24 @@ class SessionMonitor:
             f"falling back to human review.\n"
             f"`nightshift accept/reject/revise {issue_id}`",
             level=NotificationLevel.ACTIONS)
+
+    def _verify_branch_exists(self, state: dict) -> bool:
+        """Verify the agent branch exists before resuming.
+
+        Returns True if the branch exists, False if missing.
+        """
+        branch = state.get("branch", "")
+        if not branch:
+            return False
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", f"refs/heads/{branch}"],
+            capture_output=True, cwd=self.repo_dir
+        )
+        if result.returncode != 0:
+            log.error("Branch %s missing for session (issue %s)",
+                      branch, state.get("issue_id", "?"))
+            return False
+        return True
 
     def _resume_session(self, sid: str, issue_id: str, reason: str):
         """Post lifecycle comment and launch a resume for the given session."""
