@@ -234,7 +234,7 @@ class TestMergeWithRebaseFallback:
             )
 
         mock_rebase.assert_called_once_with(
-            repo, "agent/test1", "main", "issue-1", config, _noop_report,
+            repo, "agent/test1", "main", "issue-1", config, _noop_report, None,
         )
 
 

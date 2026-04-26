@@ -13,7 +13,7 @@ Nightshift is an autonomous coding agent runner. It launches a coding agent (e.g
 docker build -t nightshift:latest .
 
 # CLI commands (use `nightshift` if installed, otherwise `python host/cli.py`)
-nightshift init                          # scaffold WORKFLOW.md, .env.example, .nightshift/
+nightshift init                          # scaffold WORKFLOW.md, .env.example, .nightshift/, pre-commit hook
 nightshift start <issue-id>              # create worktree + session, launch container
 nightshift resume <issue-id>             # resume a suspended session
 nightshift answer <issue-id> "your answer"
@@ -99,12 +99,15 @@ Key core modules:
 - `constants.py` — Named constants for timeouts, thresholds, polling intervals (replaces magic numbers).
 - `git_utils.py` — Git command wrappers (branch detection, merge, diff).
 - `docker_utils.py` — Docker container management (pause/unpause/stop/status).
-- `merge.py` — Merge execution and conflict validation logic extracted from cli.py.
+- `merge.py` — Merge execution and conflict validation logic extracted from cli.py. Rebases in the worktree (not main repo) to avoid polluting main repo with conflict markers.
 - `rebase.py` — Host-side pre-review rebase: fetch latest base branch, rebase agent worktree, run tests. Called by `review_orchestrator.py` before launching review. Runs on host (not in container) to avoid bind-mount issues with git operations.
 - `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.
 - `config_discovery.py` — Workflow file discovery: CLI flag > `.nightshift.yaml` pointer > `WORKFLOW.md` default. Also writes `.nightshift.yaml` for `init --workflow-path`.
 
 **`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, runs `SessionRunner`.
+
+**`hooks/`** — Git hooks installed by `nightshift init`:
+- `pre-commit` — Rejects commits containing conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`). Safety net to prevent accidental commits of unresolved conflicts.
 
 ## Coding Rules
 
