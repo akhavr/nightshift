@@ -10,10 +10,13 @@ import pytest
 from host.rebase import (
     attempt_pre_review_rebase,
     _rebase,
+    _merge,
     _run_test_command,
     _build_rebase_conflict_prompt,
+    _build_merge_conflict_prompt,
     _build_test_failure_prompt,
     RebaseResult,
+    MergeResult,
     TEST_COMMAND_TIMEOUT_S,
 )
 
@@ -38,17 +41,47 @@ class TestAttemptPreReviewRebase:
                 tmp_path, "master", test_command="pytest")
         assert result is None
 
-    def test_rebase_conflict_returns_prompt(self, tmp_path):
-        """Rebase conflict returns a prompt for the agent."""
-        with patch("host.rebase._rebase") as mock_rebase:
+    def test_rebase_conflict_falls_back_to_merge(self, tmp_path):
+        """Rebase conflict falls back to merge, returns None on merge success."""
+        with patch("host.rebase._rebase") as mock_rebase, \
+             patch("host.rebase._merge") as mock_merge:
             mock_rebase.return_value = RebaseResult(
+                success=False,
+                conflict_details="Conflicting files:\nsrc/main.py")
+            mock_merge.return_value = MergeResult(success=True)
+            result = attempt_pre_review_rebase(tmp_path, "master")
+        assert result is None
+        mock_merge.assert_called_once_with(tmp_path, "master")
+
+    def test_merge_conflict_returns_prompt(self, tmp_path):
+        """When both rebase and merge fail, return merge conflict prompt."""
+        with patch("host.rebase._rebase") as mock_rebase, \
+             patch("host.rebase._merge") as mock_merge:
+            mock_rebase.return_value = RebaseResult(
+                success=False, conflict_details="rebase conflict")
+            mock_merge.return_value = MergeResult(
                 success=False,
                 conflict_details="Conflicting files:\nsrc/main.py")
             result = attempt_pre_review_rebase(tmp_path, "master")
         assert result is not None
-        assert "REBASE CONFLICT" in result
+        assert "MERGE CONFLICT" in result
         assert "src/main.py" in result
         assert "@@DONE@@" in result
+
+    def test_test_failure_after_merge_fallback(self, tmp_path):
+        """Test failure after merge fallback returns a prompt."""
+        with patch("host.rebase._rebase") as mock_rebase, \
+             patch("host.rebase._merge") as mock_merge, \
+             patch("host.rebase._run_test_command",
+                   return_value="Exit code 1\nstdout:\nFAILED test_foo"):
+            mock_rebase.return_value = RebaseResult(
+                success=False, conflict_details="rebase conflict")
+            mock_merge.return_value = MergeResult(success=True)
+            result = attempt_pre_review_rebase(
+                tmp_path, "master", test_command="pytest")
+        assert result is not None
+        assert "POST-REBASE TEST FAILURE" in result
+        assert "FAILED test_foo" in result
 
     def test_test_failure_returns_prompt(self, tmp_path):
         """Test failure after rebase returns a prompt."""
@@ -202,6 +235,118 @@ class TestRebase:
         assert "pop" in str(last_call)
 
 
+class TestMerge:
+    """Tests for the _merge function."""
+
+    def test_success_with_remote_fetch(self, tmp_path):
+        """Successful merge after fetching from origin."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=0),  # merge
+            ]
+            result = _merge(tmp_path, "master")
+        assert result.success
+        calls = mock_run.call_args_list
+        assert "stash" in str(calls[0])
+        assert "fetch" in str(calls[1])
+        assert "merge" in str(calls[2])
+        assert "origin/master" in str(calls[2])
+
+    def test_success_without_remote(self, tmp_path):
+        """Successful merge using local branch when remote fails."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
+                MagicMock(returncode=1),  # fetch fails
+                MagicMock(returncode=0),  # merge succeeds
+            ]
+            result = _merge(tmp_path, "master")
+        assert result.success
+        # Should merge local master (not origin/master)
+        merge_call = mock_run.call_args_list[2]
+        assert "master" in str(merge_call)
+        assert "origin/master" not in str(merge_call)
+
+    def test_conflict_returns_details(self, tmp_path):
+        """Merge conflict returns details."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=1, stderr="CONFLICT"),  # merge fails
+                MagicMock(stdout="file1.py\nfile2.py"),  # diff conflicting files
+                MagicMock(returncode=0),  # merge --abort
+            ]
+            result = _merge(tmp_path, "master")
+        assert not result.success
+        assert "CONFLICT" in result.conflict_details
+        assert "file1.py" in result.conflict_details
+
+    def test_merge_abort_called_on_conflict(self, tmp_path):
+        """On conflict, merge --abort is called to restore clean state."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="No local changes to save"),  # stash
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=1, stderr="CONFLICT"),  # merge fails
+                MagicMock(stdout=""),  # diff
+                MagicMock(returncode=0),  # merge --abort
+            ]
+            _merge(tmp_path, "master")
+        # Last call should be merge --abort
+        last_call = mock_run.call_args_list[-1]
+        assert "--abort" in str(last_call)
+
+    def test_merge_stashes_uncommitted_changes(self, tmp_path):
+        """Uncommitted changes are stashed before merge."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="Saved working directory"),  # stash (had changes)
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=0),  # merge
+                MagicMock(returncode=0),  # stash pop
+            ]
+            result = _merge(tmp_path, "master")
+        assert result.success
+        stash_call = mock_run.call_args_list[0]
+        assert "stash" in str(stash_call)
+        assert "--include-untracked" in str(stash_call)
+
+    def test_merge_pops_stash_after_success(self, tmp_path):
+        """Stash is popped after successful merge."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="Saved working directory"),  # stash (had changes)
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=0),  # merge
+                MagicMock(returncode=0),  # stash pop
+            ]
+            result = _merge(tmp_path, "master")
+        assert result.success
+        last_call = mock_run.call_args_list[-1]
+        assert "stash" in str(last_call)
+        assert "pop" in str(last_call)
+
+    def test_merge_pops_stash_after_conflict(self, tmp_path):
+        """Stash is restored after merge conflict and abort."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="Saved working directory"),  # stash (had changes)
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=1, stderr="CONFLICT"),  # merge fails
+                MagicMock(stdout="file.py"),  # diff conflicting files
+                MagicMock(returncode=0),  # merge --abort
+                MagicMock(returncode=0),  # stash pop
+            ]
+            result = _merge(tmp_path, "master")
+        assert not result.success
+        last_call = mock_run.call_args_list[-1]
+        assert "stash" in str(last_call)
+        assert "pop" in str(last_call)
+
+
 class TestRunTestCommand:
     """Tests for the _run_test_command function."""
 
@@ -262,6 +407,14 @@ class TestBuildPrompts:
         assert "test output here" in prompt
         assert "@@DONE@@" in prompt
 
+    def test_merge_conflict_prompt_includes_branch(self):
+        result = MergeResult(success=False, conflict_details="merge conflicts here")
+        prompt = _build_merge_conflict_prompt("master", result)
+        assert "master" in prompt
+        assert "merge conflicts here" in prompt
+        assert "@@DONE@@" in prompt
+        assert "MERGE CONFLICT" in prompt
+
 
 class TestRebaseResult:
     """Tests for the RebaseResult class."""
@@ -275,6 +428,20 @@ class TestRebaseResult:
         result = RebaseResult(success=False, conflict_details="details")
         assert not result.success
         assert result.conflict_details == "details"
+
+
+class TestMergeResult:
+    """Tests for the MergeResult class."""
+
+    def test_success_result(self):
+        result = MergeResult(success=True)
+        assert result.success
+        assert result.conflict_details == ""
+
+    def test_failure_result(self):
+        result = MergeResult(success=False, conflict_details="merge details")
+        assert not result.success
+        assert result.conflict_details == "merge details"
 
 
 class TestFixContainerGitdir:

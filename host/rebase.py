@@ -130,8 +130,11 @@ def attempt_pre_review_rebase(
     result = _rebase(worktree_path, base_branch)
 
     if not result.success:
-        log.warning(f"Rebase failed: {result.conflict_details}")
-        return _build_rebase_conflict_prompt(base_branch, result)
+        log.warning(f"Rebase failed, falling back to merge: {result.conflict_details}")
+        merge_result = _merge(worktree_path, base_branch)
+        if not merge_result.success:
+            log.warning(f"Merge also failed: {merge_result.conflict_details}")
+            return _build_merge_conflict_prompt(base_branch, merge_result)
 
     if test_command:
         test_failure = _run_test_command(worktree_path, test_command, test_timeout_s)
@@ -210,6 +213,73 @@ def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
     return RebaseResult(success=False, conflict_details=details)
 
 
+class MergeResult:
+    """Result of a merge operation."""
+
+    def __init__(self, success: bool, conflict_details: str = ""):
+        self.success = success
+        self.conflict_details = conflict_details
+
+
+def _merge(worktree_path: Path, base_branch: str) -> MergeResult:
+    """Fetch latest base branch and merge it into the worktree branch."""
+    # Stash uncommitted changes before merge (e.g., WORKFLOW.md local config)
+    stash_result = subprocess.run(
+        ["git", "stash", "--include-untracked", "-m", "pre-merge-stash"],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+    had_stash = "No local changes" not in stash_result.stdout
+
+    # Fetch latest from remote (ignore failure — remote may not exist)
+    fetch_result = subprocess.run(
+        ["git", "fetch", "origin", base_branch],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+    # Use fetched remote ref if available, otherwise local base branch
+    merge_target = f"origin/{base_branch}" if fetch_result.returncode == 0 else base_branch
+
+    result = subprocess.run(
+        ["git", "merge", merge_target, "-m", f"Merge {merge_target} into agent branch"],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        if had_stash:
+            pop_result = subprocess.run(
+                ["git", "stash", "pop"],
+                cwd=str(worktree_path), capture_output=True, text=True,
+            )
+            if pop_result.returncode != 0:
+                log.warning(f"Stash pop failed (conflicts?): {pop_result.stderr}")
+        return MergeResult(success=True)
+
+    # Collect conflict details before aborting
+    diff_result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+    conflict_files = diff_result.stdout.strip()
+    details = f"Merge failed.\nstderr: {result.stderr.strip()}"
+    if conflict_files:
+        details += f"\nConflicting files:\n{conflict_files}"
+
+    # Abort the failed merge to restore a clean state
+    subprocess.run(
+        ["git", "merge", "--abort"],
+        cwd=str(worktree_path), capture_output=True, text=True,
+    )
+
+    # Restore stashed changes after abort
+    if had_stash:
+        pop_result = subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=str(worktree_path), capture_output=True, text=True,
+        )
+        if pop_result.returncode != 0:
+            log.warning(f"Stash pop failed after merge abort: {pop_result.stderr}")
+
+    return MergeResult(success=False, conflict_details=details)
+
+
 def _run_test_command(
     workspace_path: Path,
     test_command: str,
@@ -246,6 +316,22 @@ def _build_rebase_conflict_prompt(base_branch: str, result: RebaseResult) -> str
         f"3. Run `git rebase --continue`\n"
         f"4. Re-run the test suite to confirm no regressions\n"
         f"5. Then output @@DONE@@ again"
+    )
+
+
+def _build_merge_conflict_prompt(base_branch: str, result: MergeResult) -> str:
+    """Build a resume prompt telling the agent to resolve merge conflicts."""
+    return (
+        f"MERGE CONFLICT: Before submitting for review, I tried to merge the latest "
+        f"{base_branch} into your branch, but there are conflicts.\n\n"
+        f"{result.conflict_details}\n\n"
+        f"Please:\n"
+        f"1. Run `git merge origin/{base_branch}` (or `git merge {base_branch}`)\n"
+        f"2. Resolve all conflicts in the listed files\n"
+        f"3. Stage the resolved files with `git add`\n"
+        f"4. Complete the merge with `git commit`\n"
+        f"5. Re-run the test suite to confirm no regressions\n"
+        f"6. Then output @@DONE@@ again"
     )
 
 
