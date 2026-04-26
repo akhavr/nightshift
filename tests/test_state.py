@@ -319,3 +319,24 @@ class TestStateLocking:
         assert len(final.checkpoints) == 5
         assert final.usage.input_tokens == 500
         assert final.usage.output_tokens == 250
+
+
+class TestTransitionLogging:
+    """Tests for SSM-4: State transitions auto-log."""
+
+    def test_transition_logs_state_change(self, tmp_path, caplog):
+        """StateManager should log state transitions."""
+        import logging
+
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc123", status="starting")
+        sm._write(state)
+
+        with caplog.at_level(logging.INFO):
+            sm.update_status("working")
+
+        assert any(
+            "starting" in record.message and "working" in record.message
+            for record in caplog.records
+        ), f"Expected log with starting->working, got: {[r.message for r in caplog.records]}"
