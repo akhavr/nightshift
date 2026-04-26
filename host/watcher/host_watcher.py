@@ -11,7 +11,7 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME,
     BACKGROUND_LAUNCH_CHECK_S, REVIEW_SESSION_PREFIX, RECENTLY_LAUNCHED_FILENAME,
-    ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S,
+    ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S, MIN_FREE_GB,
     SOCKET_SERVER_RESTART_BACKOFF_BASE_S, SOCKET_SERVER_RESTART_BACKOFF_CAP_S,
     SOCKET_SERVER_MAX_RESTARTS,
     TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
@@ -348,6 +348,8 @@ class HostWatcher:
                 self.reload_config()
             if not self._check_worktree_integrity():
                 break
+            if not self._check_disk_space():
+                break
             self._check_socket_server_health()
             self._check_tracker_lock()
             tg_answers, tg_reviews = (
@@ -492,6 +494,22 @@ class HostWatcher:
         )
         self._shutdown.set()
         return False
+
+    def _check_disk_space(self) -> bool:
+        """Check if disk has enough free space.
+
+        If free space drops below MIN_FREE_GB, logs a CRITICAL error and
+        triggers shutdown to prevent silent failures from disk exhaustion.
+
+        Returns True if disk space is sufficient, False if watcher should halt.
+        """
+        stat = os.statvfs(self.repo_dir)
+        free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
+        if free_gb < MIN_FREE_GB:
+            log.critical("Disk space low: %.2fGB free. Halting.", free_gb)
+            self._shutdown.set()
+            return False
+        return True
 
     def _check_tracker_lock(self):
         """Check if git-bug lock file is held too long and warn if so.
