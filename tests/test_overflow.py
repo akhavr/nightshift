@@ -569,6 +569,8 @@ Prompt.
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
     monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
     monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    monkeypatch.setattr("host.launch._setup_git_overlay", lambda *a, **kw: tmp_path / "git-merged")
+    monkeypatch.setattr("host.launch._teardown_git_overlay", lambda *a, **kw: None)
 
     captured_kwargs = {}
 
@@ -614,6 +616,8 @@ Prompt.
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
     monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
     monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    monkeypatch.setattr("host.launch._setup_git_overlay", lambda *a, **kw: tmp_path / "git-merged")
+    monkeypatch.setattr("host.launch._teardown_git_overlay", lambda *a, **kw: None)
 
     captured_kwargs = {}
 
@@ -659,6 +663,8 @@ Prompt.
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
     monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
     monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    monkeypatch.setattr("host.launch._setup_git_overlay", lambda *a, **kw: tmp_path / "git-merged")
+    monkeypatch.setattr("host.launch._teardown_git_overlay", lambda *a, **kw: None)
 
     captured_kwargs = {}
 
@@ -767,6 +773,8 @@ Prompt.
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda *a: None)
     monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
     monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    monkeypatch.setattr("host.launch._setup_git_overlay", lambda *a, **kw: tmp_path / "git-merged")
+    monkeypatch.setattr("host.launch._teardown_git_overlay", lambda *a, **kw: None)
     import sys
     monkeypatch.setattr(sys, "argv", ["launch.py", "abc123"])
 
@@ -815,6 +823,8 @@ Prompt.
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda *a: None)
     monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
     monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    monkeypatch.setattr("host.launch._setup_git_overlay", lambda *a, **kw: tmp_path / "git-merged")
+    monkeypatch.setattr("host.launch._teardown_git_overlay", lambda *a, **kw: None)
     import sys
     monkeypatch.setattr(sys, "argv", ["launch.py", "abc123"])
 
@@ -983,6 +993,8 @@ Prompt.
     monkeypatch.setattr("host.launch.load_all_dotenv", lambda p: None)
     monkeypatch.setattr("host.launch.setup_workspace", lambda *a, **kw: str(tmp_path / "ws"))
     monkeypatch.setattr("host.launch.dump_issue_data", lambda *a, **kw: None)
+    monkeypatch.setattr("host.launch._setup_git_overlay", lambda *a, **kw: tmp_path / "git-merged")
+    monkeypatch.setattr("host.launch._teardown_git_overlay", lambda *a, **kw: None)
 
     captured_kwargs = {}
 

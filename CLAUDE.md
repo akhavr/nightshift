@@ -227,17 +227,17 @@ Key Docker run pattern (no `-it` flag — containers are fire-and-forget):
 ```bash
 docker run --rm --user $(id -u):$(id -g) \
   -v <worktree>:/workspace:rw \
+  -v <session-dir>/git-merged:/repo-git:rw  # overlay mount
   -v <session-dir>:/session:rw \
-  -v <repo>/.git:/repo-git:rw \
   -v ~/.claude:/claude-auth:ro \
   -v <repo>/WORKFLOW.md:/workspace/WORKFLOW.md:ro \
   -e ISSUE_ID=<id> -e SHORT_ID=<short-id> \
   nightshift:latest
 ```
 
-Container naming: coder containers are `nightshift-<short-id>`, review containers are `nightshift-review-<short-id>`. The watcher detects review sessions by the `review-` prefix in session IDs and passes `--step review --workflow REVIEW.md` when auto-resuming them. When `agent.kind` is `openhands`, the container runs OpenHands instead of Claude Code; `docker_cmd.py` injects the `LLM_*` env vars and any agent-specific extra_args.
+`host/launch.py` creates a session-local git overlay under `.nightshift/sessions/<session-id>/`. When `fuse-overlayfs` is available, it mounts `repo/.git` as the lower layer and uses `git-merged` as the container mount source, with `git-upper` and `git-work` holding writes. If overlay support is unavailable, it falls back to copying `.git` into `git-copy`. The container always mounts the session-local path at `/repo-git`, so it reads and mutates isolated git state without touching the repo's live `.git` directory. After the container exits, the launcher tears down the mount and copies any new objects and refs back to the real repo. Container naming: coder containers are `nightshift-<short-id>`, review containers are `nightshift-review-<short-id>`. The watcher detects review sessions by the `review-` prefix in session IDs and passes `--step review --workflow REVIEW.md` when auto-resuming them. When `agent.kind` is `openhands`, the container runs OpenHands instead of Claude Code; `docker_cmd.py` injects the `LLM_*` env vars and any agent-specific extra_args.
 
-`docker-entrypoint.sh` sets `GIT_DIR` and `GIT_WORK_TREE` environment variables to point to the mounted `/repo-git/worktrees/agent-<short-id>` and `/workspace`, enabling git operations inside the container without modifying the `.git` file. It also generates `~/.codex/config.toml` for Codex agent sessions: when overflow is active (`CODEX_BASE_URL` or `CODEX_MODEL` set), config.toml is generated regardless of OAuth presence — `CODEX_BASE_URL` produces a custom provider config, while `CODEX_MODEL` alone produces an openai provider config. OAuth and model config are independent: OAuth presence skips API key export (not config generation). Without overflow, the fallback chain `CODEX_API_KEY` → `OPENAI_API_KEY` provides the key. `AGENT_KIND` is passed from `host/docker_cmd.py` based on the workflow's `agent.kind` setting.
+`docker-entrypoint.sh` sets `GIT_DIR` and `GIT_WORK_TREE` environment variables to point to the mounted `/repo-git/worktrees/agent-<short-id>` and `/workspace`, so git operations inside the container use the session-local overlay/copy rather than the repo's live `.git` directory. It also generates `~/.codex/config.toml` for Codex agent sessions: when overflow is active (`CODEX_BASE_URL` or `CODEX_MODEL` set), config.toml is generated regardless of OAuth presence — `CODEX_BASE_URL` produces a custom provider config, while `CODEX_MODEL` alone produces an openai provider config. OAuth and model config are independent: OAuth presence skips API key export (not config generation). Without overflow, the fallback chain `CODEX_API_KEY` → `OPENAI_API_KEY` provides the key. `AGENT_KIND` is passed from `host/docker_cmd.py` based on the workflow's `agent.kind` setting.
 
 **Codex OAuth exclusion**: `docker_cmd.py`'s `_codex_oauth_present()` checks for `~/.codex/auth.json` with valid tokens. When OAuth is detected for Codex agent sessions, `CODEX_API_KEY` and `OPENAI_API_KEY` are excluded from environment variable passthrough to the container — this prevents API keys from overriding OAuth authentication.
 

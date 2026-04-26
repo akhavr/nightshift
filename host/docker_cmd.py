@@ -70,6 +70,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
                      issue_id: str, short_id: str, max_turns: int,
                      step: str, is_resume: bool, workflow_path: str,
                      image: str,
+                     git_mount_path: Path | str | None = None,
                      overflow: OverflowConfig | None = None,
                      agent_kind: str = "claude-code") -> list[str]:
     """Build the docker run command with all mounts and env vars.
@@ -114,13 +115,9 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
             overflow_env += ["-e", f"ANTHROPIC_BASE_URL={proxy_url}"]
 
     workflow_mount_path = str(Path(workflow_path).resolve())
+    git_mount_source = Path(git_mount_path) if git_mount_path is not None else repo / ".git"
 
-    # WT-1.7: Build git mounts with read-only config overlay to prevent core.worktree pollution.
-    # The config mount must come AFTER the .git mount to properly overlay.
-    git_mounts = ["-v", f"{repo / '.git'}:/repo-git:rw"]
-    git_config = repo / ".git" / "config"
-    if git_config.exists():
-        git_mounts += ["-v", f"{git_config}:/repo-git/config:ro"]
+    git_mounts = ["-v", f"{git_mount_source}:/repo-git:rw"]
 
     cmd = [
         "docker", "run", "--rm",
@@ -166,13 +163,15 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
                   names: dict, issue_id: str, max_turns: int,
                   step: str, is_resume: bool, workflow_path: str,
                   image: str,
+                  git_mount_path: Path | str | None = None,
                   overflow: OverflowConfig | None = None,
                   agent_kind: str = "claude-code") -> int:
     """Build docker command, run the container, return its exit code."""
     docker_cmd = build_docker_cmd(
         repo, workspace_mount, session_dir, names["container_name"],
         names["worktree_name"], issue_id, names["short_id"], max_turns,
-        step, is_resume, workflow_path, image, overflow=overflow,
+        step, is_resume, workflow_path, image, git_mount_path=git_mount_path,
+        overflow=overflow,
         agent_kind=agent_kind,
     )
 

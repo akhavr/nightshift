@@ -7,6 +7,7 @@ Heavy lifting is delegated to workspace_setup, issue_dump, and docker_cmd.
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,13 @@ from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
+from host.git_overlay import (
+    extract_commits,
+    is_fuse_overlayfs_available,
+    setup_git_copy,
+    setup_overlay,
+    teardown_overlay,
+)
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
@@ -48,6 +56,41 @@ def _read_overflow_profile_name(flag: Path) -> str | None:
         return None
     profile_name = flag.read_text().strip()
     return profile_name or None
+
+
+def _setup_git_overlay(repo: Path, session_dir: Path) -> Path:
+    """Create the session-local git mount path."""
+    repo_git = repo / ".git"
+    if is_fuse_overlayfs_available():
+        return setup_overlay(repo_git, session_dir)
+    return setup_git_copy(repo_git, session_dir)
+
+
+def _teardown_git_overlay(git_mount_path: Path, session_dir: Path) -> None:
+    """Clean up the session-local git mount path and its temp directories."""
+    if git_mount_path.name == "git-merged":
+        teardown_overlay(git_mount_path)
+        for temp_dir in ("git-merged", "git-upper", "git-work"):
+            path = session_dir / temp_dir
+            if path.exists():
+                shutil.rmtree(path)
+    elif git_mount_path.exists():
+        shutil.rmtree(git_mount_path)
+
+
+def _extract_git_overlay(session_dir: Path, repo: Path) -> Path | None:
+    """Copy any new git state from the session-local mount back to .git."""
+    merged = session_dir / "git-merged"
+    if merged.exists():
+        extract_commits(session_dir / "git-upper", repo / ".git")
+        return merged
+
+    copied = session_dir / "git-copy"
+    if copied.exists():
+        extract_commits(copied, repo / ".git")
+        return copied
+
+    return None
 
 
 def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
@@ -102,6 +145,8 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
     Usage is logged for ALL sessions with usage data (any status/step).
     Proof-of-work comment is only posted for coder sessions in waiting:review.
     """
+    _extract_git_overlay(session_dir, repo)
+
     state_file = session_dir / "state.json"
     if not state_file.exists():
         return
@@ -231,13 +276,17 @@ def main():
     actual_agent_kind = (
         overflow.agent_kind if overflow and overflow.agent_kind else config.agent.kind
     )
-    returncode = run_container(
-        repo, workspace_mount, session_dir, names, args.issue_id,
-        max_turns, args.step, args.resume, str(workflow_path), args.image,
-        overflow=overflow, agent_kind=actual_agent_kind,
-    )
-
-    _post_container(session_dir, config, repo, args.issue_id, step=args.step)
+    git_mount_path = _setup_git_overlay(repo, session_dir)
+    try:
+        returncode = run_container(
+            repo, workspace_mount, session_dir, names, args.issue_id,
+            max_turns, args.step, args.resume, str(workflow_path), args.image,
+            git_mount_path=git_mount_path,
+            overflow=overflow, agent_kind=actual_agent_kind,
+        )
+        _post_container(session_dir, config, repo, args.issue_id, step=args.step)
+    finally:
+        _teardown_git_overlay(git_mount_path, session_dir)
 
     sys.exit(returncode)
 

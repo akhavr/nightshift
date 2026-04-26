@@ -285,6 +285,7 @@ class TestBuildDockerCmd:
               issue_id="abc123def456", short_id="abc123def456",
               max_turns=30, step="coder", is_resume=False,
               workflow_path="/repo/WORKFLOW.md", image="nightshift:latest",
+              git_mount_path=None,
               **env_overrides):
         if repo is None:
             repo = Path("/fake/repo")
@@ -310,6 +311,7 @@ class TestBuildDockerCmd:
                 repo, workspace_mount, session_dir, container_name,
                 worktree_name, issue_id, short_id, max_turns,
                 step, is_resume, workflow_path, image,
+                git_mount_path=git_mount_path,
             )
         finally:
             # Restore env
@@ -345,6 +347,26 @@ class TestBuildDockerCmd:
         assert "/ws:/workspace:rw" in cmd_str
         assert f"{session_dir}:/session:rw" in cmd_str
         assert f"{repo / '.git'}:/repo-git:rw" in cmd_str
+
+    def test_git_mount_path_override(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        git_mount_path = tmp_path / "session" / "git-merged"
+        git_mount_path.mkdir(parents=True)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir(exist_ok=True)
+
+        cmd = self._call(
+            repo=repo,
+            workspace_mount="/ws",
+            session_dir=session_dir,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            git_mount_path=git_mount_path,
+        )
+
+        cmd_str = " ".join(cmd)
+        assert f"{git_mount_path}:/repo-git:rw" in cmd_str
+        assert f"{repo / '.git'}:/repo-git:rw" not in cmd_str
 
     def test_env_vars_set(self):
         cmd = self._call(issue_id="issue-42", short_id="issue-42",
@@ -574,12 +596,13 @@ class TestMain:
     @patch("host.launch.dump_issue_data")
     @patch("host.workspace_setup.create_worktree")
     @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
+    @patch("host.launch._setup_git_overlay")
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
     @patch("host.launch._post_container")
     def test_main_start_flow(self, mock_post, mock_repo_root, mock_dotenv,
-                             mock_load_wf, mock_build_cmd,
+                             mock_load_wf, mock_setup_overlay, mock_build_cmd,
                              mock_create_wt, mock_dump, mock_run,
                              mock_docker_rm, tmp_path):
         repo = tmp_path / "repo"
@@ -594,6 +617,7 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
+        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-copy"
 
         with patch("sys.argv", ["launch.py", "abc123def456ef"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -606,6 +630,48 @@ class TestMain:
         mock_build_cmd.assert_called_once()
         mock_run.assert_called_once_with(["docker", "run", "test"])
         mock_docker_rm.assert_called_once()
+
+    @patch("host.launch.run_container", side_effect=RuntimeError("launch failed"))
+    @patch("host.launch._setup_git_overlay")
+    @patch("host.launch._teardown_git_overlay")
+    @patch("host.launch._post_container")
+    @patch("host.launch.setup_workspace")
+    @patch("host.launch.dump_issue_data")
+    @patch("host.launch.load_workflow")
+    @patch("host.launch.load_all_dotenv")
+    @patch("host.launch.get_repo_root")
+    def test_main_cleans_up_overlay_when_launch_fails(self, mock_repo_root,
+                                                      mock_dotenv, mock_load_wf,
+                                                      mock_dump_issue_data,
+                                                      mock_setup_workspace, mock_post,
+                                                      mock_teardown,
+                                                      mock_setup_overlay,
+                                                      mock_run_container, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / ".worktrees").mkdir()
+        (repo / "WORKFLOW.md").write_text("---\n---\n")
+        mock_repo_root.return_value = repo
+
+        mock_load_wf.return_value = WorkflowConfig(
+            workspace=WorkspaceConfig(base_branch="master", root=".worktrees"),
+            agent=AgentConfig(max_turns=50),
+        )
+        mock_dump_issue_data.return_value = None
+        mock_setup_workspace.return_value = repo / ".worktrees" / "agent-abc123def456"
+        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged"
+
+        with patch("sys.argv", ["launch.py", "abc123def456ef"]):
+            with pytest.raises(RuntimeError, match="launch failed"):
+                from host.launch import main
+                main()
+
+        mock_post.assert_not_called()
+        mock_teardown.assert_called_once_with(
+            repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged",
+            repo / ".nightshift" / "sessions" / "abc123def456",
+        )
 
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
@@ -639,12 +705,13 @@ class TestMain:
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
     @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
+    @patch("host.launch._setup_git_overlay")
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
     @patch("host.launch._post_container")
     def test_main_resume_with_state(self, mock_post, mock_repo_root, mock_dotenv,
-                                    mock_load_wf, mock_build_cmd,
+                                    mock_load_wf, mock_setup_overlay, mock_build_cmd,
                                     mock_dump, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -663,6 +730,7 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
+        mock_setup_overlay.return_value = session_dir / "git-copy"
 
         with patch("sys.argv", ["launch.py", "abc123def456ef", "--resume"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -860,6 +928,82 @@ class TestPostContainer:
         assert usage_file.exists()
         entry = json.loads(usage_file.read_text().strip())
         assert entry["input_tokens"] == 10000
+
+    @patch("host.launch.extract_commits")
+    def test_overlay_extraction_runs_after_container(self, mock_extract,
+                                                     tmp_path, config):
+        from host.launch import _post_container
+
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        (session_dir / "state.json").write_text(json.dumps({
+            "status": "running",
+            "checkpoints": [],
+            "human_answers": [],
+        }))
+        (session_dir / "git-upper").mkdir()
+        (session_dir / "git-merged").mkdir()
+        (tmp_path / ".git").mkdir()
+
+        _post_container(session_dir, config, tmp_path, "issue1")
+
+        mock_extract.assert_called_once_with(session_dir / "git-upper", tmp_path / ".git")
+
+
+# ── Git overlay wiring tests ────────────────────────────
+
+class TestGitOverlayWiring:
+
+    @patch("host.launch.is_fuse_overlayfs_available", return_value=True)
+    @patch("host.launch.setup_overlay")
+    @patch("host.launch.setup_git_copy")
+    def test_overlay_setup_creates_merged_mount(self, mock_copy, mock_setup,
+                                                mock_available, tmp_path):
+        from host.launch import _setup_git_overlay
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        merged = session_dir / "git-merged"
+        mock_setup.return_value = merged
+
+        result = _setup_git_overlay(repo, session_dir)
+
+        assert result == merged
+        mock_setup.assert_called_once_with(repo / ".git", session_dir)
+        mock_copy.assert_not_called()
+
+    @patch("host.launch.teardown_overlay")
+    def test_overlay_teardown_unmounts(self, mock_teardown, tmp_path):
+        from host.launch import _teardown_git_overlay
+
+        merged = tmp_path / "session" / "git-merged"
+        merged.parent.mkdir(parents=True)
+        merged.mkdir()
+
+        _teardown_git_overlay(merged, merged.parent)
+
+        mock_teardown.assert_called_once_with(merged)
+
+    @patch("host.launch.teardown_overlay")
+    def test_overlay_teardown_removes_session_dirs(self, mock_teardown, tmp_path):
+        from host.launch import _teardown_git_overlay
+
+        session_dir = tmp_path / "session"
+        merged = session_dir / "git-merged"
+        upper = session_dir / "git-upper"
+        work = session_dir / "git-work"
+        for path in (merged, upper, work):
+            path.mkdir(parents=True)
+
+        _teardown_git_overlay(merged, session_dir)
+
+        mock_teardown.assert_called_once_with(merged)
+        assert not merged.exists()
+        assert not upper.exists()
+        assert not work.exists()
 
 
 # ── prepare_review_session tests ────────────────────────
