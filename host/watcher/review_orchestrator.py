@@ -148,6 +148,10 @@ class ReviewOrchestrator:
     def maybe_launch_review(self, sid: str, session_dir: Path,
                             issue_id: str, review_md: Path):
         """Launch a review session for sid, or escalate if max rounds reached."""
+        if not session_dir.exists():
+            log.warning(f"[{sid[:12]}] Session directory missing, skipping review launch")
+            return
+
         try:
             review_config = load_workflow(review_md)
             max_rounds = review_config.review.max_rounds
@@ -225,6 +229,10 @@ class ReviewOrchestrator:
     def _resume_coder_for_rebase(self, sid: str, session_dir: Path,
                                   issue_id: str, resume_prompt: str):
         """Resume the coder session to fix rebase/test failures."""
+        if not session_dir.exists():
+            log.warning(f"[{sid[:12]}] Session directory missing, skipping rebase resume")
+            return
+
         log.info(f"[{sid}] Rebase needed — resuming coder to fix")
 
         # Write resume prompt
@@ -266,7 +274,8 @@ class ReviewOrchestrator:
                            issue_id: str, max_rounds: int):
         """Escalate to human review when max rounds reached."""
         log.info(f"[{sid}] Max review rounds ({max_rounds}) reached -- escalating")
-        _update_status(session_dir, "waiting:human-review")
+        if session_dir.exists():
+            _update_status(session_dir, "waiting:human-review")
         self.telegram.notify(
             f"\u26a0\ufe0f `{sid}` hit max review rounds ({max_rounds}). "
             f"Escalating to human review.\n"

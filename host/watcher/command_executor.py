@@ -52,6 +52,9 @@ class CommandExecutor:
 
     def do_revise(self, sid: str, issue_id: str, session_dir: Path):
         """Collect review feedback and relaunch agent."""
+        if not session_dir.exists():
+            log.warning(f"[{sid[:12]}] Session directory missing, skipping revise")
+            return
         try:
             tracker = self._get_tracker()
             review_comments = collect_review_feedback(tracker, issue_id, sync=False)
