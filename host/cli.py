@@ -64,7 +64,8 @@ def _validate_transition(sid: str, target_state: str) -> None:
         return  # Let the command handle missing sessions
     try:
         state = read_state(session_dir)
-    except Exception:
+    except Exception as e:
+        logging.warning("Could not read state for session %s: %s", sid[:12], e)
         return  # Let the command handle corrupt state
     current = state.get("status", "starting")
     ssm = SessionStateMachine(initial_state=current)
