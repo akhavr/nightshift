@@ -165,7 +165,6 @@ class TestStartupCleansStaleBlocked:
 
         # Track if cleanup was called
         cleanup_called = False
-        original_cleanup = w.monitor.cleanup_stale_blocked_labels
 
         def mock_cleanup():
             nonlocal cleanup_called
@@ -174,11 +173,11 @@ class TestStartupCleansStaleBlocked:
         w.monitor.cleanup_stale_blocked_labels = mock_cleanup
         w.monitor.cleanup_stale_review_sessions = lambda: None
 
-        # Set shutdown immediately so we don't loop forever
-        w._shutdown = threading.Event()
-        w._shutdown.set()
+        # Pre-set shutdown so we exit immediately after startup
+        shutdown_event = threading.Event()
+        shutdown_event.set()
 
         with patch("host.watcher.host_watcher.repair_lamport_clocks"):
-            w.run()
+            w.run(shutdown_event=shutdown_event)
 
         assert cleanup_called is True
