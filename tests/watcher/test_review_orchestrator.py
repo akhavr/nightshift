@@ -1291,6 +1291,64 @@ class TestHostSideRebase:
         # Review should still launch
         assert "review-abc" in launched
 
+    def test_rebase_passes_repo_root(self, tmp_path):
+        """attempt_pre_review_rebase must receive repo_root for sanitize_git_config."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        (w.repo_dir / "WORKFLOW.md").write_text(
+            "---\n"
+            "workspace:\n"
+            "  root: .worktrees\n"
+            "  base_branch: master\n"
+            "---\n"
+        )
+
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        worktree = w.repo_dir / ".worktrees" / "agent-abc"
+        worktree.mkdir(parents=True)
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
+             patch("core.config.load_workflow") as mock_lw:
+            mock_rebase.return_value = None  # Rebase succeeds
+            cfg = MagicMock()
+            cfg.review.max_rounds = 3
+            cfg.workspace.root = ".worktrees"
+            cfg.workspace.base_branch = "master"
+            cfg.workspace.test_command = None
+            cfg.workspace.test_timeout_s = 120
+            mock_lw.return_value = cfg
+
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        # Verify repo_root was passed
+        mock_rebase.assert_called_once()
+        call_kwargs = mock_rebase.call_args
+        assert call_kwargs.kwargs.get("repo_root") == w.repo_dir
+
+    def test_rebase_calls_sanitize_git_config(self, tmp_path):
+        """sanitize_git_config must be called when repo_root is passed to rebase."""
+        from host.rebase import attempt_pre_review_rebase
+
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("host.rebase._fix_container_gitdir"), \
+             patch("host.rebase.sanitize_git_config") as mock_sanitize, \
+             patch("host.rebase._rebase") as mock_rebase:
+            mock_rebase.return_value = MagicMock(success=True)
+
+            attempt_pre_review_rebase(worktree, "main", repo_root=repo_root)
+
+            mock_sanitize.assert_called_once_with(repo_root)
+
 
 # ---------------------------------------------------------------------------
 # Stale review cleanup processes verdict first (REQ-036)

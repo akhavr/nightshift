@@ -224,7 +224,8 @@ class ReviewOrchestrator:
         test_timeout = coder_config.workspace.test_timeout_s
 
         return attempt_pre_review_rebase(
-            worktree_path, base_branch, test_command, test_timeout)
+            worktree_path, base_branch, test_command, test_timeout,
+            repo_root=self.repo_dir)
 
     def _resume_coder_for_rebase(self, sid: str, session_dir: Path,
                                   issue_id: str, resume_prompt: str):

@@ -25,6 +25,7 @@ from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
 from host.watcher.session_monitor import SessionMonitor
 from host.watcher.issue_sync import sync_sessions
+from host.watcher.config_watchdog import ConfigWatchdog
 from adapters.trackers.git_bug import repair_lamport_clocks
 
 log = logging.getLogger("watcher")
@@ -162,6 +163,10 @@ class HostWatcher:
             workflow_path=self.workflow_path,
             review_orchestrator=self.reviews,
         )
+
+        # Start config watchdog (monitors .git/config for pollution)
+        self._config_watchdog = ConfigWatchdog(repo_dir / ".git" / "config")
+        self._config_watchdog.start()
 
     @staticmethod
     def _telegram_level(config: WorkflowConfig | None) -> str:
@@ -383,6 +388,10 @@ class HostWatcher:
         if self._writer:
             self._writer.stop()
         self._proxy = None
+
+        # Stop config watchdog
+        if self._config_watchdog:
+            self._config_watchdog.stop()
 
         # Terminate any in-flight tracker subprocesses (e.g. git-bug sync)
         if self._tracker and hasattr(self._tracker, 'terminate_current'):
