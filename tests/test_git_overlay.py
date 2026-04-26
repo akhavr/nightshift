@@ -79,6 +79,42 @@ def test_overlay_commit_extraction(tmp_path):
     assert (repo_git / "HEAD").read_text() == "ref: refs/heads/agent-test"
 
 
+def test_extract_commits_skips_existing_readonly_objects(tmp_path):
+    """Regression test: extract_commits must skip existing read-only files.
+
+    Git objects are immutable and typically 444 permissions. Attempting to
+    overwrite them causes PermissionError. Since same hash = same content,
+    we skip existing files entirely.
+    """
+    import os
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    # Create existing read-only object in repo
+    existing_obj = repo_git / "objects" / "ab" / "existing"
+    existing_obj.parent.mkdir(parents=True)
+    existing_obj.write_text("original content")
+    os.chmod(existing_obj, 0o444)  # read-only like real git objects
+
+    # Upper layer has same path (would overwrite if not skipped)
+    (upper_dir / "objects" / "ab").mkdir(parents=True)
+    (upper_dir / "objects" / "ab" / "existing").write_text("new content")
+
+    # Also add a new object that should be copied
+    (upper_dir / "objects" / "cd").mkdir(parents=True)
+    (upper_dir / "objects" / "cd" / "newobj").write_text("new object")
+
+    # Before fix: PermissionError. After fix: succeeds, skips existing.
+    extract_commits(upper_dir, repo_git)
+
+    # Existing file unchanged (was skipped)
+    assert existing_obj.read_text() == "original content"
+    # New file was copied
+    assert (repo_git / "objects" / "cd" / "newobj").read_text() == "new object"
+
+
 def test_overlay_fallback_to_copy(tmp_path):
     from host.git_overlay import setup_git_copy
 
