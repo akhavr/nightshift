@@ -325,6 +325,9 @@ class HostWatcher:
         # (race condition: review container exits but watcher restarts before cleanup)
         self.monitor.cleanup_stale_review_sessions()
 
+        # Remove stale blocked:<id> labels where the blocking issue is already closed
+        self.monitor.cleanup_stale_blocked_labels()
+
         log.info(f"Watching {self.sessions_dir}")
         if self.telegram.enabled:
             log.info("Telegram polling enabled")

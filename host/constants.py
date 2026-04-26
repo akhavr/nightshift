@@ -76,3 +76,6 @@ DEFAULT_STALL_TIMEOUT_S = 300     # Fallback stall timeout when config unavailab
 
 # ── Disk space guardrail ──────────────────────────────────
 MIN_FREE_GB = 1.0                 # Halt watcher if free disk space drops below this
+
+# ── Dependency blocking ────────────────────────────────────
+BLOCKED_LABEL_PREFIX = "blocked:"  # Label prefix for blocking dependencies
