@@ -52,7 +52,10 @@ def setup_git_copy(repo_git: Path, session_dir: Path) -> Path:
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
-    """Copy files from src into dst, preserving directory structure."""
+    """Copy files from src into dst, preserving directory structure.
+
+    Skips existing files (git objects are immutable - same hash means identical).
+    """
     if not src.exists():
         return
     for path in src.rglob("*"):
@@ -60,13 +63,14 @@ def _copy_tree(src: Path, dst: Path) -> None:
         target = dst / rel
         if path.is_dir():
             target.mkdir(parents=True, exist_ok=True)
-        else:
+        elif not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
 
 
 def _copy_file(src: Path, dst: Path) -> None:
-    if not src.exists():
+    """Copy a single file, skipping if target exists."""
+    if not src.exists() or dst.exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
