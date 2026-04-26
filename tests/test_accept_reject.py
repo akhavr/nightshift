@@ -372,3 +372,121 @@ class TestAcceptSanitizesConfig:
         # Verify core.worktree was sanitized (before any git ops that might fail)
         result = run("git", "config", "--get", "core.worktree")
         assert result.returncode != 0  # config key not found
+
+
+def _setup_conflict_scenario(tmp_path):
+    """Create a repo where agent branch conflicts with main.
+
+    Returns: (repo, run, worktree_path, session_dir)
+    """
+    repo, run = _init_repo(tmp_path)
+
+    # Main has one version
+    (repo / "file.txt").write_text("main version\n")
+    run("git", "add", ".")
+    run("git", "commit", "-m", "main change")
+
+    # Create agent branch from earlier commit
+    run("git", "checkout", "-b", "agent/conf123", "HEAD~1")
+    (repo / "file.txt").write_text("agent version\n")
+    run("git", "add", ".")
+    run("git", "commit", "-m", "agent change")
+
+    # Create worktree
+    wt_dir = repo / ".worktrees" / "agent-conf123"
+    wt_dir.parent.mkdir(parents=True, exist_ok=True)
+    run("git", "worktree", "add", str(wt_dir), "agent/conf123")
+
+    run("git", "checkout", "main")
+
+    # Setup session
+    ns_dir = repo / ".nightshift" / "sessions" / "conf123"
+    ns_dir.mkdir(parents=True)
+    (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+    return repo, run, wt_dir, ns_dir
+
+
+class TestAcceptConflictHandling:
+    """Tests that accept handles conflicts without polluting main repo."""
+
+    def test_accept_conflict_aborts_cleanly(self, tmp_path):
+        """When rebase conflicts, accept should abort cleanly without partial changes."""
+        repo, run, wt_dir, ns_dir = _setup_conflict_scenario(tmp_path)
+
+        # Record main repo state before accept
+        main_head_before = run("git", "rev-parse", "HEAD").stdout.strip()
+        main_file_before = (repo / "file.txt").read_text()
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="conf123"), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli._report_accept_failure") as mock_report, \
+             patch("host.cli.check_branch_not_behind_base", return_value=None):
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "conf123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_accept(args)
+
+            assert exc_info.value.code == 1
+
+        # Main repo HEAD should be unchanged
+        main_head_after = run("git", "rev-parse", "HEAD").stdout.strip()
+        assert main_head_after == main_head_before
+
+        # Main repo file should be unchanged
+        main_file_after = (repo / "file.txt").read_text()
+        assert main_file_after == main_file_before
+
+        # No rebase should be in progress
+        rebase_dir = repo / ".git" / "rebase-merge"
+        assert not rebase_dir.exists()
+        rebase_apply_dir = repo / ".git" / "rebase-apply"
+        assert not rebase_apply_dir.exists()
+
+        # Report should be called with conflict info
+        mock_report.assert_called_once()
+        call_msg = mock_report.call_args[0][3]
+        assert "conflict" in call_msg.lower() or "resolution" in call_msg.lower()
+
+    def test_accept_never_pollutes_main_repo(self, tmp_path):
+        """Main repo working tree must never have conflict markers, even during failed accept."""
+        repo, run, wt_dir, ns_dir = _setup_conflict_scenario(tmp_path)
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="conf123"), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli._report_accept_failure"), \
+             patch("host.cli.check_branch_not_behind_base", return_value=None):
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "conf123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            with pytest.raises(SystemExit):
+                cmd_accept(args)
+
+        # Check all files in main repo for conflict markers
+        for fpath in repo.rglob("*"):
+            if fpath.is_file() and ".git" not in fpath.parts:
+                try:
+                    content = fpath.read_text(errors="replace")
+                    assert "<<<<<<<" not in content, f"Conflict markers in {fpath}"
+                    assert ">>>>>>>" not in content, f"Conflict markers in {fpath}"
+                except UnicodeDecodeError:
+                    pass  # binary file
+
+        # Ensure main branch is still checked out (not on agent branch)
+        current_branch = run("git", "branch", "--show-current").stdout.strip()
+        assert current_branch == "main"

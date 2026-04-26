@@ -982,7 +982,7 @@ def cmd_accept(a):
     subprocess.run(["git", "diff", "--stat", f"{base}..{merge_ref}"], cwd=str(r))
 
     merge_with_rebase_fallback(r, merge_ref, branch, base, a.issue_id, config,
-                                _report_accept_failure)
+                                _report_accept_failure, worktree=wt)
     print(f"Merged into {base}")
 
     verify_no_conflict_markers(r, config, a.issue_id, sid,
