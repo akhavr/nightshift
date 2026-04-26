@@ -93,6 +93,8 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     # reviewing -> waiting:review (review done)
     ("reviewing", "waiting:review"),
     ("reviewing", "waiting:human-review"),
+    # reviewing -> working (reviewer requests revisions)
+    ("reviewing", "working"),
     # reviewing -> suspended (review failures)
     ("reviewing", "suspended:auth-failure"),
     ("reviewing", "suspended:context-limit"),

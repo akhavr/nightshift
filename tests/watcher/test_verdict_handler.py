@@ -9,12 +9,87 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from core.state_machine import InvalidTransition
 from tests.watcher.conftest import _make_watcher, _make_session
 
 
+# ---------------------------------------------------------------------------
+# SSM-7: Accept/Reject SSM transition tests
+# ---------------------------------------------------------------------------
+
+class TestAcceptRejectSSMTransitions:
+    """Verify accept/reject use SSM-validated state transitions."""
+
+    def test_accept_transitions_to_accepted(self, tmp_path):
+        """Accept must use SSM transition to 'accepted'.
+
+        SSM-7: Valid transitions to accepted:
+        - waiting:review -> accepted
+        - waiting:human-review -> accepted
+        """
+        from host.session_utils import update_status
+
+        sd = tmp_path / "sessions" / "abc"
+        sd.mkdir(parents=True)
+        state = {"issue_id": "issue-abc", "branch": "agent/abc", "status": "waiting:human-review"}
+        (sd / "state.json").write_text(json.dumps(state))
+
+        update_status(sd, "accepted")
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "accepted"
+
+    def test_reject_transitions_to_rejected(self, tmp_path):
+        """Reject must use SSM transition to 'rejected'.
+
+        SSM-7: Valid transitions to rejected:
+        - waiting:review -> rejected
+        - waiting:human-review -> rejected
+        """
+        from host.session_utils import update_status
+
+        sd = tmp_path / "sessions" / "abc"
+        sd.mkdir(parents=True)
+        state = {"issue_id": "issue-abc", "branch": "agent/abc", "status": "waiting:human-review"}
+        (sd / "state.json").write_text(json.dumps(state))
+
+        update_status(sd, "rejected")
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "rejected"
+
+    def test_accept_from_invalid_state_raises(self, tmp_path):
+        """Accept from invalid state should raise InvalidTransition."""
+        from host.session_utils import update_status
+
+        sd = tmp_path / "sessions" / "abc"
+        sd.mkdir(parents=True)
+        state = {"issue_id": "issue-abc", "branch": "agent/abc", "status": "working"}
+        (sd / "state.json").write_text(json.dumps(state))
+
+        with pytest.raises(InvalidTransition):
+            update_status(sd, "accepted")
+
+    def test_reject_from_invalid_state_raises(self, tmp_path):
+        """Reject from invalid state should raise InvalidTransition."""
+        from host.session_utils import update_status
+
+        sd = tmp_path / "sessions" / "abc"
+        sd.mkdir(parents=True)
+        state = {"issue_id": "issue-abc", "branch": "agent/abc", "status": "working"}
+        (sd / "state.json").write_text(json.dumps(state))
+
+        with pytest.raises(InvalidTransition):
+            update_status(sd, "rejected")
+
+
 class TestHandleReviewerReviseRevert:
-    def test_revise_reverts_status_on_launch_failure(self, tmp_path):
-        """When _launch_background fails, status should revert to reviewing."""
+    def test_revise_keeps_status_on_launch_failure(self, tmp_path):
+        """When _launch_background fails, status should remain unchanged (reviewing).
+
+        SSM-7: Status is only updated after successful launch to avoid
+        invalid SSM transitions on revert (working -> reviewing is not valid).
+        """
         w = _make_watcher(tmp_path)
         coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing",
                                   issue_id="issue-abc")
@@ -35,7 +110,7 @@ class TestHandleReviewerReviseRevert:
 
         state = json.loads((coder_dir / "state.json").read_text())
         assert state["status"] == "reviewing", \
-            f"Expected status to revert to reviewing, got {state['status']}"
+            f"Expected status to remain reviewing on launch failure, got {state['status']}"
 
 
 class TestReviseResumesCoderSSM11:

@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from core.state import state_lock
+from core.state_machine import SessionStateMachine
 from host.constants import ARCHIVE_DIR
 from host.rebase import CONTAINER_GIT_PATH, _fix_container_gitdir
 
@@ -92,9 +93,20 @@ def write_state(session_dir: Path, state: dict) -> None:
 
 
 def update_status(session_dir: Path, status: str) -> None:
-    """Read state.json, update the status field, and write back (locked)."""
+    """Read state.json, validate transition via SSM, update and write back (locked).
+
+    SSM-7: All status updates must go through SSM validation to ensure
+    only valid state transitions are allowed.
+
+    Raises:
+        InvalidTransition: if the transition is not allowed by the SSM
+        ValueError: if status is not a known state
+    """
     with state_lock(session_dir):
         state = read_state(session_dir)
+        current_status = state.get("status", "starting")
+        ssm = SessionStateMachine(initial_state=current_status)
+        ssm.transition(status)  # raises InvalidTransition if not allowed
         state["status"] = status
         write_state(session_dir, state)
 

@@ -63,27 +63,24 @@ class CommandExecutor:
             feedback = build_revise_prompt(review_comments)
             (session_dir / "resume-prompt.md").write_text(feedback)
 
-            # Clear completed_at when resuming from completion states (SSM-11)
-            clear_completed_at(session_dir)
-            _update_status(session_dir, "working")
-
-            self._comment_counts.pop(sid, None)
-            self._recently_launched[sid] = time.time()
-
-            log.info(f"[{sid}] Revising with {len(review_comments)} comment(s)")
-
             cmd = [
                 sys.executable,
                 str(_HOST_DIR / "launch.py"),
                 issue_id, "--resume",
             ]
             if not self._launch_background(cmd, sid):
-                log.warning(f"[{sid}] Revise launch failed -- reverting to waiting:review")
-                _update_status(session_dir, "waiting:review")
+                log.warning(f"[{sid}] Revise launch failed -- status unchanged")
+                return
+
+            # Only update state after successful launch (SSM-7)
+            clear_completed_at(session_dir)
+            _update_status(session_dir, "working")
+            self._comment_counts.pop(sid, None)
+            self._recently_launched[sid] = time.time()
+            log.info(f"[{sid}] Revising with {len(review_comments)} comment(s)")
 
         except Exception as e:
-            log.error(f"[{sid}] Revise failed: {e} -- reverting to waiting:review")
-            _update_status(session_dir, "waiting:review")
+            log.error(f"[{sid}] Revise failed: {e}")
 
     def do_cli_command(self, sid: str, command: str, issue_id: str):
         """Run a CLI command (accept/reject) as a subprocess."""
