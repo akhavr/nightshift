@@ -17,7 +17,7 @@ from host.constants import (
     TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
     TRACKER_TERMINATION_WAIT_S,
 )
-from host.session_utils import read_state, update_status, has_active_sessions, ACTIVE_STATUSES
+from host.session_utils import read_state, update_status, has_active_sessions, get_active_session_ids, ACTIVE_STATUSES
 from core.config import load_workflow, create_tracker, WorkflowConfig
 from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
@@ -476,26 +476,12 @@ class HostWatcher:
         """
         worktrees_dir = self.repo_dir / ".git" / "worktrees"
 
-        if not has_active_sessions(self.repo_dir):
+        active_sids = get_active_session_ids(self.repo_dir)
+        if not active_sids:
             return True
 
         if worktrees_dir.exists():
             return True
-
-        # Critical: worktrees deleted while sessions active
-        active_sids = []
-        for session_dir in self.sessions_dir.iterdir():
-            state_file = session_dir / "state.json"
-            if not state_file.exists():
-                continue
-            try:
-                state = json.loads(state_file.read_text())
-                status = state.get("status", "")
-                if status in ACTIVE_STATUSES:
-                    active_sids.append(state.get("issue_id", session_dir.name))
-            except (json.JSONDecodeError, OSError) as e:
-                log.warning(f"Failed to read state for worktree check ({session_dir.name}): {e}")
-                continue
 
         log.critical(
             "FATAL: .git/worktrees/ deleted while sessions active: %s. "
