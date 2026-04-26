@@ -17,6 +17,7 @@ from host.constants import (
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
+from core.state import StateManager
 from host.session_utils import (
     read_state, update_status, _issue_id_prefix_match,
     increment_orphan_resumes, update_state_fields,
@@ -179,18 +180,19 @@ class SessionMonitor:
     def maybe_resume_orphan(self, session_dir: Path, sid: str, now: float):
         """Check a single session and auto-resume if orphaned."""
         try:
-            state = read_state(session_dir)
+            state_mgr = StateManager(session_dir)
+            session_state = state_mgr.load_state()
         except (json.JSONDecodeError, OSError) as e:
             log.warning(f"[{sid}] Failed to read state for orphan check: {e}")
             return
 
-        status = state.get("status")
+        status = state_mgr.status
         is_review_session = sid.startswith(REVIEW_SESSION_PREFIX)
 
         # Any session with completed_at already finished normally. The
         # container may have exited before the watcher observed the final
         # status transition, so it must not be treated as an orphan.
-        if state.get("completed_at"):
+        if session_state.completed_at:
             return
 
         # Review sessions in waiting:review with no container are orphaned
@@ -238,7 +240,7 @@ class SessionMonitor:
         if _pkg().docker_container_status(container) in ("running", "paused"):
             return
 
-        issue_id = state.get("issue_id", "")
+        issue_id = session_state.issue_id
         if not issue_id:
             return
 
@@ -250,7 +252,7 @@ class SessionMonitor:
             return
 
         # Verify the agent branch still exists before attempting resume
-        if not self._verify_branch_exists(state):
+        if not self._verify_branch_exists(session_state):
             log.warning(f"[{sid}] Branch missing — suspending session")
             update_state_fields(session_dir, status="suspended:branch-missing")
             self.telegram.notify(
@@ -259,17 +261,17 @@ class SessionMonitor:
                 level=NotificationLevel.ACTIONS)
             return
 
-        orphan_resumes = state.get("orphan_resumes", 0)
+        orphan_resumes = session_state.orphan_resumes
         if orphan_resumes >= MAX_ORPHAN_RESUMES:
             if is_review_session:
-                self._handle_review_orphan_limit(sid, session_dir, state, issue_id)
+                self._handle_review_orphan_limit(sid, session_dir, issue_id)
             else:
-                self._handle_coder_orphan_limit(sid, session_dir, state, issue_id)
+                self._handle_coder_orphan_limit(sid, session_dir, issue_id)
             return
 
         new_count = increment_orphan_resumes(session_dir)
 
-        log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}, "
+        log.info(f"[{sid}] Orphaned session (container gone, status: {status}, "
                  f"orphan_resume {new_count}/{MAX_ORPHAN_RESUMES}). Auto-resuming.")
         self._recently_launched[sid] = time.time()
 
@@ -365,7 +367,7 @@ class SessionMonitor:
         return True
 
     def _handle_coder_orphan_limit(self, sid: str, session_dir: Path,
-                                    state: dict, issue_id: str):
+                                    issue_id: str):
         """Suspend a coder session as too-complex after hitting the orphan limit."""
         log.error(f"[{sid}] Hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
                   f"Task may be too complex — stopping.")
@@ -385,7 +387,7 @@ class SessionMonitor:
             level=NotificationLevel.ACTIONS)
 
     def _handle_review_orphan_limit(self, sid: str, session_dir: Path,
-                                     state: dict, issue_id: str):
+                                     issue_id: str):
         """Handle a review session that hit the orphan limit: fail and fall back to human review."""
         coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
         log.error(f"[{sid}] Review session hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
@@ -413,12 +415,17 @@ class SessionMonitor:
             f"`nightshift accept/reject/revise {issue_id}`",
             level=NotificationLevel.ACTIONS)
 
-    def _verify_branch_exists(self, state: dict) -> bool:
+    def _verify_branch_exists(self, session_state) -> bool:
         """Verify the agent branch exists before resuming.
+
+        Args:
+            session_state: SessionState dataclass or dict with branch/issue_id fields.
 
         Returns True if the branch exists, False if missing.
         """
-        branch = state.get("branch", "")
+        branch = getattr(session_state, "branch", "") or (
+            session_state.get("branch", "") if isinstance(session_state, dict) else ""
+        )
         if not branch:
             return False
         result = subprocess.run(
@@ -426,8 +433,10 @@ class SessionMonitor:
             capture_output=True, cwd=self.repo_dir
         )
         if result.returncode != 0:
-            log.error("Branch %s missing for session (issue %s)",
-                      branch, state.get("issue_id", "?"))
+            issue_id = getattr(session_state, "issue_id", "") or (
+                session_state.get("issue_id", "?") if isinstance(session_state, dict) else "?"
+            )
+            log.error("Branch %s missing for session (issue %s)", branch, issue_id)
             return False
         return True
 
@@ -471,19 +480,20 @@ class SessionMonitor:
                 continue
 
             try:
-                state = read_state(session_dir)
+                state_mgr = StateManager(session_dir)
+                session_state = state_mgr.load_state()
             except (json.JSONDecodeError, OSError) as e:
                 log.warning(f"[{sid}] Failed to read state for auth-retry check: {e}")
                 continue
 
-            if state.get("status") != "suspended:auth-failure":
+            if state_mgr.status != "suspended:auth-failure":
                 continue
 
-            issue_id = state.get("issue_id", "")
+            issue_id = session_state.issue_id
             if not issue_id:
                 continue
 
-            auth_retries = state.get("auth_retries", 0)
+            auth_retries = session_state.auth_retries
             if auth_retries >= MAX_AUTH_RETRIES:
                 log.warning(f"[{sid}] Auth retry limit reached ({MAX_AUTH_RETRIES}). "
                             f"Token still invalid — giving up.")
@@ -519,19 +529,20 @@ class SessionMonitor:
                 continue
 
             try:
-                state = read_state(session_dir)
+                state_mgr = StateManager(session_dir)
+                session_state = state_mgr.load_state()
             except (json.JSONDecodeError, OSError) as e:
                 log.warning(f"[{sid}] Failed to read state for provider-outage check: {e}")
                 continue
 
-            if state.get("status") != "suspended:provider-overload":
+            if state_mgr.status != "suspended:provider-overload":
                 continue
 
-            issue_id = state.get("issue_id", "")
+            issue_id = session_state.issue_id
             if not issue_id:
                 continue
 
-            overload_retries = state.get("overload_resumes", 0)
+            overload_retries = session_state.overload_resumes
             if overload_retries >= MAX_PROVIDER_OUTAGE_RETRIES:
                 log.warning(f"[{sid}] Provider outage retry limit reached ({MAX_PROVIDER_OUTAGE_RETRIES}). "
                             f"Provider still overloaded — giving up.")
@@ -579,12 +590,12 @@ class SessionMonitor:
     def _check_session_for_zombie(self, session_dir: Path, sid: str, now: float):
         """Check a single session for zombie container behavior."""
         try:
-            state = read_state(session_dir)
+            state_mgr = StateManager(session_dir)
         except (json.JSONDecodeError, OSError) as e:
             log.warning(f"[{sid}] Failed to read state for zombie check: {e}")
             return
 
-        status = state.get("status")
+        status = state_mgr.status
         if status not in ("working", "starting"):
             # Only check sessions that should be actively producing events
             return
@@ -658,12 +669,13 @@ class SessionMonitor:
                 continue
 
             try:
-                state = read_state(session_dir)
+                state_mgr = StateManager(session_dir)
+                session_state = state_mgr.load_state()
             except (json.JSONDecodeError, OSError) as e:
                 log.warning(f"[{sid}] Failed to read state for closed-issue check: {e}")
                 continue
 
-            issue_id = state.get("issue_id", "")
+            issue_id = session_state.issue_id
             if not issue_id:
                 continue
 
