@@ -411,13 +411,15 @@ class TestStartupCleanup:
         w = _make_watcher(tmp_path)
         w.telegram.enabled = False
 
-        # Mock the cleanup method to track if it's called
+        # Mock the cleanup methods to track if they're called
         cleanup_called = []
         original_cleanup = w.monitor.cleanup_stale_review_sessions
         def mock_cleanup():
             cleanup_called.append(True)
             original_cleanup()
         w.monitor.cleanup_stale_review_sessions = mock_cleanup
+        # Also mock cleanup_stale_blocked_labels to avoid tracker calls
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
 
         # Create a shutdown event that triggers immediately
         shutdown = threading.Event()
