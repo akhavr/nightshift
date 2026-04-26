@@ -404,7 +404,8 @@ class TestSessionMonitorPostsResume:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert "abc" in launched
