@@ -12,8 +12,66 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from host.watcher import HostWatcher
 from core.protocols import TrackerIssue, TrackerComment
+from core.state_machine import InvalidTransition
 
 from tests.watcher.conftest import _make_watcher, _make_session, _make_issue, _make_comment
+
+
+# ---------------------------------------------------------------------------
+# SSM-7: Review flow SSM transition tests
+# ---------------------------------------------------------------------------
+
+class TestSSMTransitions:
+    """Verify review flow uses SSM-validated state transitions."""
+
+    def test_launch_transitions_to_reviewing(self, tmp_path):
+        """launch_review() must use SSM transition to 'reviewing'.
+
+        SSM-7: Review launch should validate transition via SSM.
+        Valid: waiting:review -> reviewing
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        w.reviews._launch_background = lambda cmd, sid: True
+
+        w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "reviewing"
+
+    def test_launch_from_invalid_state_raises(self, tmp_path):
+        """Launching review from invalid state should raise InvalidTransition.
+
+        SSM-7: Only waiting:review -> reviewing is valid (plus working->reviewing
+        for revert, and reviewing->reviewing for re-launch).
+        """
+        from host.session_utils import update_status
+
+        w = _make_watcher(tmp_path)
+        # Use 'starting' which cannot transition to 'reviewing'
+        sd = _make_session(w.sessions_dir, "abc", status="starting", issue_id="issue-abc")
+
+        with pytest.raises(InvalidTransition):
+            update_status(sd, "reviewing")
+
+    def test_done_transitions_to_human_review(self, tmp_path):
+        """Review done (escalate) must use SSM transition to 'waiting:human-review'.
+
+        SSM-7: Escalation should validate transition via SSM.
+        Valid: waiting:review -> waiting:human-review
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 1\n---\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        w.reviews._rounds["abc"] = 1  # Already at max rounds
+        w.reviews._launch_background = lambda cmd, sid: True
+        w.telegram.notify = MagicMock()
+
+        w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
 
 
 # ---------------------------------------------------------------------------

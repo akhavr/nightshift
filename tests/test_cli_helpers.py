@@ -275,7 +275,8 @@ class TestVerifyNoConflictMarkers:
 
         sessions = repo / ".nightshift" / "sessions" / "markers1"
         sessions.mkdir(parents=True)
-        (sessions / "state.json").write_text(json.dumps({"status": "working"}))
+        # SSM-7: Accept is called on sessions in review states, not working
+        (sessions / "state.json").write_text(json.dumps({"status": "waiting:human-review"}))
 
         config = _make_config()
         mock_report = MagicMock()
