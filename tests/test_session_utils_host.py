@@ -720,7 +720,7 @@ class TestSafePrune:
             safe_prune(repo)
 
         cmds = [c.args[0] for c in mock_run.call_args_list]
-        assert ["git", "worktree", "prune"] in cmds
+        assert ["git", "worktree", "prune", "-v"] in cmds
 
     def test_prune_fixes_corrupted_gitdir_first(self, tmp_path):
         """WT-6: safe_prune fixes corrupted .git files before pruning."""

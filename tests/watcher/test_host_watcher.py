@@ -978,3 +978,56 @@ class TestTrackerLockGuardrail:
             w._check_tracker_lock()
 
         assert "git-bug lock held for" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Disk space guardrail tests
+# ---------------------------------------------------------------------------
+
+class TestDiskSpaceGuardrail:
+    """Test that watcher halts when disk space is low."""
+
+    def test_halts_on_low_disk(self, tmp_path, caplog):
+        """Watcher should halt when free disk space is below MIN_FREE_GB."""
+        import logging
+        import threading
+        from unittest.mock import patch
+
+        w = _make_watcher(tmp_path)
+        w._shutdown = threading.Event()
+
+        # Mock os.statvfs to return low disk space (0.5 GB free)
+        mock_statvfs = MagicMock()
+        mock_statvfs.f_bavail = 500  # blocks available
+        mock_statvfs.f_frsize = 1024 * 1024  # 1 MB block size -> 500 MB total
+
+        with patch("os.statvfs", return_value=mock_statvfs):
+            with caplog.at_level(logging.CRITICAL):
+                result = w._check_disk_space()
+
+        assert result is False
+        assert w._shutdown.is_set()
+        assert "Disk space low" in caplog.text
+        assert "Halting" in caplog.text
+
+    def test_continues_on_sufficient_disk(self, tmp_path, caplog):
+        """Watcher should continue when free disk space is above MIN_FREE_GB."""
+        import logging
+        import threading
+        from unittest.mock import patch
+
+        w = _make_watcher(tmp_path)
+        w._shutdown = threading.Event()
+
+        # Mock os.statvfs to return sufficient disk space (5 GB free)
+        mock_statvfs = MagicMock()
+        mock_statvfs.f_bavail = 5000  # blocks available
+        mock_statvfs.f_frsize = 1024 * 1024  # 1 MB block size -> 5 GB total
+
+        with patch("os.statvfs", return_value=mock_statvfs):
+            with caplog.at_level(logging.CRITICAL):
+                result = w._check_disk_space()
+
+        assert result is True
+        assert not w._shutdown.is_set()
+        assert "Disk space low" not in caplog.text
