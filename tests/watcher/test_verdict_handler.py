@@ -83,6 +83,62 @@ class TestAcceptRejectSSMTransitions:
             update_status(sd, "rejected")
 
 
+class TestHandleReviewerSkipsMissingDir:
+    """Tests for guards that skip operations when session directories are missing."""
+
+    def test_handle_reviewer_approve_skips_missing_dir(self, tmp_path):
+        """When coder_dir doesn't exist, handle_reviewer_approve should skip gracefully.
+
+        Guard added to prevent crashes when the watcher tries to approve
+        a session whose directory has been deleted (e.g., by cleanup).
+        """
+        w = _make_watcher(tmp_path)
+
+        # Point to a non-existent directory
+        missing_dir = w.sessions_dir / "nonexistent"
+        assert not missing_dir.exists()
+
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+
+        # Should not raise, should return early
+        w.reviews.verdicts.handle_reviewer_approve("nonexistent", missing_dir, "issue-abc")
+
+        # Verify telegram.notify was never called (early return before notification)
+        w.telegram.notify.assert_not_called()
+
+    def test_handle_reviewer_revise_skips_missing_dir(self, tmp_path):
+        """When coder_dir doesn't exist, handle_reviewer_revise should skip gracefully.
+
+        Guard added to prevent crashes when the watcher tries to revise
+        a session whose directory has been deleted (e.g., by cleanup).
+        """
+        w = _make_watcher(tmp_path)
+
+        # Point to a non-existent directory
+        missing_coder_dir = w.sessions_dir / "nonexistent"
+        assert not missing_coder_dir.exists()
+
+        review_dir = tmp_path / "review-nonexistent"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "Fix the test. @nightshift revise"}) + "\n"
+        )
+
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+
+        launched = []
+        w.reviews.verdicts._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        # Should not raise, should return early
+        w.reviews.verdicts.handle_reviewer_revise("nonexistent", missing_coder_dir, "issue-abc", review_dir)
+
+        # Verify nothing was launched (early return before launch)
+        assert len(launched) == 0
+
+
 class TestHandleReviewerReviseRevert:
     def test_revise_keeps_status_on_launch_failure(self, tmp_path):
         """When _launch_background fails, status should remain unchanged (reviewing).

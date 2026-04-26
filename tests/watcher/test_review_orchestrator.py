@@ -1472,3 +1472,75 @@ class TestResumeCorderForRebaseRevert:
         state = json.loads((coder_dir / "state.json").read_text())
         assert state["status"] == "waiting:review", \
             f"Expected status to revert to waiting:review, got {state['status']}"
+
+
+# ---------------------------------------------------------------------------
+# Missing session directory handling tests
+# ---------------------------------------------------------------------------
+
+class TestMissingSessionDirHandled:
+    """Watcher should handle missing session directories gracefully.
+
+    Bug scenario:
+    1. Issue is accepted (code merged)
+    2. Tracker update fails (lock contention)
+    3. Session directory is cleaned up
+    4. Watcher sees open issue with nightshift label
+    5. Tries to resume → crash with FileNotFoundError
+    """
+
+    def test_resume_coder_for_rebase_skips_missing_dir(self, tmp_path):
+        """_resume_coder_for_rebase should skip if session_dir doesn't exist."""
+        w = _make_watcher(tmp_path)
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        # Session directory does NOT exist
+        missing_dir = w.sessions_dir / "abc"
+        assert not missing_dir.exists()
+
+        # Should not crash
+        w.reviews._resume_coder_for_rebase("abc", missing_dir, "issue-abc", "rebase prompt")
+
+        # Should not launch anything
+        assert launched == []
+        # Should not crash when trying to write resume-prompt.md
+        assert not (missing_dir / "resume-prompt.md").exists()
+
+    def test_maybe_launch_review_skips_missing_session_dir(self, tmp_path):
+        """maybe_launch_review should skip if session_dir doesn't exist."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        w.telegram.notify = MagicMock()
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        # Session directory does NOT exist
+        missing_dir = w.sessions_dir / "abc"
+        assert not missing_dir.exists()
+
+        # Should not crash
+        w.reviews.maybe_launch_review("abc", missing_dir, "issue-abc",
+                                       w.repo_dir / "REVIEW.md")
+
+        # Should not launch anything
+        assert launched == []
+
+    def test_escalate_to_human_skips_missing_dir(self, tmp_path):
+        """_escalate_to_human should skip if session_dir doesn't exist."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 1\n---\n")
+        w.telegram.notify = MagicMock()
+        w.reviews._rounds["abc"] = 1  # At max rounds
+
+        # Session directory does NOT exist
+        missing_dir = w.sessions_dir / "abc"
+        assert not missing_dir.exists()
+
+        # Should not crash
+        w.reviews._escalate_to_human("abc", missing_dir, "issue-abc", 1)
+
+        # Should still send notification (no session dir update needed)
+        w.telegram.notify.assert_called_once()

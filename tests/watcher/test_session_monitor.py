@@ -1639,3 +1639,53 @@ class TestZombieContainerDetection:
 
         # Should have sent a Telegram notification
         assert any("stuck" in n.lower() or "zombie" in n.lower() for n in notified)
+
+
+# ---------------------------------------------------------------------------
+# Missing session directory handling tests
+# ---------------------------------------------------------------------------
+
+class TestMissingSessionDirHandled:
+    """Watcher should handle missing session directories gracefully.
+
+    Bug scenario:
+    1. Issue is accepted (code merged)
+    2. Tracker update fails (lock contention)
+    3. Session directory is cleaned up
+    4. Watcher sees open issue with nightshift label
+    5. Tries to resume → crash with FileNotFoundError
+    """
+
+    def test_orphan_check_skips_missing_state_json(self, tmp_path):
+        """Orphan check should skip if state.json doesn't exist."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+
+        # Create session directory but no state.json
+        sd = w.sessions_dir / "abc"
+        sd.mkdir()
+        assert not (sd / "state.json").exists()
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()  # should not crash
+
+        assert launched == []
+
+    def test_resume_session_skips_missing_dir(self, tmp_path):
+        """_resume_session should handle missing session directory gracefully."""
+        w = _make_watcher(tmp_path)
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        # Session directory does NOT exist
+        missing_dir = w.sessions_dir / "abc"
+        assert not missing_dir.exists()
+
+        # Should not crash - will try to post lifecycle comment but skip on error
+        w.monitor._resume_session("abc", "issue-abc", reason="test")
+
+        # Should still launch (the launch itself will handle missing session)
+        assert "abc" in launched

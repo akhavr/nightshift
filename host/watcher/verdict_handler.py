@@ -82,6 +82,9 @@ class VerdictHandler:
 
     def handle_reviewer_approve(self, coder_sid: str, coder_dir: Path, issue_id: str):
         """Reviewer approved -- transition coder to waiting:human-review."""
+        if not coder_dir.exists():
+            log.warning(f"[{coder_sid[:12]}] Coder session directory missing, skipping approve")
+            return
         try:
             _update_status(coder_dir, "waiting:human-review")
             log.info(f"[{coder_sid}] Reviewer approved -> waiting:human-review")
@@ -153,6 +156,9 @@ class VerdictHandler:
     def handle_reviewer_revise(self, coder_sid: str, coder_dir: Path,
                                issue_id: str, review_dir: Path):
         """Reviewer requested revisions -- resume coder with feedback."""
+        if not coder_dir.exists():
+            log.warning(f"[{coder_sid[:12]}] Coder session directory missing, skipping revise")
+            return
         try:
             parts = self.collect_reviewer_feedback(coder_sid, issue_id, review_dir)
             feedback = build_revise_prompt([], inline_feedback="\n".join(parts))
