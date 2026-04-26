@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.cli import (
     cmd_accept,
+    cmd_reject,
     cmd_status,
     cmd_answer,
     cmd_review,
@@ -1423,3 +1424,147 @@ def test_revise_no_review_is_noop(tmp_path, capsys):
     assert "Cleaned up review session" not in out
     # Coder session should still exist
     assert coder_session.exists()
+
+
+# ── SSM state validation tests ─────────────────────────────────────────────
+
+
+def test_accept_validates_state(tmp_path, capsys):
+    """cmd_accept uses SSM to validate transition to 'accepted' state."""
+    repo, run = _init_repo(tmp_path)
+    sid = "validaccept1"
+
+    # Create session in waiting:review (valid for accept)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_tracker = MagicMock()
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.resolve_merge_ref", return_value=f"agent/{sid}"),
+        patch("host.cli.check_branch_not_behind_base", return_value=None),
+        patch("host.cli.merge_with_rebase_fallback"),
+        patch("host.cli.verify_no_conflict_markers"),
+        patch("host.cli.remove_worktree"),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    # Should complete successfully
+    out = capsys.readouterr().out
+    assert "Accepted" in out
+
+
+def test_accept_from_wrong_state_fails_with_message(tmp_path, capsys):
+    """cmd_accept fails with clear message when called from invalid state."""
+    repo, run = _init_repo(tmp_path)
+    sid = "wrongstate12"
+
+    # Create session in 'working' (cannot accept from working)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "working", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "working" in err
+    assert "accepted" in err.lower()
+
+
+def test_reject_validates_state(tmp_path, capsys):
+    """cmd_reject validates transition to 'rejected' state via SSM."""
+    repo, run = _init_repo(tmp_path)
+    sid = "wrongreject1"
+
+    # Create session in 'starting' (cannot reject from starting)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "starting", "step": 0, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cmd_reject(_make_args(issue_id=sid, workflow=None))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "starting" in err
+    assert "rejected" in err.lower()
+
+
+def test_resume_validates_state(tmp_path, capsys):
+    """cmd_resume validates that session can transition to 'working'."""
+    repo, run = _init_repo(tmp_path)
+    sid = "badresume123"
+
+    # Create session in 'accepted' (terminal state, cannot resume)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "accepted", "step": 5, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli._resolve_workflow", return_value=repo / "WORKFLOW.md"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cmd_resume(_make_args(issue_id=sid, workflow=None))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "accepted" in err
+    # Should mention it's a terminal state or cannot resume
+    assert "terminal" in err.lower() or "cannot" in err.lower() or "resume" in err.lower()
