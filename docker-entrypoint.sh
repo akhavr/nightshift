@@ -36,6 +36,7 @@ if [ -d /codex-auth ]; then
     cp /codex-auth/config.toml "$HOME/.codex/" 2>/dev/null || true
     if [ -f "$HOME/.codex/auth.json" ]; then
         CODEX_OAUTH_PRESENT=1
+        echo "Codex: OAuth auth.json found, using OAuth authentication" >&2
     fi
 fi
 
@@ -74,7 +75,7 @@ fi
 mkdir -p "$HOME/.codex" 2>/dev/null || true
 if [ "$AGENT_KIND" = "codex" ]; then
     if [ "$CODEX_OAUTH_PRESENT" = "1" ]; then
-        : # OAuth auth.json present — skip API key config generation
+        echo "Codex: Skipping API key config (OAuth auth.json present)" >&2
     else
         CODEX_KEY="${CODEX_API_KEY:-$OPENAI_API_KEY}"
         if [ -z "$CODEX_KEY" ]; then
