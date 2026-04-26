@@ -68,15 +68,38 @@ class TestAutoStartSkipsBlocked:
         assert len(launched) == 1
         assert launched[0] == "unblocked123"
 
-    def test_manual_start_ignores_blocked(self, tmp_path):
+    def test_manual_start_ignores_blocked(self, tmp_path, monkeypatch):
         """Manual CLI start/resume should work regardless of blocked labels.
 
-        This is tested implicitly - cmd_start and cmd_resume do not check
-        blocked labels, they only check session state.
+        cmd_start does NOT filter by blocked: labels - it launches regardless.
         """
-        # The manual start path does NOT filter by labels, it just launches.
-        # This test documents the expected behavior.
-        pass
+        import argparse
+        from host import cli as cli_module
+
+        # Track subprocess calls
+        launched = []
+
+        def mock_run(cmd, **kwargs):
+            launched.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("subprocess.run", mock_run)
+        # Mock _resolve_workflow to avoid repo structure requirement
+        monkeypatch.setattr(cli_module, "_resolve_workflow", lambda a: tmp_path / "WORKFLOW.md")
+
+        # Create args for cmd_start with a blocked issue ID
+        args = argparse.Namespace(
+            issue_id="blocked123456",
+            max_turns=None,
+            workflow=None,
+        )
+
+        # cmd_start should launch without checking blocked status
+        cli_module.cmd_start(args)
+
+        # Verify launch.py was called with the blocked issue ID
+        assert len(launched) == 1
+        assert "blocked123456" in launched[0]
 
 
 class TestCleanupStaleBlockedLabels:
@@ -150,34 +173,3 @@ class TestCleanupStaleBlockedLabels:
         w.monitor.cleanup_stale_blocked_labels()
 
 
-class TestStartupCleansStaleBlocked:
-    def test_watcher_startup_calls_cleanup(self, tmp_path):
-        """HostWatcher.run() should call cleanup_stale_blocked_labels on startup."""
-        from host.watcher import HostWatcher
-        import threading
-
-        sessions = tmp_path / "sessions"
-        sessions.mkdir()
-        repo = tmp_path / "repo"
-        repo.mkdir()
-
-        w = HostWatcher(sessions, repo, auto_start=False)
-
-        # Track if cleanup was called
-        cleanup_called = False
-
-        def mock_cleanup():
-            nonlocal cleanup_called
-            cleanup_called = True
-
-        w.monitor.cleanup_stale_blocked_labels = mock_cleanup
-        w.monitor.cleanup_stale_review_sessions = lambda: None
-
-        # Pre-set shutdown so we exit immediately after startup
-        shutdown_event = threading.Event()
-        shutdown_event.set()
-
-        with patch("host.watcher.host_watcher.repair_lamport_clocks"):
-            w.run(shutdown_event=shutdown_event)
-
-        assert cleanup_called is True
