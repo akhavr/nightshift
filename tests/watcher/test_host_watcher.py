@@ -1182,3 +1182,65 @@ class TestDiskSpaceGuardrail:
         assert result is True
         assert not w._shutdown.is_set()
         assert "Disk space low" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Config watchdog tests
+# ---------------------------------------------------------------------------
+
+class TestConfigWatchdog:
+    """Test that config watchdog detects .git/config modifications."""
+
+    def test_config_watchdog_starts_on_init(self, tmp_path):
+        """ConfigWatchdog should be created and started in HostWatcher.__init__."""
+        from unittest.mock import patch, MagicMock
+        from host.watcher.config_watchdog import ConfigWatchdog
+
+        # Mock ConfigWatchdog to track instantiation
+        with patch("host.watcher.host_watcher.ConfigWatchdog") as MockWatchdog:
+            mock_instance = MagicMock()
+            MockWatchdog.return_value = mock_instance
+
+            w = _make_watcher(tmp_path)
+
+            # Verify ConfigWatchdog was created with .git/config path
+            MockWatchdog.assert_called_once()
+            call_args = MockWatchdog.call_args
+            config_path = call_args[0][0]
+            assert str(config_path).endswith(".git/config")
+            # Verify start() was called
+            mock_instance.start.assert_called_once()
+
+    def test_config_watchdog_logs_modification(self, tmp_path, caplog):
+        """ConfigWatchdog should log WARNING when .git/config is modified."""
+        import logging
+        import threading
+        import time
+        from unittest.mock import patch
+        from host.watcher.config_watchdog import ConfigWatchdog
+
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        config_file = git_dir / "config"
+        config_file.write_text("[core]\n\trepositoryformatversion = 0\n")
+
+        shutdown = threading.Event()
+        # Use faster poll interval for testing
+        with patch("host.watcher.config_watchdog.CONFIG_POLL_INTERVAL_S", 0.05):
+            watchdog = ConfigWatchdog(config_file, shutdown)
+            watchdog.start()
+
+            # Give it time to record initial mtime
+            time.sleep(0.1)
+
+            # Modify the config file
+            with caplog.at_level(logging.WARNING):
+                time.sleep(0.05)  # Ensure mtime changes
+                config_file.write_text("[core]\n\tworktree = /workspace\n")
+                # Wait for watchdog to detect change
+                time.sleep(0.2)
+
+            shutdown.set()
+            watchdog.join(timeout=1.0)
+
+        assert "config modified" in caplog.text.lower() or ".git/config" in caplog.text
