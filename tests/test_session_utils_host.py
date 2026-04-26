@@ -17,6 +17,7 @@ from host.session_utils import (
     clear_completed_at,
     fix_all_corrupted_gitdirs,
     force_remove_dir,
+    get_active_session_ids,
     get_repo_root,
     has_active_sessions,
     increment_orphan_resumes,
@@ -759,6 +760,48 @@ class TestSafePrune:
         fixed_content = git_file.read_text()
         assert "/repo-git/" not in fixed_content
         assert str(host_gitdir) in fixed_content
+
+
+class TestGetActiveSessionIds:
+    """Tests for get_active_session_ids helper."""
+
+    def test_returns_ids_for_active_sessions(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+        s1 = sessions / "abc123"
+        s1.mkdir()
+        (s1 / "state.json").write_text(json.dumps({"status": "working", "issue_id": "issue-1"}))
+        s2 = sessions / "def456"
+        s2.mkdir()
+        (s2 / "state.json").write_text(json.dumps({"status": "starting", "issue_id": "issue-2"}))
+
+        result = get_active_session_ids(tmp_path)
+        assert sorted(result) == ["issue-1", "issue-2"]
+
+    def test_returns_empty_for_inactive_sessions(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+        session = sessions / "abc123"
+        session.mkdir()
+        (session / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+
+        assert get_active_session_ids(tmp_path) == []
+
+    def test_returns_empty_when_no_sessions(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+
+        assert get_active_session_ids(tmp_path) == []
+
+    def test_falls_back_to_dir_name_if_no_issue_id(self, tmp_path):
+        sessions = tmp_path / ".nightshift" / "sessions"
+        sessions.mkdir(parents=True)
+        session = sessions / "abc123"
+        session.mkdir()
+        (session / "state.json").write_text(json.dumps({"status": "working"}))
+
+        result = get_active_session_ids(tmp_path)
+        assert result == ["abc123"]
 
 
 class TestHasActiveSessions:

@@ -241,12 +241,13 @@ def _issue_id_prefix_match(issue_id: str, existing_ids: set[str]) -> bool:
 ACTIVE_STATUSES = {"working", "starting", "reviewing"}
 
 
-def has_active_sessions(repo: Path) -> bool:
-    """Check if any session is actively running (working, starting, reviewing)."""
+def get_active_session_ids(repo: Path) -> list[str]:
+    """Return list of session IDs that are actively running (working, starting, reviewing)."""
     sessions = repo / ".nightshift" / "sessions"
     if not sessions.exists():
-        return False
+        return []
 
+    active_ids = []
     for session_dir in sessions.iterdir():
         state_file = session_dir / "state.json"
         if not state_file.exists():
@@ -255,11 +256,16 @@ def has_active_sessions(repo: Path) -> bool:
             state = json.loads(state_file.read_text())
             status = state.get("status", "")
             if status in ACTIVE_STATUSES:
-                return True
+                active_ids.append(state.get("issue_id", session_dir.name))
         except (json.JSONDecodeError, OSError) as e:
             log.warning("Failed to read %s: %s", state_file, e)
             continue
-    return False
+    return active_ids
+
+
+def has_active_sessions(repo: Path) -> bool:
+    """Check if any session is actively running (working, starting, reviewing)."""
+    return len(get_active_session_ids(repo)) > 0
 
 
 def fix_all_corrupted_gitdirs(repo: Path) -> None:

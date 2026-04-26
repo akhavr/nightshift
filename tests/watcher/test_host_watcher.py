@@ -810,3 +810,108 @@ class TestRecentlyLaunchedPersistence:
         # No pre-existing file
         w = HostWatcher(sessions, repo)
         assert w._recently_launched == {}
+
+
+# ---------------------------------------------------------------------------
+# Worktree integrity guardrail tests
+# ---------------------------------------------------------------------------
+
+class TestWorktreeIntegrityGuardrail:
+    """Test that watcher halts when .git/worktrees/ is deleted with active sessions."""
+
+    def _make_watcher_with_nightshift_layout(self, tmp_path):
+        """Build a watcher with proper .nightshift/sessions layout."""
+        import threading
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        nightshift_dir = repo / ".nightshift"
+        nightshift_dir.mkdir()
+        sessions = nightshift_dir / "sessions"
+        sessions.mkdir()
+        w = HostWatcher(sessions, repo, auto_start=False)
+        w.telegram.enabled = False
+        w._shutdown = threading.Event()
+        return w
+
+    def test_halts_on_missing_worktrees(self, tmp_path):
+        """Watcher should halt when .git/worktrees/ is missing with active sessions."""
+        w = self._make_watcher_with_nightshift_layout(tmp_path)
+
+        # Create .git directory but NOT .git/worktrees/
+        git_dir = w.repo_dir / ".git"
+        git_dir.mkdir(parents=True)
+        # .git/worktrees/ intentionally NOT created
+
+        # Create an active session
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Check should return False and set shutdown
+        result = w._check_worktree_integrity()
+
+        assert result is False
+        assert w._shutdown.is_set()
+
+    def test_no_halt_when_no_active_sessions(self, tmp_path):
+        """Watcher should NOT halt when no active sessions exist (even if worktrees missing)."""
+        w = self._make_watcher_with_nightshift_layout(tmp_path)
+
+        # Create .git directory but NOT .git/worktrees/
+        git_dir = w.repo_dir / ".git"
+        git_dir.mkdir(parents=True)
+        # .git/worktrees/ intentionally NOT created
+
+        # Create a session in non-active status
+        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+
+        # Check should return True (pass) and NOT set shutdown
+        result = w._check_worktree_integrity()
+
+        assert result is True
+        assert not w._shutdown.is_set()
+
+    def test_no_halt_when_worktrees_exists(self, tmp_path):
+        """Watcher should NOT halt when .git/worktrees/ exists with active sessions."""
+        w = self._make_watcher_with_nightshift_layout(tmp_path)
+
+        # Create .git/worktrees/ directory
+        worktrees_dir = w.repo_dir / ".git" / "worktrees"
+        worktrees_dir.mkdir(parents=True)
+
+        # Create an active session
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Check should return True (pass) and NOT set shutdown
+        result = w._check_worktree_integrity()
+
+        assert result is True
+        assert not w._shutdown.is_set()
+
+    def test_halts_on_reviewing_status(self, tmp_path):
+        """Watcher should halt when .git/worktrees/ missing with 'reviewing' status."""
+        w = self._make_watcher_with_nightshift_layout(tmp_path)
+
+        git_dir = w.repo_dir / ".git"
+        git_dir.mkdir(parents=True)
+
+        # Create session in 'reviewing' status (also considered active)
+        _make_session(w.sessions_dir, "review-abc", status="reviewing", issue_id="issue-abc")
+
+        result = w._check_worktree_integrity()
+
+        assert result is False
+        assert w._shutdown.is_set()
+
+    def test_halts_on_starting_status(self, tmp_path):
+        """Watcher should halt when .git/worktrees/ missing with 'starting' status."""
+        w = self._make_watcher_with_nightshift_layout(tmp_path)
+
+        git_dir = w.repo_dir / ".git"
+        git_dir.mkdir(parents=True)
+
+        # Create session in 'starting' status
+        _make_session(w.sessions_dir, "abc", status="starting", issue_id="issue-abc")
+
+        result = w._check_worktree_integrity()
+
+        assert result is False
+        assert w._shutdown.is_set()
