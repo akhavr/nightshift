@@ -1,5 +1,12 @@
 """Session state machine with validated transitions."""
 
+from collections import defaultdict
+from datetime import datetime, timezone
+from typing import Callable, Literal
+
+HookType = Literal["enter", "exit"]
+HookCallback = Callable[[dict], None]
+
 
 class InvalidTransition(Exception):
     """Raised when a state transition is not allowed."""
@@ -169,10 +176,25 @@ class SessionStateMachine:
         if initial_state not in STATES:
             raise ValueError(f"unknown state: {initial_state}")
         self._state = initial_state
+        self._hooks: dict[str, dict[HookType, list[HookCallback]]] = defaultdict(
+            lambda: {"enter": [], "exit": []}
+        )
 
     @property
     def state(self) -> str:
         return self._state
+
+    def register_hook(
+        self, state: str, event: HookType, callback: HookCallback
+    ) -> None:
+        """Register a callback to be invoked on state enter or exit.
+
+        Args:
+            state: The state to attach the hook to
+            event: 'enter' (called when entering state) or 'exit' (called when leaving)
+            callback: Function receiving context dict with from_state, to_state, timestamp
+        """
+        self._hooks[state][event].append(callback)
 
     def can_transition(self, to_state: str) -> bool:
         """Check if transition to to_state is valid without changing state."""
@@ -193,4 +215,14 @@ class SessionStateMachine:
             raise InvalidTransition(
                 f"invalid transition: {self._state} -> {to_state}"
             )
+        from_state = self._state
+        ctx = {
+            "from_state": from_state,
+            "to_state": to_state,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        for hook in self._hooks[from_state]["exit"]:
+            hook(ctx)
         self._state = to_state
+        for hook in self._hooks[to_state]["enter"]:
+            hook(ctx)
