@@ -656,6 +656,13 @@ class TestLockedStateOperations:
         update_state_fields(tmp_path, status="waiting:review")
         assert (tmp_path / "state.json.lock").exists()
 
+    def test_update_state_fields_rejects_invalid_transition(self, tmp_path):
+        """update_state_fields raises InvalidTransition for invalid status changes."""
+        from core.state_machine import InvalidTransition
+        (tmp_path / "state.json").write_text(json.dumps({"status": "accepted"}))
+        with pytest.raises(InvalidTransition):
+            update_state_fields(tmp_path, status="working", orphan_resumes=0)
+
     def test_update_status_creates_lock_file(self, tmp_path):
         """update_status should create state.json.lock file."""
         (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
