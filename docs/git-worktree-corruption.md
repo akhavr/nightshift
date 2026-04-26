@@ -127,10 +127,33 @@ This happens because:
 - Watcher logs show "Sanitized core.worktree=/workspace (exit)" - container successfully UNSETS the config
 - Container runs `git config --unset core.worktree` which requires write access
 
-**Open question**: Why does the read-only mount not block writes? Possibilities:
-1. Mount order issue (`:rw` applied after `:ro`)
-2. Git using a different write path (temp file + rename)
-3. Race condition during container startup
+**Tested scenarios that DON'T write core.worktree**:
+- Normal git operations (status, fetch, merge, rebase) in worktrees
+- Git commands with GIT_WORK_TREE env var set
+
+**The read-only mount DOES work** — tested in Docker with exact mount pattern:
+```
+-v /repo/.git:/repo-git:rw
+-v /repo/.git/config:/repo-git/config:ro
+```
+Result: `error: could not write config file /repo-git/config: Resource busy`
+
+**Bug in sanitize function**: `docker-entrypoint.sh` prints "Sanitized" even when unset FAILS (due to `|| true`), giving false confidence that cleanup succeeded.
+
+**Timeline pattern from logs**:
+```
+19:07:54 Pre-review rebase onto master...
+19:08:10 .git/config modified     <-- No ALERT yet
+19:08:11 .git/config modified     
+19:09:48 .git/config modified     <-- ALERT: core.worktree=/workspace
+```
+
+Config is modified multiple times before the pollution appears. Something between normal config writes and 19:09:48 sets core.worktree.
+
+**Root cause still under investigation**. Possibilities:
+1. Host-side rebase somehow triggers it (but tests don't reproduce)
+2. Git-bug webui (holding lock for 1100+s) interfering
+3. Some race condition in multi-session scenario
 
 ### Current Mitigations
 
