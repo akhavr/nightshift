@@ -46,7 +46,8 @@ overflow:
   agent_kind: codex
   extra_args: []
   env:
-    CODEX_MODEL: gpt-5.4-mini
+    #CODEX_MODEL: gpt-5.4-mini
+	CODEX_MODEL: gpt-5.4
 
 overflow_profiles:
   openhands-qwen:
