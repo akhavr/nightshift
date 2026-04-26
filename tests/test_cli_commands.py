@@ -1,6 +1,7 @@
 """Tests for CLI commands: status, answer, history, init, revise, cleanup."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -606,9 +607,18 @@ def test_cmd_init_overwrites_hook_with_force(tmp_path, capsys):
     assert "conflict marker" in content.lower() or "<<<<<<<" in content
 
 
+def _clean_git_env():
+    """Return env dict with GIT_DIR/GIT_WORK_TREE removed for isolated test repos."""
+    env = os.environ.copy()
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    return env
+
+
 def test_pre_commit_hook_rejects_conflict_markers(tmp_path):
     """The pre-commit hook should reject commits with conflict markers."""
-    repo, run = _init_repo(tmp_path)
+    repo, _ = _init_repo(tmp_path)
+    env = _clean_git_env()
 
     with patch("host.cli.repo_root", return_value=repo):
         cmd_init(_make_args(force=False, workflow_path=None))
@@ -616,12 +626,12 @@ def test_pre_commit_hook_rejects_conflict_markers(tmp_path):
     # Create a file with conflict markers
     conflict_file = repo / "conflict.txt"
     conflict_file.write_text("before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n")
-    run("git", "add", "conflict.txt")
+    subprocess.run(["git", "add", "conflict.txt"], cwd=str(repo), env=env)
 
     # Commit should fail due to hook
     result = subprocess.run(
         ["git", "commit", "-m", "should fail"],
-        cwd=str(repo), capture_output=True, text=True
+        cwd=str(repo), capture_output=True, text=True, env=env
     )
     assert result.returncode != 0
     assert "conflict marker" in result.stderr.lower() or "conflict marker" in result.stdout.lower()
@@ -629,7 +639,8 @@ def test_pre_commit_hook_rejects_conflict_markers(tmp_path):
 
 def test_pre_commit_hook_allows_clean_commits(tmp_path):
     """The pre-commit hook should allow commits without conflict markers."""
-    repo, run = _init_repo(tmp_path)
+    repo, _ = _init_repo(tmp_path)
+    env = _clean_git_env()
 
     with patch("host.cli.repo_root", return_value=repo):
         cmd_init(_make_args(force=False, workflow_path=None))
@@ -637,12 +648,12 @@ def test_pre_commit_hook_allows_clean_commits(tmp_path):
     # Create a clean file
     clean_file = repo / "clean.txt"
     clean_file.write_text("no conflicts here\n")
-    run("git", "add", "clean.txt")
+    subprocess.run(["git", "add", "clean.txt"], cwd=str(repo), env=env)
 
     # Commit should succeed
     result = subprocess.run(
         ["git", "commit", "-m", "should pass"],
-        cwd=str(repo), capture_output=True, text=True
+        cwd=str(repo), capture_output=True, text=True, env=env
     )
     assert result.returncode == 0
 
