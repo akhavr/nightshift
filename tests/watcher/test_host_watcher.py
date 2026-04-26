@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import host.watcher as wmod
 from host.watcher import HostWatcher
 from host.watcher.host_watcher import RecentlyLaunchedDict
-from host.constants import RECENTLY_LAUNCHED_FILENAME, ORPHAN_GRACE_PERIOD_S
+from host.constants import RECENTLY_LAUNCHED_FILENAME, ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S
 from core.config.models import TrackerConfig, WorkflowConfig
 from core.protocols import TrackerIssue, TrackerComment
 
@@ -915,3 +915,66 @@ class TestWorktreeIntegrityGuardrail:
 
         assert result is False
         assert w._shutdown.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Tracker lock guardrail tests
+# ---------------------------------------------------------------------------
+
+class TestTrackerLockGuardrail:
+    """Test that watcher warns when git-bug lock is stuck."""
+
+    def test_warns_on_stuck_lock(self, tmp_path, caplog):
+        """Watcher should warn when git-bug lock is held too long."""
+        import logging
+
+        w = _make_watcher(tmp_path)
+
+        # Create a stale lock file (older than LOCK_TIMEOUT_S)
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        lock_file.write_text("")
+
+        # Set mtime to be older than LOCK_TIMEOUT_S
+        stale_time = time.time() - LOCK_TIMEOUT_S - 10
+        import os
+        os.utime(lock_file, (stale_time, stale_time))
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        assert "git-bug lock held for" in caplog.text
+        assert "may be stuck" in caplog.text
+
+    def test_no_warn_on_fresh_lock(self, tmp_path, caplog):
+        """Watcher should not warn when git-bug lock is fresh."""
+        import logging
+
+        w = _make_watcher(tmp_path)
+
+        # Create a fresh lock file (newer than LOCK_TIMEOUT_S)
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        lock_file.write_text("")
+
+        # mtime is already fresh (just created)
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        assert "git-bug lock held for" not in caplog.text
+
+    def test_no_warn_when_lock_missing(self, tmp_path, caplog):
+        """Watcher should not warn when git-bug lock file doesn't exist."""
+        import logging
+
+        w = _make_watcher(tmp_path)
+
+        # No lock file created
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        assert "git-bug lock held for" not in caplog.text

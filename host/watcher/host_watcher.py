@@ -11,7 +11,7 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME,
     BACKGROUND_LAUNCH_CHECK_S, REVIEW_SESSION_PREFIX, RECENTLY_LAUNCHED_FILENAME,
-    ORPHAN_GRACE_PERIOD_S,
+    ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S,
     SOCKET_SERVER_RESTART_BACKOFF_BASE_S, SOCKET_SERVER_RESTART_BACKOFF_CAP_S,
     SOCKET_SERVER_MAX_RESTARTS,
     TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
@@ -349,6 +349,7 @@ class HostWatcher:
             if not self._check_worktree_integrity():
                 break
             self._check_socket_server_health()
+            self._check_tracker_lock()
             tg_answers, tg_reviews = (
                 self.telegram.poll_all(self.qa._paused) if self.telegram.enabled else ({}, {})
             )
@@ -490,6 +491,19 @@ class HostWatcher:
         )
         self._shutdown.set()
         return False
+
+    def _check_tracker_lock(self):
+        """Check if git-bug lock file is held too long and warn if so.
+
+        Git-bug lock can get stuck if a process crashes holding it.
+        This monitors the lock file age and logs a warning if it's been
+        held longer than LOCK_TIMEOUT_S. Does not halt - just warns.
+        """
+        lock_file = self.repo_dir / ".git" / "git-bug" / "lock"
+        if lock_file.exists():
+            age = time.time() - lock_file.stat().st_mtime
+            if age > LOCK_TIMEOUT_S:
+                log.warning("git-bug lock held for %.0fs, may be stuck", age)
 
     def check_background_launches(self):
         """Poll recently launched background processes for early exit.

@@ -52,6 +52,9 @@ ARCHIVE_DIR = "archive"  # Subdirectory of .nightshift/ for archived session dat
 # ── Usage tracking ────────────────────────────────────
 USAGE_LOG_FILENAME = "usage.jsonl"  # Append-only usage log in .nightshift/
 
+# ── Tracker lock monitoring ──────────────────────────
+LOCK_TIMEOUT_S = 60  # Warn if git-bug lock held longer than this
+
 # ── Tracker IPC (single-writer architecture) ──────────
 TRACKER_SOCKET_FILENAME = "tracker.sock"  # Unix socket in .nightshift/
 TRACKER_WRITER_QUEUE_SIZE = 100          # Bounded queue to prevent memory issues
