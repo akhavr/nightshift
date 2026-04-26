@@ -979,6 +979,125 @@ class TestTrackerLockGuardrail:
 
         assert "git-bug lock held for" not in caplog.text
 
+    def test_lock_warning_shows_pid(self, tmp_path, caplog):
+        """Lock warning should show the holder PID from the lock file."""
+        import logging
+        import os
+
+        w = _make_watcher(tmp_path)
+
+        # Create a stale lock file with a PID
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        lock_file.write_text("12345\n")
+
+        # Set mtime to be older than LOCK_TIMEOUT_S
+        stale_time = time.time() - LOCK_TIMEOUT_S - 10
+        os.utime(lock_file, (stale_time, stale_time))
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        assert "git-bug lock held for" in caplog.text
+        assert "pid 12345" in caplog.text
+
+    def test_lock_warning_shows_process_name(self, tmp_path, caplog):
+        """Lock warning should show the process command line."""
+        import logging
+        import os
+
+        w = _make_watcher(tmp_path)
+
+        # Create a stale lock file with current PID (so ps will find it)
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        current_pid = os.getpid()
+        lock_file.write_text(f"{current_pid}\n")
+
+        # Set mtime to be older than LOCK_TIMEOUT_S
+        stale_time = time.time() - LOCK_TIMEOUT_S - 10
+        os.utime(lock_file, (stale_time, stale_time))
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        assert "git-bug lock held for" in caplog.text
+        assert f"pid {current_pid}" in caplog.text
+        # Should show the process name (python in this case)
+        assert "python" in caplog.text.lower() or "pytest" in caplog.text.lower()
+
+    def test_lock_warning_shows_parent_process(self, tmp_path, caplog):
+        """Lock warning should show the parent process info."""
+        import logging
+        import os
+
+        w = _make_watcher(tmp_path)
+
+        # Create a stale lock file with current PID
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        current_pid = os.getpid()
+        lock_file.write_text(f"{current_pid}\n")
+
+        stale_time = time.time() - LOCK_TIMEOUT_S - 10
+        os.utime(lock_file, (stale_time, stale_time))
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        # Should mention parent process
+        assert "parent" in caplog.text.lower()
+
+    def test_lock_warning_handles_invalid_pid(self, tmp_path, caplog):
+        """Lock warning should handle non-numeric lock file content gracefully."""
+        import logging
+        import os
+
+        w = _make_watcher(tmp_path)
+
+        # Create a stale lock file with invalid content
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        lock_file.write_text("not-a-pid\n")
+
+        stale_time = time.time() - LOCK_TIMEOUT_S - 10
+        os.utime(lock_file, (stale_time, stale_time))
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        # Should still warn, just without PID details
+        assert "git-bug lock held for" in caplog.text
+        assert "may be stuck" in caplog.text
+
+    def test_lock_warning_handles_dead_process(self, tmp_path, caplog):
+        """Lock warning should handle a PID that no longer exists."""
+        import logging
+        import os
+
+        w = _make_watcher(tmp_path)
+
+        # Create a stale lock file with a PID that doesn't exist
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        # Use a very high PID that almost certainly doesn't exist
+        lock_file.write_text("999999999\n")
+
+        stale_time = time.time() - LOCK_TIMEOUT_S - 10
+        os.utime(lock_file, (stale_time, stale_time))
+
+        with caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        # Should warn with PID but note process is unknown/dead
+        assert "git-bug lock held for" in caplog.text
+        assert "pid 999999999" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # Disk space guardrail tests
