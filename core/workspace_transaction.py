@@ -6,6 +6,7 @@ import logging
 import subprocess
 import threading
 from pathlib import Path
+from typing import Callable
 
 log = logging.getLogger(__name__)
 _thread_state = threading.local()
@@ -27,6 +28,7 @@ class WorkspaceTransaction:
         self.active = False
         self._git_file = self.worktree_path / ".git"
         self._original_git_content: str | None = None
+        self.rollback_stack: list[Callable[[], None]] = []
 
     def __enter__(self) -> "WorkspaceTransaction":
         if getattr(_thread_state, "active_transaction", None) is not None:
@@ -41,6 +43,8 @@ class WorkspaceTransaction:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         try:
+            if exc_type is not None:
+                self._run_rollback_stack()
             if self._original_git_content is not None:
                 self._git_file.write_text(self._original_git_content)
         finally:
@@ -51,6 +55,55 @@ class WorkspaceTransaction:
 
     def rewrite_git_pointer(self, new_content: str) -> None:
         self._git_file.write_text(new_content)
+
+    def create_branch(self, name: str, start_point: str | None = None) -> None:
+        """Create a branch and register a rollback delete operation."""
+        args = ["git", "branch", name]
+        if start_point is not None:
+            args.append(start_point)
+        self._run_git(args)
+        self.rollback_stack.append(
+            lambda: self._run_git(["git", "branch", "-D", name])
+        )
+
+    def checkout(self, branch: str) -> None:
+        """Checkout a branch and register a rollback restore operation."""
+        previous_branch = self._current_branch()
+        self._run_git(["git", "checkout", branch])
+        if previous_branch:
+            self.rollback_stack.append(
+                lambda: self._run_git(["git", "checkout", previous_branch])
+            )
+
+    def _run_git(self, args: list[str]) -> subprocess.CompletedProcess:
+        result = subprocess.run(
+            args,
+            cwd=str(self.worktree_path),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            raise RuntimeError(f"{' '.join(args)} failed: {stderr}")
+        return result
+
+    def _current_branch(self) -> str:
+        """Return the current branch for this worktree."""
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=str(self.worktree_path),
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def _run_rollback_stack(self) -> None:
+        while self.rollback_stack:
+            rollback = self.rollback_stack.pop()
+            try:
+                rollback()
+            except Exception:
+                log.exception("WorkspaceTransaction rollback step failed")
 
 
 def repair_worktree(worktree_path: Path) -> None:
