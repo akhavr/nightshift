@@ -41,48 +41,18 @@ class TestAttemptPreReviewRebase:
                 tmp_path, "master", test_command="pytest")
         assert result is None
 
-    def test_rebase_conflict_falls_back_to_merge(self, tmp_path):
-        """Rebase conflict falls back to merge, returns None on merge success."""
+    def test_rebase_conflict_returns_prompt(self, tmp_path):
+        """Rebase conflict returns a prompt and does not fall back to merge."""
         with patch("host.rebase._rebase") as mock_rebase, \
              patch("host.rebase._merge") as mock_merge:
             mock_rebase.return_value = RebaseResult(
-                success=False,
-                conflict_details="Conflicting files:\nsrc/main.py")
-            mock_merge.return_value = MergeResult(success=True)
-            result = attempt_pre_review_rebase(tmp_path, "master")
-        assert result is None
-        mock_merge.assert_called_once_with(tmp_path, "master")
-
-    def test_merge_conflict_returns_prompt(self, tmp_path):
-        """When both rebase and merge fail, return merge conflict prompt."""
-        with patch("host.rebase._rebase") as mock_rebase, \
-             patch("host.rebase._merge") as mock_merge:
-            mock_rebase.return_value = RebaseResult(
-                success=False, conflict_details="rebase conflict")
-            mock_merge.return_value = MergeResult(
                 success=False,
                 conflict_details="Conflicting files:\nsrc/main.py")
             result = attempt_pre_review_rebase(tmp_path, "master")
         assert result is not None
-        assert "MERGE CONFLICT" in result
+        assert "REBASE CONFLICT" in result
         assert "src/main.py" in result
-        assert "@@DONE@@" in result
-
-    def test_test_failure_after_merge_fallback(self, tmp_path):
-        """Test failure after merge fallback returns a prompt with correct wording."""
-        with patch("host.rebase._rebase") as mock_rebase, \
-             patch("host.rebase._merge") as mock_merge, \
-             patch("host.rebase._run_test_command",
-                   return_value="Exit code 1\nstdout:\nFAILED test_foo"):
-            mock_rebase.return_value = RebaseResult(
-                success=False, conflict_details="rebase conflict")
-            mock_merge.return_value = MergeResult(success=True)
-            result = attempt_pre_review_rebase(
-                tmp_path, "master", test_command="pytest")
-        assert result is not None
-        assert "POST-MERGE TEST FAILURE" in result
-        assert "merged into your branch" in result
-        assert "FAILED test_foo" in result
+        mock_merge.assert_not_called()
 
     def test_test_failure_returns_prompt(self, tmp_path):
         """Test failure after rebase returns a prompt."""

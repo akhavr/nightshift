@@ -24,6 +24,7 @@ def clean_git_environ(monkeypatch):
 from host.merge import (
     resolve_merge_ref,
     merge_with_rebase_fallback,
+    _rebase_and_retry_merge,
     verify_no_conflict_markers,
 )
 from host.cli import (
@@ -235,6 +236,34 @@ class TestMergeWithRebaseFallback:
 
         mock_rebase.assert_called_once_with(
             repo, "agent/test1", "main", "issue-1", config, _noop_report, None,
+        )
+
+
+class TestRebaseAndRetryMerge:
+    def test_uses_workspace_transaction_for_rebase(self, tmp_path):
+        """The merge retry path rebases through WorkspaceTransaction."""
+        repo, _ = _init_repo(tmp_path)
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        (worktree / ".git").write_text("gitdir: /repo/.git/worktrees/worktree\n")
+
+        config = _make_config()
+        txn = MagicMock()
+        txn.__enter__.return_value = txn
+        txn.__exit__.return_value = False
+
+        with patch("host.merge.check_worktree_integrity") as mock_check, \
+             patch("host.merge.WorkspaceTransaction", return_value=txn) as mock_txn, \
+             patch("host.merge._retry_merge_after_rebase") as mock_retry:
+            _rebase_and_retry_merge(
+                repo, "agent/test1", "main", "issue-1", config, _noop_report, worktree
+            )
+
+        mock_check.assert_called_once_with(worktree, auto_repair=True)
+        mock_txn.assert_called_once_with(worktree)
+        txn.rebase.assert_called_once_with("main")
+        mock_retry.assert_called_once_with(
+            repo, "agent/test1", "issue-1", config, _noop_report
         )
 
 

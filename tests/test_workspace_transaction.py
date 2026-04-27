@@ -10,6 +10,7 @@ from core.workspace_transaction import (
     WorktreeCorruptError,
     check_worktree_integrity,
     TransactionError,
+    RebaseConflictError,
     WorkspaceTransaction,
 )
 
@@ -221,3 +222,163 @@ def test_rollback_deletes_created_branch(tmp_path):
 
     assert not _branch_exists(repo, branches[0])
     assert not _branch_exists(repo, branches[1])
+
+
+def test_merge_returns_result(tmp_path):
+    """merge() returns a MergeResult with success and conflict metadata."""
+    repo, worktree = _init_repo(tmp_path)
+
+    subprocess.run(
+        ["git", "checkout", "-b", "feature/merge-ok"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    (repo / "merge.txt").write_text("feature branch\n")
+    subprocess.run(
+        ["git", "add", "merge.txt"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "feature commit"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    with WorkspaceTransaction(worktree) as txn:
+        result = txn.merge("feature/merge-ok")
+
+    assert result.success is True
+    assert result.has_conflicts is False
+    assert result.conflicting_files == []
+
+
+def test_merge_conflict_detected(tmp_path):
+    """merge() reports conflict files when git merge hits a conflict."""
+    repo, worktree = _init_repo(tmp_path)
+
+    subprocess.run(
+        ["git", "checkout", "-b", "feature/merge-conflict"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    (repo / "file.txt").write_text("feature side\n")
+    subprocess.run(
+        ["git", "add", "file.txt"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "feature conflict commit"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    (worktree / "file.txt").write_text("base side\n")
+    subprocess.run(
+        ["git", "add", "file.txt"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "base conflict commit"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    with WorkspaceTransaction(worktree) as txn:
+        result = txn.merge("feature/merge-conflict")
+
+    assert result.success is False
+    assert result.has_conflicts is True
+    assert "file.txt" in result.conflicting_files
+
+
+def test_rebase_with_conflict_aborts(tmp_path):
+    """rebase() aborts on conflict and restores the original worktree state."""
+    repo, worktree = _init_repo(tmp_path)
+
+    (repo / "file.txt").write_text("main side\n")
+    subprocess.run(
+        ["git", "add", "file.txt"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "main conflict commit"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    (worktree / "file.txt").write_text("txn side\n")
+    subprocess.run(
+        ["git", "add", "file.txt"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "txn conflict commit"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    original_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    original_status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    with WorkspaceTransaction(worktree) as txn:
+        with pytest.raises(RebaseConflictError):
+            txn.rebase("main")
+
+    restored_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    restored_status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=str(worktree),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    assert restored_head == original_head
+    assert restored_status == original_status
