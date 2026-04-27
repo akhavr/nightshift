@@ -36,14 +36,6 @@ def create_worktree(repo: Path, wt_path: Path, branch: str,
     # WT-6: Use safe_prune to fix corrupted gitdirs first and check active sessions
     safe_prune(repo)
 
-    # Verify base commit exists before creating branch
-    verify_result = subprocess.run(
-        ["git", "cat-file", "-t", base_branch],
-        capture_output=True, text=True, cwd=str(repo),
-    )
-    if verify_result.returncode != 0:
-        raise ValueError(f"Base branch {base_branch} points to missing commit")
-
     subprocess.run(["git", "branch", branch, base_branch],
                    capture_output=True, cwd=str(repo))
 
