@@ -8,6 +8,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+import host.cli
+
 
 def _clean_git_env():
     """Return env dict without GIT_DIR/GIT_WORK_TREE (allows tests in temp repos)."""
@@ -349,6 +351,54 @@ class TestAcceptRejectsBehindBase:
             call_msg = mock_report.call_args[0][3]
             assert "behind" in call_msg
 
+    def test_accept_fails_when_branch_missing_recent_master(self, tmp_path):
+        """cmd_accept should reject when agent branch lacks the current base HEAD."""
+        repo, run = _init_repo(tmp_path)
+
+        # Create agent branch from the initial base commit.
+        run("git", "checkout", "-b", "agent/stale123")
+        (repo / "agent.txt").write_text("work\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "agent work")
+
+        # Advance main after the agent branch was created.
+        run("git", "checkout", "main")
+        (repo / "main_new.txt").write_text("new on main\n")
+        run("git", "add", ".")
+        run("git", "commit", "-m", "main advance")
+
+        ns_dir = repo / ".nightshift" / "sessions" / "stale123"
+        ns_dir.mkdir(parents=True)
+        (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+        (repo / "WORKFLOW.md").write_text(
+            "---\n"
+            "agent:\n  kind: claude-code\n"
+            "tracker:\n  kind: git-bug\n"
+            "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+            "---\nPrompt\n"
+        )
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="stale123"), \
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli._report_accept_failure") as mock_report:
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "stale123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_accept(args)
+
+            assert exc_info.value.code == 1
+
+        mock_report.assert_called_once()
+        call_msg = mock_report.call_args[0][3]
+        assert "does not contain current main HEAD" in call_msg
+        assert "Merge latest main" in call_msg
+
 
 class TestAcceptSanitizesConfig:
     """Tests that cmd_accept sanitizes core.worktree before git operations."""
@@ -452,13 +502,20 @@ class TestAcceptConflictHandling:
         # Record main repo state before accept
         main_head_before = run("git", "rev-parse", "HEAD").stdout.strip()
         main_file_before = (repo / "file.txt").read_text()
+        real_subprocess_run = subprocess.run
+
+        def _subprocess_run(*args, **kwargs):
+            if list(args[0][:3]) == ["git", "merge-base", "--is-ancestor"]:
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+            return real_subprocess_run(*args, **kwargs)
 
         with patch("host.cli.repo_root", return_value=repo), \
              patch("host.cli.resolve_session", return_value="conf123"), \
              patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
              patch("host.cli._report_accept_failure") as mock_report, \
              patch("host.cli.check_branch_not_behind_base", return_value=None), \
-             patch("host.cli.audit_worktree_symlinks", return_value=[]):
+             patch("host.cli.audit_worktree_symlinks", return_value=[]), \
+             patch("host.cli.subprocess.run", side_effect=_subprocess_run):
             mock_tracker.return_value = MagicMock()
             args = MagicMock()
             args.issue_id = "conf123"

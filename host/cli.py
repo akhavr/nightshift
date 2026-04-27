@@ -1000,6 +1000,20 @@ def cmd_accept(a):
         _report_accept_failure(config, r, a.issue_id, behind_msg)
         sys.exit(1)
 
+    # Verify agent branch actually contains the current base HEAD
+    merge_base = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base, branch],
+        cwd=str(r), capture_output=True,
+    )
+    if merge_base.returncode != 0:
+        message = (
+            f"Agent branch {branch} does not contain current {base} HEAD. "
+            f"Run 'nightshift revise {a.issue_id} \"Merge latest {base}\"' first."
+        )
+        print(message, file=sys.stderr)
+        _report_accept_failure(config, r, a.issue_id, message)
+        sys.exit(1)
+
     escaping_symlinks = audit_worktree_symlinks(wt)
     if escaping_symlinks:
         details = "\n".join(
