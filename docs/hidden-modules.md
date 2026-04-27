@@ -393,9 +393,9 @@ tests/test_session_runner.py::test_agent_agnostic_event_loop
 
 ---
 
-### AES-6: File signals become events
+### AES-6: File signals become events [DONE]
 
-**Issue:** 59384e5f4429
+**Issue:** 4fb20687652f
 
 **Tests:**
 ```
@@ -490,7 +490,9 @@ tests/test_host_rebase.py::test_sanitize_preserves_valid_config
 
 ---
 
-### WT-2: docker-entrypoint.sh uses WorkspaceTransaction (defense in depth)
+### WT-2: docker-entrypoint.sh uses WorkspaceTransaction (defense in depth) [DONE]
+
+**Issue:** 97d9d9aeb833
 
 **Tests:**
 ```
@@ -552,7 +554,9 @@ tests/test_workspace_setup.py::test_setup_failure_cleans_up
 
 ---
 
-### WT-5: Merge and rebase in WorkspaceTransaction
+### WT-5: Merge and rebase in WorkspaceTransaction [DONE]
+
+**Issue:** 0e4290356c53
 
 **Tests:**
 ```
@@ -633,19 +637,28 @@ Priority based on impact and dependencies:
 | 2 | SSM-4 to SSM-9 | Full SSM integration | **DONE** |
 | 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix | **DONE** |
 | 3 | AES-1 to AES-5 | Event foundation + all agents | **DONE** |
-| 4 | AES-6 | File signals unified | TODO |
+| 4 | AES-6 | File signals unified | **DONE** |
 | 5 | WT-0, WT-1, WT-1.5, WT-1.6, WT-1.7, WT-6 | Git state self-healing + safe prune | **DONE** |
-| 6 | WT-2 to WT-5 | Full transactional git | IN PROGRESS |
+| 6 | WT-2 to WT-5 | Full transactional git | **DONE** |
 
 **Total: 27 issues, each TDD, each wired to real flow.**
 
-**Completed:** SSM-1 to SSM-11, AES-1 to AES-5, WT-0, WT-1, WT-1.5, WT-1.6, WT-1.7, WT-3, WT-4, WT-6 (24 issues)
-**Remaining:** AES-6, WT-2, WT-5 (3 issues)
+**Completed:** All 27 issues.
 
 After Phase 1 (3 issues): Race condition fixed structurally. **DONE**
 After Phase 2 (6 more): SSM complete, lifecycle explicit. **DONE**
 After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup. **DONE**
 After Phase 3 (5 more): All agents emit unified AgentEvent stream. **DONE**
-After Phase 4 (1 more): File signals unified into AgentEvent stream.
+After Phase 4 (1 more): File signals unified into AgentEvent stream. **DONE**
 After Phase 5 (6 issues): Git state self-heals from container corruption, safe prune prevents collateral damage. **DONE**
-After Phase 6 (3 more): Git operations are bulletproof.
+After Phase 6 (3 more): Git operations are bulletproof. **DONE**
+
+---
+
+## Architecture Complete
+
+All three hidden modules are now fully extracted and wired:
+
+1. **Session State Machine (SSM)** — Explicit FSM with atomic transitions. Race conditions eliminated.
+2. **Agent Event Stream (AES)** — Unified event stream from all agents. SessionRunner is agent-agnostic.
+3. **Workspace Transaction (WT)** — Transactional git operations with auto-cleanup. Git state self-heals.
