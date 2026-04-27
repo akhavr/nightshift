@@ -1029,7 +1029,8 @@ class TestCopyGitChanges:
         source.mkdir()
         (source / "objects").mkdir()
         (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent-123").write_text(
+        (source / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
+        (source / "refs" / "heads" / "agent" / "good").write_text(
             "0123456789abcdef0123456789abcdef01234567\n"
         )
 
@@ -1048,7 +1049,7 @@ class TestCopyGitChanges:
 
         assert result == 0
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
-        assert (repo / ".git" / "refs" / "heads" / "agent-123").read_text().strip() == \
+        assert (repo / ".git" / "refs" / "heads" / "agent" / "good").read_text().strip() == \
             "0123456789abcdef0123456789abcdef01234567"
 
     @patch("host.launch.subprocess.run")
