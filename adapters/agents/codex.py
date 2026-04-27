@@ -291,15 +291,9 @@ class CodexAgent(HeadlessAgentBase):
         # @@DONE@@ - task completion (buffer until turn.completed for usage data)
         if "@@DONE@@" in text:
             self._pending_done_raw = raw
-            # Preserve any verdict text that arrived in the same message.
-            if text.strip() == "@@DONE@@":
-                return None
-            content = text.replace("@@DONE@@", "").rstrip()
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content=content,
-                raw=raw,
-            )
+            # Buffer the whole message and wait for turn.completed so usage data
+            # stays attached to the emitted @@DONE@@ event.
+            return None
 
         # @@CHECKPOINT@@ <description>
         match = re.search(r"@@CHECKPOINT@@\s*(.*?)(?:@@|$)", text)
