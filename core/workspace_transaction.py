@@ -79,6 +79,11 @@ class WorkspaceTransaction:
     def rewrite_git_pointer(self, new_content: str) -> None:
         self._git_file.write_text(new_content)
 
+    def restore_git_pointer(self, content: str) -> None:
+        """Replace the current .git pointer and keep that content on exit."""
+        self._git_file.write_text(content)
+        self._original_git_content = content
+
     def create_branch(self, name: str, start_point: str | None = None) -> None:
         """Create a branch and register a rollback delete operation."""
         args = ["git", "branch", name]

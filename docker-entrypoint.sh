@@ -23,7 +23,8 @@ cleanup_workspace() {
 
     if [ "$cleanup_status" -ne 0 ]; then
         WORKTREE_PATH="${WORKTREE_PATH:-/workspace}"
-        if [ -n "${ORIGINAL_GIT_CONTENT_FILE:-}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ] && [ -f "$WORKTREE_PATH/.git" ]; then
+        if [ -n "${ORIGINAL_GIT_CONTENT_FILE:-}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ]; then
+            mkdir -p "$WORKTREE_PATH" 2>/dev/null || true
             cp "$ORIGINAL_GIT_CONTENT_FILE" "$WORKTREE_PATH/.git" 2>/dev/null || true
             echo "Restored .git pointer from shell fallback"
         fi

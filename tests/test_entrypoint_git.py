@@ -66,10 +66,20 @@ def _init_repo_with_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
     return repo, worktree, git_dir
 
 
-def _write_cleanup_harness(tmp_path: Path, worktree: Path, git_dir: Path, exit_code: int) -> Path:
+def _write_cleanup_harness(
+    tmp_path: Path,
+    worktree: Path,
+    git_dir: Path,
+    exit_code: int,
+    remove_git_file: bool = False,
+) -> Path:
     """Write a shell script that mutates git state and runs the cleanup helper on exit."""
     original_git_file = tmp_path / "original.git"
     original_git_file.write_text((worktree / ".git").read_text())
+
+    remove_git_line = ""
+    if remove_git_file:
+        remove_git_line = f'\nrm -f "{worktree / ".git"}"'
 
     script = tmp_path / "entrypoint_harness.sh"
     script.write_text(
@@ -90,7 +100,8 @@ cleanup() {{
     fi
 
     if [ "$cleanup_status" -ne 0 ]; then
-        if [ -n "${{ORIGINAL_GIT_CONTENT_FILE:-}}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ] && [ -f "$WORKTREE_PATH/.git" ]; then
+        if [ -n "${{ORIGINAL_GIT_CONTENT_FILE:-}}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ]; then
+            mkdir -p "$WORKTREE_PATH" 2>/dev/null || true
             cp "$ORIGINAL_GIT_CONTENT_FILE" "$WORKTREE_PATH/.git" 2>/dev/null || true
         fi
     fi
@@ -99,6 +110,7 @@ trap cleanup EXIT
 
 printf '%s\n' "gitdir: /repo-git/worktrees/{worktree.name}" > "{worktree / '.git'}"
 git config core.worktree /workspace
+{remove_git_line}
 
 exit {exit_code}
 """
@@ -333,6 +345,54 @@ class TestGitPointerRestoration:
 
         assert result.returncode == 1
         assert git_file.read_text() == original_content
+
+    def test_git_pointer_restored_when_cleanup_helper_fails_and_git_file_missing(self, tmp_path):
+        """Shell fallback recreates .git even if the file was removed before exit."""
+        _, worktree, git_dir = _init_repo_with_worktree(tmp_path)
+        git_file = worktree / ".git"
+        original_content = git_file.read_text()
+        script = _write_cleanup_harness(
+            tmp_path,
+            worktree,
+            git_dir,
+            exit_code=1,
+            remove_git_file=True,
+        )
+
+        fake_bin = tmp_path / "fake-bin"
+        fake_bin.mkdir()
+        fake_python = fake_bin / "python3"
+        fake_python.write_text("#!/bin/sh\nexit 1\n")
+        fake_python.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "WORKTREE_PATH": str(worktree),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        assert result.returncode == 1
+        assert git_file.read_text() == original_content
+
+    def test_cleanup_helper_reports_missing_backup(self, tmp_path, monkeypatch):
+        """The Python cleanup helper should fail when the saved .git backup is missing."""
+        _, worktree, _ = _init_repo_with_worktree(tmp_path)
+        import entrypoint
+
+        monkeypatch.setenv("ORIGINAL_GIT_CONTENT_FILE", str(tmp_path / "missing.git"))
+        monkeypatch.setenv("WORKTREE_PATH", str(worktree))
+        monkeypatch.setenv("GIT_DIR", str(tmp_path / "repo" / ".git"))
+
+        exit_code = entrypoint.cleanup_workspace(worktree)
+
+        assert exit_code == 1
 
 
 class TestGitEnvVars:

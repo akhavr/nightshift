@@ -115,21 +115,46 @@ def _sanitize_core_worktree(worktree_path: Path) -> None:
         log.info("Sanitized core.worktree=/workspace on exit")
 
 
-def cleanup_workspace(worktree_path: Path | None = None) -> None:
+def _restore_git_pointer(worktree: Path, original_content: str) -> None:
+    """Restore a worktree's .git pointer and keep it stable through exit."""
+    git_file = worktree / ".git"
+    if not git_file.exists():
+        git_file.write_text(original_content)
+
+    with WorkspaceTransaction(worktree) as txn:
+        txn.restore_git_pointer(original_content)
+
+
+def cleanup_workspace(worktree_path: Path | None = None) -> int:
     """Restore workspace metadata and sanitize core.worktree after container exit."""
     worktree = Path(worktree_path or os.environ.get("WORKTREE_PATH", "/workspace"))
-    git_file = worktree / ".git"
     original_git_file = os.environ.get("ORIGINAL_GIT_CONTENT_FILE")
+    cleanup_failed = False
 
-    if original_git_file and worktree.exists():
+    if original_git_file:
         original_path = Path(original_git_file)
         if original_path.exists():
-            git_file.write_text(original_path.read_text())
-            log.info("Restored .git pointer from %s", original_path)
+            try:
+                _restore_git_pointer(worktree, original_path.read_text())
+                log.info("Restored .git pointer from %s", original_path)
+            except Exception:
+                log.exception("Failed to restore .git pointer from %s", original_path)
+                cleanup_failed = True
+        else:
+            log.warning("Missing saved .git pointer backup at %s", original_path)
+            cleanup_failed = True
+    else:
+        log.warning("Missing ORIGINAL_GIT_CONTENT_FILE; cannot restore .git pointer")
+        cleanup_failed = True
 
-    if worktree.exists() and git_file.exists():
-        with WorkspaceTransaction(worktree):
+    if worktree.exists():
+        try:
             _sanitize_core_worktree(worktree)
+        except Exception:
+            log.exception("Failed to sanitize core.worktree on exit")
+            cleanup_failed = True
+
+    return 0 if not cleanup_failed else 1
 
 
 def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
@@ -268,6 +293,6 @@ def run(worktree_path: Path = Path("/workspace")) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--cleanup":
-        cleanup_workspace()
+        sys.exit(cleanup_workspace())
     else:
         run()

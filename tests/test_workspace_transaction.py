@@ -161,6 +161,19 @@ def test_rewrite_git_pointer(tmp_path):
         assert git_file.read_text() == "gitdir: /tmp/new-pointer\n"
 
 
+def test_restore_git_pointer(tmp_path):
+    """restore_git_pointer keeps the restored pointer after exit."""
+    worktree = _make_worktree(tmp_path)
+    git_file = worktree / ".git"
+    original = git_file.read_text()
+
+    with WorkspaceTransaction(worktree) as txn:
+        txn.restore_git_pointer(original)
+        assert git_file.read_text() == original
+
+    assert git_file.read_text() == original
+
+
 def test_nested_transactions_error(tmp_path):
     """Nested WorkspaceTransaction usage is rejected."""
     worktree = _make_worktree(tmp_path)
