@@ -11,10 +11,12 @@ from pathlib import Path
 from host.watchdog.scanner import scan_registrations, cleanup_stale, WatcherStatus, PROJECTS_D
 from host.watchdog.log_monitor import LogMonitor, ErrorMatch
 from host.watchdog.alerter import Alerter, AlertConfig
+from host.watchdog.session_checker import find_stuck_sessions, StuckSession
 
 log = logging.getLogger("watchdog")
 
 REPEATED_ERROR_THRESHOLD = 3
+STUCK_ALERT_THRESHOLD_MINUTES = 30
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -76,6 +78,16 @@ def check_once(alerter: Alerter, log_monitor: LogMonitor, do_alerts: bool = True
             log.warning(msg)
             if do_alerts:
                 alerter.send(f"error:{status.project}:{error.error_type}", msg)
+
+    for stuck in find_stuck_sessions(PROJECTS_D, STUCK_ALERT_THRESHOLD_MINUTES):
+        issues += 1
+        msg = (
+            f"Session stuck: *{stuck.project}* `{stuck.session_id}` "
+            f"in `{stuck.status}` for {stuck.minutes_stuck} min"
+        )
+        log.warning(msg)
+        if do_alerts:
+            alerter.send(f"stuck:{stuck.project}:{stuck.session_id}", msg)
 
     return issues
 
