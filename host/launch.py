@@ -30,6 +30,12 @@ from host.workspace_setup import setup_workspace
 
 logger = logging.getLogger(__name__)
 
+_FSCK_NOISE_SUBSTRINGS = (
+    "Unknown object type",
+    "Could not read",
+    "fatal: not a git repository",
+)
+
 
 def _resolve_names(issue_id: str, step: str, config):
     """Derive session/branch/container names from issue_id and step."""
@@ -91,10 +97,18 @@ def _copy_git_changes(session_dir: Path, repo: Path) -> int:
         text=True,
     )
     if fsck_result.returncode != 0:
-        details = (fsck_result.stderr or fsck_result.stdout or "").strip()
-        if not details:
-            details = "git fsck failed without output"
-        logger.error("git fsck failed for %s: %s", source_git, details)
+        details = fsck_result.stderr or fsck_result.stdout or ""
+        real_errors = [
+            line for line in details.splitlines()
+            if not any(skip in line for skip in _FSCK_NOISE_SUBSTRINGS)
+        ]
+        if not real_errors:
+            return 0
+        logger.error(
+            "git fsck found issues for %s:\n%s",
+            source_git,
+            "\n".join(real_errors),
+        )
         return fsck_result.returncode or 1
 
     repo_git = repo / ".git"
