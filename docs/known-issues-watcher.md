@@ -42,17 +42,15 @@ This document tracks known issues with the nightshift watcher and their resoluti
 
 ---
 
-## In Progress
-
 ### 4. Socket Server Health Check
 
 **Issue ID:** 93495dacbe1c
 
 **Problem:** If the tracker socket server crashes, CLI commands and external processes fail to communicate with the watcher's single-writer tracker.
 
-**Solution:** Adding `is_alive()` and `restart()` methods to `TrackerSocketServer`, plus `_check_socket_server_health()` with exponential backoff in the watcher main loop.
+**Solution:** Added `is_alive()` and `restart()` methods to `TrackerSocketServer`, plus `_check_socket_server_health()` with exponential backoff in the watcher main loop.
 
-**Status:** In review (multiple revise cycles due to out-of-scope changes)
+**Status:** Resolved (merged to master)
 
 ---
 
@@ -62,13 +60,11 @@ This document tracks known issues with the nightshift watcher and their resoluti
 
 **Problem:** Different agent types (Claude Code, OpenHands, Codex) use different signal mechanisms (MCP tools, text markers, file signals). No way to configure which mechanism to use per agent.
 
-**Solution:** Adding `signal_method` config option to WORKFLOW.md (`auto`, `mcp`, `text`, `file`). SessionRunner checks the configured method.
+**Solution:** Added `signal_method` config option to WORKFLOW.md (`auto`, `mcp`, `text`, `file`). SessionRunner checks the configured method.
 
-**Status:** In review
+**Status:** Resolved (merged to master)
 
 ---
-
-## Open Issues
 
 ### 6. GraphQL Tracker Lock Conflict
 
@@ -76,16 +72,15 @@ This document tracks known issues with the nightshift watcher and their resoluti
 
 **Problem:** `run_raw()` (CLI passthrough) shells out to git-bug CLI while the watcher's webui holds the repository lock. Commands fail with lock errors.
 
-**Impact:** `nightshift issue` commands fail when watcher is running with GraphQL tracker.
+**Solution:** Added "label add/rm" alias parsing to route through tracker methods.
 
-**Workaround:** Use `nightshift issue bug ...` which goes through the single-writer architecture.
+**Status:** Resolved (merged to master)
 
-**Proposed solution:** 
-- Add "label add/rm" alias parsing to route through tracker methods
-- Return clear error messages for commands with no GraphQL equivalent
-- Return clear error for unrecognized commands
+---
 
-**Status:** Filed, not started
+## Open Issues
+
+None currently tracked
 
 ---
 
