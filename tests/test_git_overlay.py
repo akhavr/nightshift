@@ -79,7 +79,25 @@ def test_overlay_commit_extraction(tmp_path):
     assert (repo_git / "HEAD").read_text() == "ref: refs/heads/agent-test"
 
 
-def test_extract_commits_skips_existing_readonly_objects(tmp_path):
+def test_extract_commits_overwrites_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    existing_ref = repo_git / "refs" / "heads" / "agent-test"
+    existing_ref.parent.mkdir(parents=True)
+    existing_ref.write_text("commit-a")
+
+    (upper_dir / "refs" / "heads").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent-test").write_text("commit-b")
+
+    extract_commits(upper_dir, repo_git)
+
+    assert existing_ref.read_text() == "commit-b"
+
+
+def test_extract_commits_still_skips_objects(tmp_path):
     """Regression test: extract_commits must skip existing read-only files.
 
     Git objects are immutable and typically 444 permissions. Attempting to

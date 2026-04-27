@@ -51,10 +51,11 @@ def setup_git_copy(repo_git: Path, session_dir: Path) -> Path:
     return copy_dir
 
 
-def _copy_tree(src: Path, dst: Path) -> None:
+def _copy_tree(src: Path, dst: Path, overwrite: bool = False) -> None:
     """Copy files from src into dst, preserving directory structure.
 
-    Skips existing files (git objects are immutable - same hash means identical).
+    By default, skips existing files because git objects are immutable.
+    When overwrite=True, existing mutable refs/logs are replaced.
     """
     if not src.exists():
         return
@@ -63,16 +64,22 @@ def _copy_tree(src: Path, dst: Path) -> None:
         target = dst / rel
         if path.is_dir():
             target.mkdir(parents=True, exist_ok=True)
-        elif not target.exists():
+        elif not target.exists() or overwrite:
             target.parent.mkdir(parents=True, exist_ok=True)
+            if overwrite and target.exists():
+                target.unlink()
             shutil.copy2(path, target)
 
 
-def _copy_file(src: Path, dst: Path) -> None:
-    """Copy a single file, skipping if target exists."""
-    if not src.exists() or dst.exists():
+def _copy_file(src: Path, dst: Path, overwrite: bool = False) -> None:
+    """Copy a single file, optionally overwriting the target."""
+    if not src.exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if overwrite and dst.exists():
+        dst.unlink()
+    elif dst.exists():
+        return
     shutil.copy2(src, dst)
 
 
@@ -81,7 +88,7 @@ def extract_commits(upper_dir: Path, repo_git: Path) -> None:
     repo_git.mkdir(parents=True, exist_ok=True)
 
     _copy_tree(upper_dir / "objects", repo_git / "objects")
-    _copy_tree(upper_dir / "refs", repo_git / "refs")
-    _copy_tree(upper_dir / "logs", repo_git / "logs")
+    _copy_tree(upper_dir / "refs", repo_git / "refs", overwrite=True)
+    _copy_tree(upper_dir / "logs", repo_git / "logs", overwrite=True)
     for name in ("HEAD", "packed-refs", "FETCH_HEAD", "ORIG_HEAD"):
-        _copy_file(upper_dir / name, repo_git / name)
+        _copy_file(upper_dir / name, repo_git / name, overwrite=True)
