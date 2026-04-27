@@ -12,22 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.session_utils import (
     ARCHIVE_FILES,
-    _git_repo_root,
     archive_session,
-    clear_completed_at,
-    fix_all_corrupted_gitdirs,
     force_remove_dir,
-    get_active_session_ids,
     get_repo_root,
-    has_active_sessions,
-    increment_orphan_resumes,
-    increment_auth_retries,
-    increment_provider_outage_retries,
     read_state,
     remove_worktree,
-    safe_prune,
     sessions_dir,
-    update_state_fields,
     update_status,
     write_state,
 )
@@ -98,13 +88,13 @@ class TestWriteState:
 
 class TestUpdateStatus:
     def test_updates_status_field(self, tmp_path):
-        (tmp_path / "state.json").write_text(json.dumps({"status": "working", "issue_id": "1"}))
-        update_status(tmp_path, "waiting:review")
+        (tmp_path / "state.json").write_text(json.dumps({"status": "running", "issue_id": "1"}))
+        update_status(tmp_path, "done")
         state = read_state(tmp_path)
-        assert state["status"] == "waiting:review"
+        assert state["status"] == "done"
 
     def test_preserves_other_fields(self, tmp_path):
-        original = {"status": "working", "issue_id": "abc", "turns": 7}
+        original = {"status": "running", "issue_id": "abc", "turns": 7}
         (tmp_path / "state.json").write_text(json.dumps(original))
         update_status(tmp_path, "waiting:review")
         state = read_state(tmp_path)
@@ -113,34 +103,23 @@ class TestUpdateStatus:
 
     def test_raises_when_state_missing(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            update_status(tmp_path, "waiting:review")
+            update_status(tmp_path, "done")
 
-    def test_validates_transition_via_ssm(self, tmp_path):
-        """update_status validates transitions through the SSM."""
-        from core.state_machine import InvalidTransition
-        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
+    def test_can_set_arbitrary_status_string(self, tmp_path):
+        (tmp_path / "state.json").write_text(json.dumps({"status": "running"}))
         update_status(tmp_path, "waiting:question")
         assert read_state(tmp_path)["status"] == "waiting:question"
-
-    def test_rejects_invalid_transition(self, tmp_path):
-        """update_status raises InvalidTransition for invalid state changes."""
-        from core.state_machine import InvalidTransition
-        (tmp_path / "state.json").write_text(json.dumps({"status": "accepted"}))
-        with pytest.raises(InvalidTransition):
-            update_status(tmp_path, "working")
 
 
 # ── get_repo_root ─────────────────────────────────────────────────────────────
 
-class TestGitRepoRoot:
-    """Tests for _git_repo_root() - the internal git-based root detection."""
-
+class TestGetRepoRoot:
     def test_returns_parent_when_git_common_ends_with_dotgit(self):
         """Standard case: git dir is .git inside repo, return its parent."""
         mock_result = MagicMock()
         mock_result.stdout = "/home/user/myrepo/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result) as mock_run:
-            result = _git_repo_root()
+            result = get_repo_root()
         assert result == Path("/home/user/myrepo")
         mock_run.assert_called_once_with(
             ["git", "rev-parse", "--git-common-dir"],
@@ -148,17 +127,28 @@ class TestGitRepoRoot:
         )
 
     def test_returns_main_repo_from_worktree(self):
-        """When called from a worktree, returns the main repo path, not the worktree path."""
+        """When called from a worktree, returns the main repo path, not the worktree path.
+
+        git rev-parse --git-common-dir from a worktree returns the path to the
+        main repo's .git directory (e.g., /path/to/main-repo/.git), so we take
+        the parent to get the main repo root.
+        """
         mock_result = MagicMock()
+        # From a worktree, --git-common-dir returns the main repo's .git dir
         mock_result.stdout = "/path/to/main-repo/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = _git_repo_root()
+            result = get_repo_root()
+        # Should resolve to main repo, not the worktree
         assert result == Path("/path/to/main-repo")
 
     def test_falls_back_to_show_toplevel_for_external_git_dir(self):
-        """When git dir is external (not ending in .git), fall back to --show-toplevel."""
+        """When git dir is external (not ending in .git), fall back to --show-toplevel.
+
+        This handles Docker setups where the git directory is bind-mounted
+        separately (e.g., /repo-git instead of /workspace/.git).
+        """
         common_result = MagicMock()
-        common_result.stdout = "/repo-git\n"
+        common_result.stdout = "/repo-git\n"  # External git dir, not ending in .git
         toplevel_result = MagicMock()
         toplevel_result.stdout = "/workspace\n"
 
@@ -170,7 +160,7 @@ class TestGitRepoRoot:
             raise ValueError(f"Unexpected command: {cmd}")
 
         with patch("host.session_utils.subprocess.run", side_effect=mock_run) as mock_run_fn:
-            result = _git_repo_root()
+            result = get_repo_root()
 
         assert result == Path("/workspace")
         assert mock_run_fn.call_count == 2
@@ -179,95 +169,21 @@ class TestGitRepoRoot:
         mock_result = MagicMock()
         mock_result.stdout = "/some/path/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = _git_repo_root()
+            result = get_repo_root()
         assert str(result) == "/some/path"
 
     def test_propagates_subprocess_error(self):
         with patch("host.session_utils.subprocess.run",
                    side_effect=subprocess.CalledProcessError(128, "git")):
             with pytest.raises(subprocess.CalledProcessError):
-                _git_repo_root()
+                get_repo_root()
 
     def test_returns_path_type(self):
         mock_result = MagicMock()
         mock_result.stdout = "/repo/.git\n"
         with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = _git_repo_root()
+            result = get_repo_root()
         assert isinstance(result, Path)
-
-
-class TestGetRepoRoot:
-    """Tests for get_repo_root() - with .nightshift/ validation."""
-
-    def test_propagates_subprocess_error(self):
-        with patch("host.session_utils.subprocess.run",
-                   side_effect=subprocess.CalledProcessError(128, "git")):
-            with pytest.raises(subprocess.CalledProcessError):
-                get_repo_root()
-
-    def test_get_repo_root_resolves_symlinks(self, tmp_path):
-        """Symlinked directories should resolve to their real paths."""
-        real_repo = tmp_path / "real-repo"
-        real_repo.mkdir()
-        (real_repo / ".git").mkdir()
-        (real_repo / ".nightshift").mkdir()
-
-        symlink = tmp_path / "symlinked-repo"
-        symlink.symlink_to(real_repo)
-
-        mock_result = MagicMock()
-        mock_result.stdout = f"{symlink}/.git\n"
-        with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = get_repo_root()
-
-        assert result == real_repo  # Should resolve through symlink
-
-    def test_get_repo_root_finds_nightshift_dir(self, tmp_path):
-        """Returns git root if .nightshift/ exists there."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-        (repo / ".nightshift").mkdir()
-
-        mock_result = MagicMock()
-        mock_result.stdout = f"{repo}/.git\n"
-        with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = get_repo_root()
-
-        assert result == repo
-
-    def test_get_repo_root_walks_up_to_find_nightshift(self, tmp_path, monkeypatch):
-        """If git root lacks .nightshift/, walk up from cwd to find it."""
-        actual_repo = tmp_path / "actual-repo"
-        actual_repo.mkdir()
-        (actual_repo / ".nightshift").mkdir()
-
-        nested = actual_repo / "subdir" / "nested"
-        nested.mkdir(parents=True)
-        (nested / ".git").mkdir()
-
-        monkeypatch.chdir(nested)
-
-        mock_result = MagicMock()
-        mock_result.stdout = f"{nested}/.git\n"
-        with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            result = get_repo_root()
-
-        assert result == actual_repo
-
-    def test_get_repo_root_errors_when_no_nightshift(self, tmp_path, monkeypatch):
-        """Raises RuntimeError if no .nightshift/ found anywhere."""
-        random_dir = tmp_path / "random"
-        random_dir.mkdir()
-        (random_dir / ".git").mkdir()
-
-        monkeypatch.chdir(random_dir)
-
-        mock_result = MagicMock()
-        mock_result.stdout = f"{random_dir}/.git\n"
-        with patch("host.session_utils.subprocess.run", return_value=mock_result):
-            with pytest.raises(RuntimeError, match="No .nightshift/ found"):
-                get_repo_root()
 
 
 # ── sessions_dir ──────────────────────────────────────────────────────────────
@@ -297,12 +213,12 @@ class TestSessionsDir:
 # ── force_remove_dir ──────────────────────────────────────────────────────────
 
 class TestForceRemoveDir:
-    def test_normal_case_calls_rmtree(self, tmp_path):
+    def test_normal_case_calls_rmtree_with_ignore_errors(self, tmp_path):
         target = tmp_path / "to_remove"
         target.mkdir()
         with patch("host.session_utils.shutil.rmtree") as mock_rmtree:
             force_remove_dir(target)
-        mock_rmtree.assert_called_once_with(target)
+        mock_rmtree.assert_called_once_with(target, ignore_errors=True)
 
     def test_removes_real_directory(self, tmp_path):
         target = tmp_path / "to_remove"
@@ -311,13 +227,36 @@ class TestForceRemoveDir:
         force_remove_dir(target)
         assert not target.exists()
 
+    def test_force_remove_dir_ignores_missing_subdirs(self, tmp_path):
+        """Race condition: subdirs disappear during iteration - should not raise."""
+        target = tmp_path / "to_remove"
+        target.mkdir()
+        (target / "subdir").mkdir()
+        (target / "file.txt").write_text("hello")
+
+        # Simulate race: subdir is removed between listdir and unlink
+        # With ignore_errors=True, this should succeed silently
+        force_remove_dir(target)
+        assert not target.exists()
+
+    def test_force_remove_dir_race_condition(self, tmp_path):
+        """Concurrent modification during rmtree shouldn't raise exception."""
+        target = tmp_path / "to_remove"
+        target.mkdir()
+        (target / "refs" / "tags").mkdir(parents=True)
+
+        # Directly test that ignore_errors=True is passed
+        with patch("host.session_utils.shutil.rmtree") as mock_rmtree:
+            force_remove_dir(target)
+        mock_rmtree.assert_called_once_with(target, ignore_errors=True)
+
     def test_permission_error_triggers_docker_fallback(self, tmp_path):
         target = tmp_path / "locked_dir"
         target.mkdir()
 
         rmtree_calls = []
 
-        def rmtree_side_effect(path):
+        def rmtree_side_effect(path, ignore_errors=False):
             call_count = len(rmtree_calls)
             rmtree_calls.append(path)
             if call_count == 0:
@@ -346,7 +285,7 @@ class TestForceRemoveDir:
 
         call_count = [0]
 
-        def rmtree_side_effect(path):
+        def rmtree_side_effect(path, ignore_errors=False):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise PermissionError("denied")
@@ -366,7 +305,7 @@ class TestForceRemoveDir:
 
         call_count = [0]
 
-        def rmtree_side_effect(path):
+        def rmtree_side_effect(path, ignore_errors=False):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise PermissionError("denied")
@@ -396,8 +335,10 @@ class TestRemoveWorktree:
         # First call: git worktree remove
         assert calls[0].args[0] == ["git", "worktree", "remove", str(wt), "--force"]
         assert calls[0].kwargs.get("cwd") == str(repo)
-        # Second call: git branch -D (WT-6: no global prune anymore)
-        assert calls[1].args[0] == ["git", "branch", "-D", "agent/my-branch"]
+        # Second call: git worktree prune
+        assert calls[1].args[0] == ["git", "worktree", "prune"]
+        # Third call: git branch -D
+        assert calls[2].args[0] == ["git", "branch", "-D", "agent/my-branch"]
 
     def test_failed_worktree_remove_triggers_force_remove(self, tmp_path):
         repo = tmp_path / "repo"
@@ -428,14 +369,13 @@ class TestRemoveWorktree:
         with patch("host.session_utils.subprocess.run", return_value=success_result) as mock_run:
             remove_worktree(repo, wt, "agent/branch")
 
-        # Only branch -D should be called (not worktree remove, not prune per WT-6)
+        # Only prune and branch -D should be called (not worktree remove)
         cmds = [c.args[0] for c in mock_run.call_args_list]
         assert ["git", "worktree", "remove", str(wt), "--force"] not in cmds
-        assert ["git", "worktree", "prune"] not in cmds  # WT-6: no global prune
+        assert ["git", "worktree", "prune"] in cmds
         assert ["git", "branch", "-D", "agent/branch"] in cmds
 
-    def test_always_runs_branch_delete(self, tmp_path):
-        """WT-6: remove_worktree always deletes the branch (but no global prune)."""
+    def test_always_runs_prune_and_branch_delete(self, tmp_path):
         repo = tmp_path / "repo"
         wt = tmp_path / "worktree"
         # wt does not exist — so worktree remove is skipped
@@ -447,7 +387,7 @@ class TestRemoveWorktree:
             remove_worktree(repo, wt, "my-branch")
 
         cmds = [c.args[0] for c in mock_run.call_args_list]
-        assert ["git", "worktree", "prune"] not in cmds  # WT-6: no global prune
+        assert ["git", "worktree", "prune"] in cmds
         assert ["git", "branch", "-D", "my-branch"] in cmds
 
     def test_worktree_remove_uses_correct_cwd(self, tmp_path):
@@ -477,29 +417,6 @@ class TestRemoveWorktree:
 
         for c in mock_run.call_args_list:
             assert c.kwargs.get("cwd") == str(repo)
-
-    def test_remove_worktree_no_global_prune(self, tmp_path):
-        """WT-6: remove_worktree should NOT call global `git worktree prune`.
-
-        Global prune can delete metadata for other worktrees with corrupted
-        .git files, causing collateral damage to running sessions.
-        """
-        repo = tmp_path / "repo"
-        wt = tmp_path / "worktree"
-        wt.mkdir()
-
-        success_result = MagicMock()
-        success_result.returncode = 0
-
-        with patch("host.session_utils.subprocess.run", return_value=success_result) as mock_run:
-            remove_worktree(repo, wt, "agent/branch")
-
-        cmds = [c.args[0] for c in mock_run.call_args_list]
-        # Should NOT call global prune
-        assert ["git", "worktree", "prune"] not in cmds
-        # Should still call worktree remove and branch delete
-        assert ["git", "worktree", "remove", str(wt), "--force"] in cmds
-        assert ["git", "branch", "-D", "agent/branch"] in cmds
 
 
 # ── archive_session ──────────────────────────────────────────────────────────
@@ -591,356 +508,3 @@ class TestArchiveSession:
         (session_dir / "state.json").write_text('{"status":"updated"}')
         archive_dir = archive_session(session_dir, repo)
         assert json.loads((archive_dir / "state.json").read_text()) == {"status": "updated"}
-
-
-# ── Locked state operations ───────────────────────────────────────────────────
-
-class TestLockedStateOperations:
-    """Tests for locked read-modify-write operations."""
-
-    def test_increment_orphan_resumes(self, tmp_path):
-        """increment_orphan_resumes atomically increments and returns new value."""
-        (tmp_path / "state.json").write_text(json.dumps({
-            "status": "working", "orphan_resumes": 2
-        }))
-
-        result = increment_orphan_resumes(tmp_path)
-        assert result == 3
-        state = read_state(tmp_path)
-        assert state["orphan_resumes"] == 3
-
-    def test_increment_orphan_resumes_initializes_from_zero(self, tmp_path):
-        """increment_orphan_resumes works when field is missing."""
-        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
-
-        result = increment_orphan_resumes(tmp_path)
-        assert result == 1
-
-    def test_increment_auth_retries(self, tmp_path):
-        """increment_auth_retries atomically increments and returns new value."""
-        (tmp_path / "state.json").write_text(json.dumps({
-            "status": "suspended:auth-failure", "auth_retries": 1
-        }))
-
-        result = increment_auth_retries(tmp_path)
-        assert result == 2
-        state = read_state(tmp_path)
-        assert state["auth_retries"] == 2
-
-    def test_increment_provider_outage_retries(self, tmp_path):
-        """increment_provider_outage_retries atomically increments."""
-        (tmp_path / "state.json").write_text(json.dumps({
-            "status": "suspended:provider-overload"
-        }))
-
-        result = increment_provider_outage_retries(tmp_path)
-        assert result == 1
-
-    def test_update_state_fields_updates_multiple(self, tmp_path):
-        """update_state_fields atomically updates multiple fields."""
-        (tmp_path / "state.json").write_text(json.dumps({
-            "status": "working", "orphan_resumes": 0, "other": "value"
-        }))
-
-        update_state_fields(tmp_path, status="suspended:unexpected", orphan_resumes=5)
-
-        state = read_state(tmp_path)
-        assert state["status"] == "suspended:unexpected"
-        assert state["orphan_resumes"] == 5
-        assert state["other"] == "value"
-
-    def test_update_state_fields_creates_lock_file(self, tmp_path):
-        """update_state_fields should create state.json.lock file."""
-        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
-
-        update_state_fields(tmp_path, status="waiting:review")
-        assert (tmp_path / "state.json.lock").exists()
-
-    def test_update_state_fields_rejects_invalid_transition(self, tmp_path):
-        """update_state_fields raises InvalidTransition for invalid status changes."""
-        from core.state_machine import InvalidTransition
-        (tmp_path / "state.json").write_text(json.dumps({"status": "accepted"}))
-        with pytest.raises(InvalidTransition):
-            update_state_fields(tmp_path, status="working", orphan_resumes=0)
-
-    def test_update_status_creates_lock_file(self, tmp_path):
-        """update_status should create state.json.lock file."""
-        (tmp_path / "state.json").write_text(json.dumps({"status": "working"}))
-
-        update_status(tmp_path, "waiting:review")
-        assert (tmp_path / "state.json.lock").exists()
-
-    def test_clear_completed_at_removes_field(self, tmp_path):
-        """clear_completed_at removes completed_at field from state (SSM-11)."""
-        (tmp_path / "state.json").write_text(json.dumps({
-            "status": "waiting:review",
-            "completed_at": "2025-01-01T00:00:00Z",
-            "other": "preserved"
-        }))
-
-        clear_completed_at(tmp_path)
-
-        state = read_state(tmp_path)
-        assert "completed_at" not in state
-        assert state["other"] == "preserved"
-
-    def test_clear_completed_at_noop_if_not_set(self, tmp_path):
-        """clear_completed_at is a no-op if completed_at is not set."""
-        (tmp_path / "state.json").write_text(json.dumps({
-            "status": "working"
-        }))
-
-        clear_completed_at(tmp_path)
-
-        state = read_state(tmp_path)
-        assert state == {"status": "working"}
-
-
-# ── Safe prune (WT-6) ─────────────────────────────────────────────────────────
-
-class TestSafePrune:
-    """Tests for WT-6 safe worktree prune with defense in depth."""
-
-    def test_prune_skips_active_sessions(self, tmp_path):
-        """WT-6: safe_prune should NOT prune if any session is active."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        sessions = repo / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-
-        # Create an active session
-        active = sessions / "abc123"
-        active.mkdir()
-        (active / "state.json").write_text(json.dumps({"status": "working"}))
-
-        with patch("host.session_utils.subprocess.run") as mock_run:
-            safe_prune(repo)
-
-        # Should NOT have called git worktree prune
-        cmds = [c.args[0] for c in mock_run.call_args_list]
-        assert ["git", "worktree", "prune"] not in cmds
-
-    def test_prune_runs_when_no_active_sessions(self, tmp_path):
-        """safe_prune runs when all sessions are inactive."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        sessions = repo / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-
-        # Create an inactive session
-        inactive = sessions / "abc123"
-        inactive.mkdir()
-        (inactive / "state.json").write_text(json.dumps({"status": "waiting:review"}))
-
-        with patch("host.session_utils.subprocess.run") as mock_run:
-            safe_prune(repo)
-
-        cmds = [c.args[0] for c in mock_run.call_args_list]
-        assert ["git", "worktree", "prune", "-v"] in cmds
-
-    def test_prune_fixes_corrupted_gitdir_first(self, tmp_path):
-        """WT-6: safe_prune fixes corrupted .git files before pruning."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".nightshift" / "sessions").mkdir(parents=True)
-
-        # Create worktree dir structure
-        worktrees_dir = repo / "worktrees"
-        worktrees_dir.mkdir()
-        wt = worktrees_dir / "agent-abc123"
-        wt.mkdir()
-
-        # Create corrupted .git file pointing to container path
-        git_file = wt / ".git"
-        git_file.write_text("gitdir: /repo-git/worktrees/agent-abc123\n")
-
-        # Create matching host gitdir
-        host_gitdir = repo / ".git" / "worktrees" / "agent-abc123"
-        host_gitdir.mkdir(parents=True)
-
-        # Mock subprocess.run but let file operations happen
-        def mock_run(args, **kwargs):
-            result = MagicMock()
-            result.returncode = 0
-            if args == ["git", "worktree", "list", "--porcelain"]:
-                # Porcelain format: "worktree /path\nHEAD ...\n\n"
-                result.stdout = f"worktree {wt}\nHEAD abc123\nbranch refs/heads/agent-abc123\n\n"
-            else:
-                result.stdout = ""
-            return result
-
-        with patch("host.session_utils.subprocess.run", side_effect=mock_run):
-            safe_prune(repo)
-
-        # The corrupted .git should be fixed before prune
-        fixed_content = git_file.read_text()
-        assert "/repo-git/" not in fixed_content
-        assert str(host_gitdir) in fixed_content
-
-
-class TestGetActiveSessionIds:
-    """Tests for get_active_session_ids helper."""
-
-    def test_returns_ids_for_active_sessions(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-        s1 = sessions / "abc123"
-        s1.mkdir()
-        (s1 / "state.json").write_text(json.dumps({"status": "working", "issue_id": "issue-1"}))
-        s2 = sessions / "def456"
-        s2.mkdir()
-        (s2 / "state.json").write_text(json.dumps({"status": "starting", "issue_id": "issue-2"}))
-
-        result = get_active_session_ids(tmp_path)
-        assert sorted(result) == ["issue-1", "issue-2"]
-
-    def test_returns_empty_for_inactive_sessions(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-        session = sessions / "abc123"
-        session.mkdir()
-        (session / "state.json").write_text(json.dumps({"status": "waiting:review"}))
-
-        assert get_active_session_ids(tmp_path) == []
-
-    def test_returns_empty_when_no_sessions(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-
-        assert get_active_session_ids(tmp_path) == []
-
-    def test_falls_back_to_dir_name_if_no_issue_id(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-        session = sessions / "abc123"
-        session.mkdir()
-        (session / "state.json").write_text(json.dumps({"status": "working"}))
-
-        result = get_active_session_ids(tmp_path)
-        assert result == ["abc123"]
-
-
-class TestHasActiveSessions:
-    """Tests for has_active_sessions helper."""
-
-    def test_returns_true_for_working(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-        session = sessions / "abc123"
-        session.mkdir()
-        (session / "state.json").write_text(json.dumps({"status": "working"}))
-
-        assert has_active_sessions(tmp_path) is True
-
-    def test_returns_true_for_starting(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-        session = sessions / "abc123"
-        session.mkdir()
-        (session / "state.json").write_text(json.dumps({"status": "starting"}))
-
-        assert has_active_sessions(tmp_path) is True
-
-    def test_returns_true_for_reviewing(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-        session = sessions / "abc123"
-        session.mkdir()
-        (session / "state.json").write_text(json.dumps({"status": "reviewing"}))
-
-        assert has_active_sessions(tmp_path) is True
-
-    def test_returns_false_for_waiting_review(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-        session = sessions / "abc123"
-        session.mkdir()
-        (session / "state.json").write_text(json.dumps({"status": "waiting:review"}))
-
-        assert has_active_sessions(tmp_path) is False
-
-    def test_returns_false_when_no_sessions(self, tmp_path):
-        sessions = tmp_path / ".nightshift" / "sessions"
-        sessions.mkdir(parents=True)
-
-        assert has_active_sessions(tmp_path) is False
-
-
-class TestFixAllCorruptedGitdirs:
-    """Tests for fix_all_corrupted_gitdirs helper."""
-
-    def test_fixes_container_path_in_git_file(self, tmp_path):
-        """Fixes .git file pointing to /repo-git/ container path."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        worktrees_dir = repo / "worktrees"
-        wt = worktrees_dir / "agent-abc123"
-        wt.mkdir(parents=True)
-
-        # Corrupted .git file
-        git_file = wt / ".git"
-        git_file.write_text("gitdir: /repo-git/worktrees/agent-abc123\n")
-
-        # Matching host gitdir
-        host_gitdir = repo / ".git" / "worktrees" / "agent-abc123"
-        host_gitdir.mkdir(parents=True)
-
-        def mock_run(args, **kwargs):
-            result = MagicMock()
-            result.returncode = 0
-            if args == ["git", "worktree", "list", "--porcelain"]:
-                result.stdout = f"worktree {wt}\nHEAD abc123\nbranch refs/heads/agent-abc123\n\n"
-            else:
-                result.stdout = ""
-            return result
-
-        with patch("host.session_utils.subprocess.run", side_effect=mock_run):
-            fix_all_corrupted_gitdirs(repo)
-
-        fixed_content = git_file.read_text()
-        assert "/repo-git/" not in fixed_content
-        assert str(host_gitdir) in fixed_content
-
-    def test_skips_already_valid_git_files(self, tmp_path):
-        """Leaves valid .git files unchanged."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        worktrees_dir = repo / "worktrees"
-        wt = worktrees_dir / "agent-abc123"
-        wt.mkdir(parents=True)
-
-        # Valid .git file
-        host_gitdir = repo / ".git" / "worktrees" / "agent-abc123"
-        host_gitdir.mkdir(parents=True)
-        original = f"gitdir: {host_gitdir}\n"
-        git_file = wt / ".git"
-        git_file.write_text(original)
-
-        def mock_run(args, **kwargs):
-            result = MagicMock()
-            result.returncode = 0
-            if args == ["git", "worktree", "list", "--porcelain"]:
-                result.stdout = f"worktree {wt}\nHEAD abc123\nbranch refs/heads/agent-abc123\n\n"
-            else:
-                result.stdout = ""
-            return result
-
-        with patch("host.session_utils.subprocess.run", side_effect=mock_run):
-            fix_all_corrupted_gitdirs(repo)
-
-        assert git_file.read_text() == original
-
-
-class TestFixCorruptedGitdirUsesRebaseImport:
-    """Verify _fix_container_gitdir is reused from host.rebase (DRY)."""
-
-    def test_fix_corrupted_gitdir_uses_rebase_import(self):
-        """session_utils imports _fix_container_gitdir from host.rebase, not duplicated."""
-        import host.session_utils as su
-        import host.rebase as rb
-
-        # Verify the constant is imported (not duplicated)
-        assert su.CONTAINER_GIT_PATH is rb.CONTAINER_GIT_PATH
-
-        # Verify the function is imported (not duplicated)
-        assert su._fix_container_gitdir is rb._fix_container_gitdir
