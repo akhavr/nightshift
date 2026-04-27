@@ -4,7 +4,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -12,7 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import host.watcher as wmod
 from host.watcher import HostWatcher
-from host.watcher.host_watcher import RecentlyLaunchedDict
+from host.watcher.host_watcher import (
+    RecentlyLaunchedDict,
+    cleanup_orphan_refs,
+    detect_orphan_refs,
+)
 from host.constants import (
     RECENTLY_LAUNCHED_FILENAME, ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S,
     GITBUG_CACHE_HEALTHCHECK_INTERVAL_S,
@@ -21,6 +25,73 @@ from core.config.models import TrackerConfig, WorkflowConfig
 from core.protocols import TrackerIssue, TrackerComment
 
 from tests.watcher.conftest import _make_watcher, _make_session, _make_issue, _make_comment
+
+
+# ---------------------------------------------------------------------------
+# orphan ref detection tests
+# ---------------------------------------------------------------------------
+
+class TestOrphanRefs:
+    def test_detect_orphan_refs_finds_bad_refs(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        for_each_ref = MagicMock(return_value=MagicMock(
+            returncode=0,
+            stdout=(
+                "refs/heads/agent/good 0123456789abcdef0123456789abcdef01234567\n"
+                "refs/heads/review/bad fedcba9876543210fedcba9876543210fedcba98\n"
+            ),
+            stderr="",
+        ))
+        cat_file_ok = MagicMock(return_value=MagicMock(returncode=0, stdout="commit", stderr=""))
+        cat_file_bad = MagicMock(return_value=MagicMock(returncode=1, stdout="", stderr="missing"))
+
+        with patch("host.watcher.host_watcher.subprocess.run",
+                   side_effect=[for_each_ref.return_value, cat_file_ok.return_value, cat_file_bad.return_value]):
+            orphans = detect_orphan_refs(repo)
+
+        assert orphans == ["refs/heads/review/bad"]
+
+    def test_cleanup_orphan_refs_deletes_refs(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        with patch("host.watcher.host_watcher.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            cleanup_orphan_refs(repo, ["refs/heads/agent/bad", "refs/heads/review/bad"])
+
+        assert mock_run.call_args_list == [
+            call(["git", "update-ref", "-d", "refs/heads/agent/bad"], cwd=str(repo), capture_output=True, text=True),
+            call(["git", "update-ref", "-d", "refs/heads/review/bad"], cwd=str(repo), capture_output=True, text=True),
+        ]
+
+    def test_startup_cleans_orphan_refs(self, tmp_path):
+        import threading
+
+        w = _make_watcher(tmp_path)
+        shutdown = threading.Event()
+        shutdown.set()
+
+        writer = MagicMock()
+        writer.start = MagicMock()
+        socket_server = MagicMock()
+        proxy = MagicMock()
+
+        with patch("host.watcher.host_watcher.detect_orphan_refs", return_value=["refs/heads/review/bad"]) as mock_detect, \
+             patch("host.watcher.host_watcher.cleanup_orphan_refs") as mock_cleanup, \
+             patch("host.watcher.host_watcher.repair_lamport_clocks"), \
+             patch("host.watcher.host_watcher.create_tracker", return_value=MagicMock()), \
+             patch("host.watcher.host_watcher.load_workflow", return_value=MagicMock()), \
+             patch("host.watcher.host_watcher.TrackerWriter", return_value=writer), \
+             patch("host.watcher.host_watcher.TrackerSocketServer", return_value=socket_server), \
+             patch("host.watcher.host_watcher.QueueTrackerProxy", return_value=proxy), \
+             patch.object(w.monitor, "cleanup_stale_review_sessions"), \
+             patch.object(w.monitor, "cleanup_stale_blocked_labels"):
+            w.run(shutdown_event=shutdown)
+
+        mock_detect.assert_called()
+        mock_cleanup.assert_called_once_with(w.repo_dir, ["refs/heads/review/bad"])
 
 
 # ---------------------------------------------------------------------------

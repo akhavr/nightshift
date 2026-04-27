@@ -86,7 +86,7 @@ class TestCreateWorktree:
         # 3. git worktree add    -> ok (creates the wt dir with a file)
         # (WT-6: safe_prune is mocked, not called via subprocess)
         def side_effect(cmd, **kwargs):
-            result = MagicMock(returncode=0, stderr="", stdout="")
+            result = MagicMock(returncode=0, stderr="", stdout="commit")
             if cmd[1] == "worktree" and cmd[2] == "add":
                 # simulate worktree directory being created with content
                 wt_path.mkdir(exist_ok=True)
@@ -1030,8 +1030,7 @@ class TestCopyGitChanges:
         (source / "objects" / "aa").mkdir(parents=True)
         (source / "objects" / "aa" / "badpack").write_text("corrupt")
         (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "123").parent.mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "123").write_text("0123456789abcdef0123456789abcdef01234567\n")
+        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
 
         mock_run.return_value = MagicMock(returncode=128, stdout="", stderr="fatal: bad object")
 
@@ -1041,7 +1040,7 @@ class TestCopyGitChanges:
         assert result != 0
         assert "git fsck failed" in caplog.text
         assert not (repo / ".git" / "objects" / "aa" / "badpack").exists()
-        assert not (repo / ".git" / "refs" / "heads" / "agent" / "123").exists()
+        assert not (repo / ".git" / "refs" / "heads" / "agent-123").exists()
 
     @patch("host.launch.subprocess.run")
     def test_copy_git_changes_whitelists_refs(self, mock_run, tmp_path, caplog):
@@ -1057,6 +1056,7 @@ class TestCopyGitChanges:
         source.mkdir()
         (source / "objects").mkdir()
         (source / "refs" / "heads").mkdir(parents=True)
+        # Use agent/xxx format (slash, not hyphen) per current ref whitelist
         (source / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
         (source / "refs" / "heads" / "agent" / "good").write_text("0123456789abcdef0123456789abcdef01234567\n")
         (source / "refs" / "heads" / "agent" / "bad" / "evil").parent.mkdir(parents=True)

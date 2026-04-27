@@ -10,6 +10,7 @@ from pathlib import Path
 from host.env import load_all_dotenv
 from host.session_utils import get_repo_root
 from host.watcher.host_watcher import HostWatcher
+from host.watcher.registration import register, unregister
 
 log = logging.getLogger("watcher")
 
@@ -69,5 +70,15 @@ def main():
     workflow_path = Path(a.workflow) if a.workflow else None
     watcher = HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start,
                           workflow_path=workflow_path)
-    watcher.run(shutdown_event=shutdown_event, reload_event=reload_event,
-                cache_clear_event=gitbug_cache_clear_event)
+    watcher._cleanup_orphan_refs_once()
+
+    # Register for global watchdog discovery
+    project_name = repo.name
+    log_path = Path(a.log_file) if a.log_file else Path("/dev/null")
+    register(project_name, repo, log_path)
+
+    try:
+        watcher.run(shutdown_event=shutdown_event, reload_event=reload_event,
+                    cache_clear_event=gitbug_cache_clear_event)
+    finally:
+        unregister(project_name)
