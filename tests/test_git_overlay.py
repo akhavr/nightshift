@@ -69,14 +69,15 @@ def test_overlay_commit_extraction(tmp_path):
     (repo_git / "objects").mkdir(parents=True)
     (upper_dir / "objects" / "ab" / "new-object").write_text("loose object")
     (upper_dir / "refs" / "heads").mkdir(parents=True)
-    (upper_dir / "refs" / "heads" / "agent-test").write_text("deadbeef")
-    (upper_dir / "HEAD").write_text("ref: refs/heads/agent-test")
+    (upper_dir / "refs" / "heads" / "agent" / "test").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "test").write_text("deadbeef")
+    (upper_dir / "HEAD").write_text("ref: refs/heads/agent/test")
 
     extract_commits(upper_dir, repo_git)
 
     assert (repo_git / "objects" / "ab" / "new-object").read_text() == "loose object"
-    assert (repo_git / "refs" / "heads" / "agent-test").read_text() == "deadbeef"
-    assert (repo_git / "HEAD").read_text() == "ref: refs/heads/agent-test"
+    assert (repo_git / "refs" / "heads" / "agent" / "test").read_text() == "deadbeef"
+    assert (repo_git / "HEAD").read_text() == "ref: refs/heads/agent/test"
 
 
 def test_extract_commits_overwrites_refs(tmp_path):
@@ -85,12 +86,13 @@ def test_extract_commits_overwrites_refs(tmp_path):
     upper_dir = tmp_path / "session" / "git-upper"
     repo_git = tmp_path / "repo" / ".git"
 
-    existing_ref = repo_git / "refs" / "heads" / "agent-test"
+    existing_ref = repo_git / "refs" / "heads" / "agent" / "test"
     existing_ref.parent.mkdir(parents=True)
     existing_ref.write_text("commit-a")
 
     (upper_dir / "refs" / "heads").mkdir(parents=True)
-    (upper_dir / "refs" / "heads" / "agent-test").write_text("commit-b")
+    (upper_dir / "refs" / "heads" / "agent" / "test").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "test").write_text("commit-b")
 
     extract_commits(upper_dir, repo_git)
 
@@ -105,18 +107,38 @@ def test_extract_commits_whitelists_refs(tmp_path):
 
     (upper_dir / "objects").mkdir(parents=True)
     (upper_dir / "refs" / "heads").mkdir(parents=True)
-    (upper_dir / "refs" / "heads" / "agent-good").write_text("deadbeef")
-    (upper_dir / "refs" / "heads" / "agent-bad" / "evil").parent.mkdir(parents=True)
-    (upper_dir / "refs" / "heads" / "agent-bad" / "evil").write_text("badc0de")
+    (upper_dir / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "good").write_text("deadbeef")
+    (upper_dir / "refs" / "heads" / "agent" / "bad" / "evil").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "bad" / "evil").write_text("badc0de")
+    (upper_dir / "refs" / "heads" / "review" / "good").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "review" / "good").write_text("cafefeed")
     (upper_dir / "refs" / "heads" / "main").write_text("cafebabe")
 
     skipped = extract_commits(upper_dir, repo_git)
 
-    assert (repo_git / "refs" / "heads" / "agent-good").read_text() == "deadbeef"
-    assert not (repo_git / "refs" / "heads" / "agent-bad" / "evil").exists()
+    assert (repo_git / "refs" / "heads" / "agent" / "good").read_text() == "deadbeef"
+    assert (repo_git / "refs" / "heads" / "review" / "good").read_text() == "cafefeed"
+    assert not (repo_git / "refs" / "heads" / "agent" / "bad" / "evil").exists()
     assert not (repo_git / "refs" / "heads" / "main").exists()
     assert "refs/heads/main" in skipped
-    assert "refs/heads/agent-bad/evil" in skipped
+    assert "refs/heads/agent/bad/evil" in skipped
+
+
+def test_extract_commits_blocks_nested_slash_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    (upper_dir / "objects").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "abc123" / "evil").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "abc123" / "evil").write_text("badc0de")
+
+    skipped = extract_commits(upper_dir, repo_git)
+
+    assert not (repo_git / "refs" / "heads" / "agent" / "abc123" / "evil").exists()
+    assert "refs/heads/agent/abc123/evil" in skipped
 
 
 def test_extract_commits_whitelists_packed_refs(tmp_path):
@@ -128,13 +150,13 @@ def test_extract_commits_whitelists_packed_refs(tmp_path):
     (upper_dir / "objects").mkdir(parents=True)
     (upper_dir / "packed-refs").write_text(
         "# pack-refs with: peeled fully-peeled sorted\n"
-        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef refs/heads/agent-good\n"
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef refs/heads/agent/good\n"
         "cafebabecafebabecafebabecafebabecafebabe refs/heads/main\n"
     )
 
     skipped = extract_commits(upper_dir, repo_git)
 
-    assert (repo_git / "refs" / "heads" / "agent-good").read_text() == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+    assert (repo_git / "refs" / "heads" / "agent" / "good").read_text() == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
     assert not (repo_git / "refs" / "heads" / "main").exists()
     assert not (repo_git / "packed-refs").exists()
     assert "refs/heads/main" in skipped
