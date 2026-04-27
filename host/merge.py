@@ -10,6 +10,7 @@ from pathlib import Path
 from host.constants import (
     SHORT_ID_LEN, CONFLICT_FILE_PREVIEW_LEN,
 )
+from core.workspace_transaction import check_worktree_integrity
 from host.git_utils import fetch_and_resolve_ref
 from host.rebase import sanitize_git_config
 from host.session_utils import update_status
@@ -118,6 +119,8 @@ def _rebase_and_retry_merge(repo: Path, branch: str, base: str,
     rebase_dir = worktree if worktree and worktree.exists() else None
 
     if rebase_dir:
+        if (rebase_dir / ".git").exists():
+            check_worktree_integrity(rebase_dir, auto_repair=True)
         # Rebase in the worktree - no checkout needed, worktree is already on the branch
         rebase = subprocess.run(
             ["git", "rebase", base],
