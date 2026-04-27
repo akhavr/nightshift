@@ -1,5 +1,5 @@
 ---
-template_version: 3
+template_version: 4
 
 agent:
   kind: claude-code
@@ -82,10 +82,14 @@ This is continuation attempt {{ attempt }}. Review previous work and continue.
 
 RULES:
 1. Work on the current branch. The repo is already checked out.
-2. If you have a blocking question, include all relevant context IN the question
+2. Before starting work, check if your branch is behind the base branch:
+   `git log --oneline HEAD..master | head -5`
+   If commits are shown, rebase first: `git fetch origin && git rebase origin/master`
+   Resolve any conflicts before proceeding.
+3. If you have a blocking question, include all relevant context IN the question
    itself (code snippets, file paths, what you did, options you see) — the human
    reads ONLY the question text, they cannot see your other output.
-3. Commit frequently. Write tests where appropriate.
+4. Commit frequently. Write tests where appropriate.
 
 For bug fixes, follow this protocol:
 1. Reproduce the bug — run the failing scenario and confirm the symptom.
