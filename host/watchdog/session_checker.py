@@ -3,7 +3,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -25,7 +25,11 @@ class StuckSession:
     session_dir: Path
 
 
-def check_sessions(project_path: Path, project_name: str) -> Iterator[StuckSession]:
+def check_sessions(
+    project_path: Path,
+    project_name: str,
+    threshold_minutes: int = STUCK_THRESHOLD_MINUTES,
+) -> Iterator[StuckSession]:
     """Check for stuck sessions in a project."""
     sessions_dir = project_path / ".nightshift" / "sessions"
     if not sessions_dir.exists():
@@ -55,7 +59,7 @@ def check_sessions(project_path: Path, project_name: str) -> Iterator[StuckSessi
         age = now - mtime
         minutes = int(age.total_seconds() / 60)
 
-        if minutes >= STUCK_THRESHOLD_MINUTES:
+        if minutes >= threshold_minutes:
             yield StuckSession(
                 project=project_name,
                 session_id=session_dir.name[:12],
@@ -84,6 +88,6 @@ def find_stuck_sessions(
             project_path = Path(data.get("path", ""))
             if not project_path.exists():
                 continue
-            yield from check_sessions(project_path, reg_file.stem)
+            yield from check_sessions(project_path, reg_file.stem, threshold_minutes)
         except (yaml.YAMLError, OSError) as e:
             log.debug("Failed to check project %s: %s", reg_file.stem, e)

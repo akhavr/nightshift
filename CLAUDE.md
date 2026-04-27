@@ -28,7 +28,11 @@ nightshift upgrade                       # show prompt updates from canonical te
 nightshift upstream                      # propose local prompt improvements to canonical (--dry-run to preview)
 nightshift issue <args...>               # pass args to tracker CLI with lock retry
 nightshift watcher                       # start host watcher (pause/unpause, Telegram)
-nightshift watchdog                       # start global watchdog (--list, --check)
+nightshift watchdog                       # start global watchdog daemon
+nightshift watchdog --list               # list registered watchers and status
+nightshift watchdog --check              # one-shot health check (--no-alerts to suppress)
+nightshift watchdog --config <path>      # use custom watchdog.yaml config
+nightshift watchdog -v                   # verbose output
 nightshift usage [issue-id]               # show token usage and cost per session
 nightshift export-training-data          # export finetuning data from session logs
 nightshift blocked                       # list issues blocked by dependencies
