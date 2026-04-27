@@ -25,6 +25,7 @@ from core.protocols import Workspace
 from core.state import StateManager
 from core.session import SessionRunner
 from core.search import search_related_issues
+from core.workspace_transaction import WorkspaceTransaction
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -85,6 +86,50 @@ def _read_merge_instructions(session_dir: str) -> str | None:
         f"1. Run `git merge {base_branch}` to merge latest changes\n"
         f"2. Resolve any conflicts, run tests, then continue\n"
     )
+
+
+def _sanitize_core_worktree(worktree_path: Path) -> None:
+    """Remove container pollution from core.worktree if it points at /workspace."""
+    if not os.environ.get("GIT_DIR"):
+        return
+
+    result = subprocess.run(
+        ["git", "config", "--get", "core.worktree"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return
+
+    if result.stdout.strip() != "/workspace":
+        return
+
+    unset_result = subprocess.run(
+        ["git", "config", "--unset", "core.worktree"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+    )
+    if unset_result.returncode == 0:
+        log.info("Sanitized core.worktree=/workspace on exit")
+
+
+def cleanup_workspace(worktree_path: Path | None = None) -> None:
+    """Restore workspace metadata and sanitize core.worktree after container exit."""
+    worktree = Path(worktree_path or os.environ.get("WORKTREE_PATH", "/workspace"))
+    git_file = worktree / ".git"
+    original_git_file = os.environ.get("ORIGINAL_GIT_CONTENT_FILE")
+
+    if original_git_file and worktree.exists():
+        original_path = Path(original_git_file)
+        if original_path.exists():
+            git_file.write_text(original_path.read_text())
+            log.info("Restored .git pointer from %s", original_path)
+
+    if worktree.exists() and git_file.exists():
+        with WorkspaceTransaction(worktree):
+            _sanitize_core_worktree(worktree)
 
 
 def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
@@ -215,5 +260,14 @@ def main():
         notifier.stop()
 
 
+def run(worktree_path: Path = Path("/workspace")) -> None:
+    """Run the container entrypoint inside a workspace transaction."""
+    with WorkspaceTransaction(worktree_path):
+        main()
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--cleanup":
+        cleanup_workspace()
+    else:
+        run()

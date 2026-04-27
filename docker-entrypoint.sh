@@ -12,7 +12,12 @@ sanitize_core_worktree() {
         fi
     fi
 }
-trap 'sanitize_core_worktree exit' EXIT
+
+cleanup_workspace() {
+    python3 /opt/nightshift/entrypoint.py --cleanup 2>/dev/null || true
+    sanitize_core_worktree exit
+}
+trap cleanup_workspace EXIT
 
 # Copy read-only credentials to writable HOME so Claude Code can function.
 # The host mounts ~/.claude at /claude-auth:ro for security.
@@ -46,6 +51,13 @@ fi
 if [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
     export GIT_DIR="/repo-git/worktrees/${WORKTREE_NAME}"
     export GIT_WORK_TREE="/workspace"
+fi
+
+# Save the original .git pointer for the exit cleanup helper.
+if [ -f /workspace/.git ]; then
+    ORIGINAL_GIT_CONTENT_FILE="/session/original-git-pointer"
+    cp /workspace/.git "$ORIGINAL_GIT_CONTENT_FILE" 2>/dev/null || true
+    export ORIGINAL_GIT_CONTENT_FILE
 fi
 
 # WT-1.6: Sanitize core.worktree at startup (defense-in-depth with exit trap).

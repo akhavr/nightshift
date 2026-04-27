@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -18,6 +19,28 @@ class WorktreeCorruptError(RuntimeError):
 
 class TransactionError(RuntimeError):
     """Raised when workspace transactions are nested in the same thread."""
+
+
+@dataclass
+class MergeResult:
+    """Outcome of a merge attempt."""
+
+    success: bool
+    has_conflicts: bool
+    conflicting_files: list[str] = field(default_factory=list)
+    stderr: str = ""
+
+
+class RebaseConflictError(RuntimeError):
+    """Raised when a rebase hits conflicts and is auto-aborted."""
+
+    def __init__(self, conflicting_files: list[str], stderr: str = ""):
+        self.conflicting_files = conflicting_files
+        self.stderr = stderr.strip()
+        details = self.stderr or "Rebase failed due to conflicts"
+        if conflicting_files:
+            details = f"{details}\nConflicting files:\n" + "\n".join(conflicting_files)
+        super().__init__(details)
 
 
 class WorkspaceTransaction:
@@ -75,14 +98,72 @@ class WorkspaceTransaction:
                 lambda: self._run_git(["git", "checkout", previous_branch])
             )
 
-    def _run_git(self, args: list[str]) -> subprocess.CompletedProcess:
+    def merge(self, branch: str) -> MergeResult:
+        """Merge a branch without committing and record rollback cleanup."""
+        self.rollback_stack.append(
+            lambda: self._run_git(["git", "merge", "--abort"], check=False)
+        )
+
+        result = self._run_git(
+            ["git", "merge", "--no-commit", branch],
+            check=False,
+        )
+        conflicting_files = self._conflicting_files()
+        if result.returncode == 0:
+            return MergeResult(
+                success=True,
+                has_conflicts=False,
+                conflicting_files=conflicting_files,
+                stderr=result.stderr.strip(),
+            )
+
+        if conflicting_files or "CONFLICT" in result.stderr.upper():
+            self._run_git(["git", "merge", "--abort"], check=False)
+            return MergeResult(
+                success=False,
+                has_conflicts=True,
+                conflicting_files=conflicting_files,
+                stderr=result.stderr.strip(),
+            )
+
+        return MergeResult(
+            success=False,
+            has_conflicts=False,
+            conflicting_files=[],
+            stderr=result.stderr.strip(),
+        )
+
+    def rebase(self, onto: str) -> None:
+        """Rebase the current branch and abort automatically on conflicts."""
+        self.rollback_stack.append(
+            lambda: self._run_git(["git", "rebase", "--abort"], check=False)
+        )
+
+        result = self._run_git(["git", "rebase", onto], check=False)
+        if result.returncode == 0:
+            return
+
+        conflicting_files = self._conflicting_files()
+        if conflicting_files or "CONFLICT" in result.stderr.upper():
+            self._run_git(["git", "rebase", "--abort"], check=False)
+            raise RebaseConflictError(conflicting_files, result.stderr)
+
+        raise RuntimeError(
+            f"{' '.join(['git', 'rebase', onto])} failed: {result.stderr.strip()}"
+        )
+
+    def _run_git(
+        self,
+        args: list[str],
+        check: bool = True,
+    ) -> subprocess.CompletedProcess:
         result = subprocess.run(
             args,
             cwd=str(self.worktree_path),
             capture_output=True,
             text=True,
         )
-        if result.returncode != 0:
+        if check and result.returncode != 0:
             stderr = result.stderr.strip()
             raise RuntimeError(f"{' '.join(args)} failed: {stderr}")
         return result
@@ -96,6 +177,14 @@ class WorkspaceTransaction:
             text=True,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
+
+    def _conflicting_files(self) -> list[str]:
+        """Return the list of files currently marked as conflicted."""
+        result = self._run_git(
+            ["git", "diff", "--name-only", "--diff-filter=U"],
+            check=False,
+        )
+        return [line for line in result.stdout.splitlines() if line.strip()]
 
     def _run_rollback_stack(self) -> None:
         while self.rollback_stack:
