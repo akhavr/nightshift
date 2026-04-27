@@ -1,5 +1,6 @@
 """Git command utilities shared across host modules."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -72,3 +73,25 @@ def diff_stat(repo: Path, base: str, head: str) -> str:
         capture_output=True, text=True, cwd=str(repo),
     )
     return result.stdout.strip() if result.returncode == 0 else "N/A"
+
+
+def audit_worktree_symlinks(
+    worktree_path: Path,
+    workspace_root: Path | None = None,
+) -> list[tuple[Path, Path]]:
+    """Return symlinks in a worktree whose targets resolve outside /workspace."""
+    workspace_root = Path("/workspace") if workspace_root is None else workspace_root
+    workspace_root = workspace_root.resolve()
+    escaping_symlinks: list[tuple[Path, Path]] = []
+
+    for dirpath, dirnames, filenames in os.walk(worktree_path):
+        for name in (*dirnames, *filenames):
+            symlink_path = Path(dirpath) / name
+            if not symlink_path.is_symlink():
+                continue
+
+            target_path = symlink_path.resolve(strict=False)
+            if not target_path.is_relative_to(workspace_root):
+                escaping_symlinks.append((symlink_path, target_path))
+
+    return escaping_symlinks

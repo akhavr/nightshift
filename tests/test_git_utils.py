@@ -6,7 +6,7 @@ from pathlib import Path
 
 from host.git_utils import (
     detect_default_branch, current_branch, branch_exists,
-    merge_no_ff, diff_stat,
+    merge_no_ff, diff_stat, audit_worktree_symlinks,
 )
 
 
@@ -75,3 +75,34 @@ class TestDiffStat:
     def test_failure(self):
         with patch("host.git_utils.subprocess.run", return_value=_completed(returncode=1)):
             assert diff_stat(Path("/repo"), "main", "feature") == "N/A"
+
+
+class TestAuditWorktreeSymlinks:
+    def test_detects_escape(self, tmp_path):
+        worktree = tmp_path / "repo"
+        worktree.mkdir()
+        internal_dir = worktree / "internal"
+        internal_dir.mkdir()
+        internal_file = internal_dir / "file.txt"
+        internal_file.write_text("inside\n")
+
+        outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+        outside.write_text("outside\n")
+        escaping_link = worktree / "escape.txt"
+        escaping_link.symlink_to(outside)
+        internal_link = worktree / "internal-link.txt"
+        internal_link.symlink_to(internal_file)
+
+        result = audit_worktree_symlinks(worktree, workspace_root=tmp_path)
+
+        assert result == [(escaping_link, outside.resolve())]
+
+    def test_allows_internal_symlinks(self, tmp_path):
+        worktree = tmp_path / "repo"
+        worktree.mkdir()
+        target = worktree / "target.txt"
+        target.write_text("ok\n")
+        link = worktree / "link.txt"
+        link.symlink_to(target)
+
+        assert audit_worktree_symlinks(worktree, workspace_root=tmp_path) == []
