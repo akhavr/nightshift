@@ -83,9 +83,25 @@ def audit_worktree_symlinks(
     workspace_root = Path("/workspace") if workspace_root is None else workspace_root
     workspace_root = workspace_root.resolve()
     escaping_symlinks: list[tuple[Path, Path]] = []
+    git_env = os.environ.copy()
+    git_env.pop("GIT_DIR", None)
+    git_env.pop("GIT_WORK_TREE", None)
+
+    result = subprocess.run(
+        ["git", "ls-files", "-s"],
+        cwd=str(worktree_path), capture_output=True, text=True, env=git_env,
+    )
+    tracked_files = {line.split()[-1] for line in result.stdout.splitlines()}
 
     for dirpath, dirnames, filenames in os.walk(worktree_path):
+        if ".git" in dirnames:
+            dirnames.remove(".git")
+
         for name in (*dirnames, *filenames):
+            rel_path = Path(dirpath).relative_to(worktree_path) / name
+            if str(rel_path) not in tracked_files:
+                continue
+
             symlink_path = Path(dirpath) / name
             if not symlink_path.is_symlink():
                 continue

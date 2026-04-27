@@ -1,6 +1,7 @@
 """Tests for host/git_utils.py."""
 
 import subprocess
+import os
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -12,6 +13,13 @@ from host.git_utils import (
 
 def _completed(stdout="", returncode=0):
     return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+
+
+def _clean_git_env():
+    env = os.environ.copy()
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    return env
 
 
 class TestDetectDefaultBranch:
@@ -78,24 +86,42 @@ class TestDiffStat:
 
 
 class TestAuditWorktreeSymlinks:
-    def test_detects_escape(self, tmp_path):
-        worktree = tmp_path / "repo"
-        worktree.mkdir()
-        internal_dir = worktree / "internal"
-        internal_dir.mkdir()
-        internal_file = internal_dir / "file.txt"
-        internal_file.write_text("inside\n")
+    def test_skips_gitignored_symlinks(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(repo), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        (repo / ".gitignore").write_text(".venv/\n")
+        (repo / "tracked.txt").write_text("tracked\n")
+        subprocess.run(["git", "add", ".gitignore", "tracked.txt"], cwd=str(repo), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), capture_output=True, text=True, env=_clean_git_env(), check=True)
 
+        venv = repo / ".venv"
+        venv.mkdir()
         outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
         outside.write_text("outside\n")
-        escaping_link = worktree / "escape.txt"
-        escaping_link.symlink_to(outside)
-        internal_link = worktree / "internal-link.txt"
-        internal_link.symlink_to(internal_file)
+        ignored_link = venv / "python"
+        ignored_link.symlink_to(outside)
+
+        assert audit_worktree_symlinks(repo, workspace_root=tmp_path) == []
+
+    def test_catches_tracked_escaping_symlinks(self, tmp_path):
+        worktree = tmp_path / "repo"
+        worktree.mkdir()
+        subprocess.run(["git", "init"], cwd=str(worktree), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(worktree), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(worktree), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        tracked = worktree / "escape.txt"
+        outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+        outside.write_text("outside\n")
+        tracked.symlink_to(outside)
+        subprocess.run(["git", "add", "escape.txt"], cwd=str(worktree), capture_output=True, text=True, env=_clean_git_env(), check=True)
+        subprocess.run(["git", "commit", "-m", "add escape link"], cwd=str(worktree), capture_output=True, text=True, env=_clean_git_env(), check=True)
 
         result = audit_worktree_symlinks(worktree, workspace_root=tmp_path)
 
-        assert result == [(escaping_link, outside.resolve())]
+        assert result == [(tracked, outside.resolve())]
 
     def test_allows_internal_symlinks(self, tmp_path):
         worktree = tmp_path / "repo"

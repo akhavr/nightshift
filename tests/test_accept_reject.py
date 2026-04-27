@@ -216,6 +216,7 @@ def test_accept_aborts_on_conflict_markers(tmp_path):
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="test789"), \
          patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+         patch("host.cli.audit_worktree_symlinks", return_value=[]), \
          patch("host.cli._report_accept_failure") as mock_report:
         mock_tracker.return_value = MagicMock()
         args = MagicMock()
@@ -385,6 +386,7 @@ class TestAcceptSanitizesConfig:
         with patch("host.cli.repo_root", return_value=repo), \
              patch("host.cli.resolve_session", return_value="sss123"), \
              patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli.audit_worktree_symlinks", return_value=[]), \
              patch("host.cli.archive_session"), \
              patch("host.cli.remove_worktree"), \
              patch("host.cli._cleanup_review_artifacts"):
@@ -455,7 +457,8 @@ class TestAcceptConflictHandling:
              patch("host.cli.resolve_session", return_value="conf123"), \
              patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
              patch("host.cli._report_accept_failure") as mock_report, \
-             patch("host.cli.check_branch_not_behind_base", return_value=None):
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.audit_worktree_symlinks", return_value=[]):
             mock_tracker.return_value = MagicMock()
             args = MagicMock()
             args.issue_id = "conf123"
@@ -494,7 +497,8 @@ class TestAcceptConflictHandling:
              patch("host.cli.resolve_session", return_value="conf123"), \
              patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
              patch("host.cli._report_accept_failure"), \
-             patch("host.cli.check_branch_not_behind_base", return_value=None):
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.audit_worktree_symlinks", return_value=[]):
             mock_tracker.return_value = MagicMock()
             args = MagicMock()
             args.issue_id = "conf123"
@@ -564,6 +568,36 @@ class TestAcceptSymlinkAudit:
              patch("host.cli._report_accept_failure") as mock_report, \
              patch("host.cli.check_branch_not_behind_base", return_value=None), \
              patch("host.cli.audit_worktree_symlinks", return_value=[]), \
+             patch("host.cli.merge_with_rebase_fallback") as mock_merge, \
+             patch("host.cli.verify_no_conflict_markers"), \
+             patch("host.cli.archive_session"), \
+             patch("host.cli.remove_worktree"), \
+             patch("host.cli._cleanup_review_artifacts"):
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "sym123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            cmd_accept(args)
+
+        mock_report.assert_not_called()
+        mock_merge.assert_called_once()
+
+    def test_accept_allows_gitignored_symlinks(self, tmp_path):
+        repo, run, wt_dir, ns_dir = _setup_symlink_accept_repo(tmp_path)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("escape target\n")
+        gitignored_dir = wt_dir / ".venv"
+        gitignored_dir.mkdir()
+        (gitignored_dir / "python").symlink_to(outside)
+        (wt_dir / ".gitignore").write_text(".venv/\n")
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="sym123"), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli._report_accept_failure") as mock_report, \
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
              patch("host.cli.merge_with_rebase_fallback") as mock_merge, \
              patch("host.cli.verify_no_conflict_markers"), \
              patch("host.cli.archive_session"), \
