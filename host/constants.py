@@ -80,3 +80,6 @@ MIN_FREE_GB = 1.0                 # Halt watcher if free disk space drops below 
 
 # ── Dependency blocking ────────────────────────────────────
 BLOCKED_LABEL_PREFIX = "blocked:"  # Label prefix for blocking dependencies
+
+# ── Revise retry ────────────────────────────────────────────
+REVISE_PENDING_FILENAME = "revise-pending.json"  # Marker for failed revise launches
