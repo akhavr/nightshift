@@ -15,7 +15,7 @@ from host.constants import (
     SOCKET_SERVER_RESTART_BACKOFF_BASE_S, SOCKET_SERVER_RESTART_BACKOFF_CAP_S,
     SOCKET_SERVER_MAX_RESTARTS,
     TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
-    TRACKER_TERMINATION_WAIT_S,
+    TRACKER_TERMINATION_WAIT_S, GITBUG_CACHE_HEALTHCHECK_INTERVAL_S,
 )
 from host.session_utils import read_state, update_status, get_active_session_ids
 from core.config import load_workflow, create_tracker, WorkflowConfig
@@ -141,6 +141,7 @@ class HostWatcher:
         self._proxy: QueueTrackerProxy | None = None
         self._socket_restart_count = 0
         self._socket_last_restart: float = 0.0
+        self._last_gitbug_cache_health_check: float = 0.0
 
         tg_level = self._telegram_level_from_config()
         self.telegram = TelegramRelay(
@@ -209,6 +210,71 @@ class HostWatcher:
                 self._config = load_workflow(self.workflow_path)
             self._auto_start_config = self._config.auto_start
         return self._auto_start_config
+
+    def _gitbug_tracker(self):
+        """Return the direct git-bug tracker instance, if one is active."""
+        if self._writer is not None:
+            return self._writer.tracker
+        return self._tracker
+
+    def _clear_gitbug_cache(self) -> bool:
+        """Clear the persisted git-bug cache if the tracker supports it."""
+        tracker = self._gitbug_tracker()
+        if tracker is None or not hasattr(tracker, "clear_cache"):
+            return False
+        tracker.clear_cache()
+        return True
+
+    def _count_gitbug_refs(self) -> int | None:
+        """Count refs/bugs entries in the repo for git-bug health checks."""
+        result = subprocess.run(
+            ["git", "show-ref", "refs/bugs"],
+            cwd=str(self.repo_dir),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode not in (0, 1):
+            log.warning("git-bug cache health check failed to count refs: %s",
+                        result.stderr.strip() or result.stdout.strip())
+            return None
+        return len([line for line in result.stdout.splitlines() if line.strip()])
+
+    def _check_gitbug_cache_health(self):
+        """Compare git-bug refs to cached GraphQL issues and rebuild on mismatch."""
+        now = time.time()
+        if now - self._last_gitbug_cache_health_check < GITBUG_CACHE_HEALTHCHECK_INTERVAL_S:
+            return
+        self._last_gitbug_cache_health_check = now
+
+        tracker = self._gitbug_tracker()
+        if tracker is None or not hasattr(tracker, "list_issues"):
+            return
+
+        refs_count = self._count_gitbug_refs()
+        if refs_count is None:
+            return
+
+        try:
+            cache_count = len(tracker.list_issues())
+        except Exception as e:
+            log.warning("git-bug cache health check failed: %s", e)
+            return
+
+        log.info("git-bug cache health: refs=%d cache=%d", refs_count, cache_count)
+        if refs_count == cache_count:
+            return
+
+        log.warning("git-bug cache mismatch detected (refs=%d, cache=%d); rebuilding cache",
+                    refs_count, cache_count)
+        try:
+            if hasattr(tracker, "rebuild_cache"):
+                tracker.rebuild_cache()
+            else:
+                self._clear_gitbug_cache()
+                if hasattr(tracker, "restart_webui"):
+                    tracker.restart_webui()
+        except Exception as e:
+            log.error("Failed to rebuild git-bug cache after mismatch: %s", e)
 
     def reload_config(self):
         """Re-read workflow file and update in-memory config and adapters.
@@ -287,7 +353,8 @@ class HostWatcher:
             log.info("Reloaded config -- no changes detected")
 
     def run(self, shutdown_event: threading.Event | None = None,
-            reload_event: threading.Event | None = None):
+            reload_event: threading.Event | None = None,
+            cache_clear_event: threading.Event | None = None):
         """Main watcher loop -- delegates to helper classes.
 
         Args:
@@ -295,9 +362,12 @@ class HostWatcher:
                 to exit cleanly. Used by signal handlers for graceful shutdown.
             reload_event: Optional event that, when set, triggers a config
                 reload from the workflow file. Used by SIGHUP handler.
+            cache_clear_event: Optional event that, when set, clears the
+                persisted git-bug cache before reloading tracker config.
         """
         self._shutdown = shutdown_event or threading.Event()
         self._reload = reload_event or threading.Event()
+        self._cache_clear = cache_clear_event or threading.Event()
 
         # Propagate shutdown event to QAHandler so pre-pause sleep
         # can be interrupted immediately on Ctrl-C
@@ -351,9 +421,14 @@ class HostWatcher:
             log.info("Auto-start disabled")
 
         while not self._shutdown.is_set():
+            if self._cache_clear.is_set():
+                self._cache_clear.clear()
+                if self._clear_gitbug_cache():
+                    log.info("Cleared git-bug cache before config reload")
             if self._reload.is_set():
                 self._reload.clear()
                 self.reload_config()
+            self._check_gitbug_cache_health()
             if not self._check_worktree_integrity():
                 break
             if not self._check_disk_space():

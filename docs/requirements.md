@@ -162,8 +162,9 @@ All git-bug CLI operations route through `GitBugTracker._run()` which retries on
 
 ### REQ-026: Single-writer git-bug access
 All git-bug operations are serialized through a single writer thread in the watcher process, eliminating lock contention. The writer thread processes a queue of tracker operations one at a time. A Unix domain socket server accepts JSON-lines requests from CLI processes and routes them through the same queue. The watcher's own internal tracker calls use a queue proxy (no socket overhead). CLI and launch scripts connect via `get_tracker_with_fallback()`: when the watcher socket is available, a `SocketTrackerClient` is used; when unavailable, falls back to direct `GitBugTracker` with the existing lock retry mechanism (REQ-025).
+The git-bug GraphQL watcher also includes stale-cache recovery for `.git/git-bug/cache/bugs`: on `list_issues()` errors containing "bug doesn't exist" it clears the cache, restarts `git-bug webui`, retries once, and periodically health-checks refs vs cached issue count to rebuild mismatches. SIGHUP-triggered config reloads clear the cache before recreating the tracker.
 
-- **Tests:** test_tracker_ipc.py, test_socket_tracker_client.py, test_tracker_fallback.py, watcher/test_tracker_writer.py
+- **Tests:** test_tracker_ipc.py, test_socket_tracker_client.py, test_tracker_fallback.py, watcher/test_tracker_writer.py, test_gitbug_graphql.py, watcher/test_host_watcher.py, watcher/test_config_reload.py
 - **Status:** covered
 
 ### REQ-027: Upstream template proposals
@@ -267,9 +268,10 @@ The host-container interface is hardened against compromised or misbehaving agen
 | oq1_stdin_test.py | REQ-003 |
 | watcher/test_graceful_shutdown.py | REQ-002 |
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
-| watcher/test_config_reload.py | REQ-023 |
+| watcher/test_config_reload.py | REQ-023, REQ-026 |
 | watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-009, REQ-011, REQ-017, REQ-036 |
-| watcher/test_host_watcher.py | REQ-009 |
+| watcher/test_host_watcher.py | REQ-009, REQ-026 |
+| test_gitbug_graphql.py | REQ-026 |
 | test_tracker_ipc.py | REQ-026 |
 | test_socket_tracker_client.py | REQ-026 |
 | test_tracker_fallback.py | REQ-026 |

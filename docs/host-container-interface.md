@@ -148,7 +148,7 @@ Cheap stat() checks — no inotify dependency.
 
 ## Known Gaps
 
-### GAP-001: Git Object Copy-Back (HIGH)
+### GAP-001: Git Object Copy-Back (HIGH) — IMPLEMENTED
 
 **Location:** `host/launch.py` — `_copy_git_changes()`
 
@@ -157,9 +157,12 @@ Cheap stat() checks — no inotify dependency.
 - Corrupt refs
 - Write bad pack files
 
-**Missing guardrail:** Object validation before copy-back (fsck, ref whitelist).
+**Implementation:** 
+1. Run `git fsck --connectivity-only` before copy-back
+2. Whitelist refs: only `refs/heads/agent-*` (no subpaths) are copied
+3. Filter packed-refs, materialize allowed refs as loose refs
 
-**Mitigation:** Run `git fsck` before copy; whitelist allowed ref patterns (e.g., only `refs/heads/agent-<id>`).
+**Note on fsck flags:** Must use `--connectivity-only`, not `--no-dangling`. The git-bug tracker stores issues as refs under `refs/remotes/origin/bugs/*` with non-standard reflog formats. Plain `git fsck` or `--no-dangling` reports these as "invalid reflog entry" errors and blocks copy-back. `--connectivity-only` checks object graph integrity without validating reflogs.
 
 ### GAP-002: Outbox Schema Validation (MEDIUM)
 
