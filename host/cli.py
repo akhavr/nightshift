@@ -377,6 +377,23 @@ def cmd_watcher(a):
     ]
     if a.no_auto_start:
         cmd.append("--no-auto-start")
+
+
+def cmd_watchdog(a):
+    """Run the global watchdog to monitor multiple watcher instances."""
+    from host.watchdog.main import main as watchdog_main
+    args = []
+    if a.list_watchers:
+        args.append("--list")
+    elif a.check:
+        args.append("--check")
+        if a.no_alerts:
+            args.append("--no-alerts")
+    if a.verbose:
+        args.append("--verbose")
+    if a.config:
+        args.extend(["--config", str(a.config)])
+    sys.exit(watchdog_main(args))
     print(f"Logging to {log_file}")
     # host.watcher uses absolute imports — ensure agent-worker root is on PYTHONPATH
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
@@ -1526,6 +1543,19 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-auto-start", action="store_true",
                     help="Disable automatic starting of new issues")
     sp.set_defaults(func=cmd_watcher)
+
+    sp = s.add_parser("watchdog", help="Monitor all nightshift watchers globally")
+    sp.add_argument("--list", dest="list_watchers", action="store_true",
+                    help="List registered watchers and their status")
+    sp.add_argument("--check", action="store_true",
+                    help="One-shot health check")
+    sp.add_argument("--config", type=Path, default=None,
+                    help="Path to watchdog.yaml config file")
+    sp.add_argument("--no-alerts", action="store_true",
+                    help="Suppress alerts (useful with --check)")
+    sp.add_argument("-v", "--verbose", action="store_true",
+                    help="Verbose output")
+    sp.set_defaults(func=cmd_watchdog)
 
     sp = s.add_parser("status")
     sp.set_defaults(func=cmd_status)
