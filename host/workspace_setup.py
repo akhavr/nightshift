@@ -36,14 +36,6 @@ def create_worktree(repo: Path, wt_path: Path, branch: str,
     # WT-6: Use safe_prune to fix corrupted gitdirs first and check active sessions
     safe_prune(repo)
 
-    # Verify base commit exists before creating branch
-    verify_result = subprocess.run(
-        ["git", "cat-file", "-t", base_branch],
-        capture_output=True, text=True, cwd=str(repo),
-    )
-    if verify_result.returncode != 0:
-        raise ValueError(f"Base branch {base_branch} points to missing commit")
-
     subprocess.run(["git", "branch", branch, base_branch],
                    capture_output=True, cwd=str(repo))
 
@@ -168,14 +160,8 @@ def setup_workspace(config, repo: Path, names: dict, is_resume: bool,
         if names.get("is_review"):
             # Sync review worktree to current agent branch (may have been rebased)
             coder_session = repo / ".nightshift" / "sessions" / names["short_id"]
-            sync_review_worktree(
-                repo,
-                wt_path,
-                session_dir,
-                coder_session,
-                names["short_id"],
-                config.workspace.base_branch,
-            )
+            sync_review_worktree(repo, wt_path, session_dir, coder_session,
+                                 names["short_id"], config.workspace.base_branch)
         else:
             merge_base_into_worktree(repo, wt_path, names["base_branch"],
                                      session_dir=session_dir)

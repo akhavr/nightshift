@@ -137,7 +137,6 @@ class TestTransientRetryConstants:
         assert "504" in patterns
         assert "429" in patterns
         assert "rate limit" in patterns
-        assert "usage limit" in patterns
         assert "overloaded" in patterns
         assert "service unavailable" in patterns
 

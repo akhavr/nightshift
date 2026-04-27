@@ -17,7 +17,6 @@ from typing import Iterator
 
 from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
 from core.constants import MCP_SIGNAL_SERVER
-from core.review import parse_nightshift_command
 from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ def _in_docker() -> bool:
 
 class CodexAgent(HeadlessAgentBase):
     # Patterns indicating authentication/authorization failures.
-    # Note: "status 429", "rate limit", "usage limit" are handled as transient errors
+    # Note: "status 429", "rate limit" are handled as transient errors
     # with retry in HeadlessAgentBase._maybe_retry_transient()
     AUTH_FAILURE_PATTERNS = (
         "status 401",
@@ -42,6 +41,8 @@ class CodexAgent(HeadlessAgentBase):
         "authentication_error",
         "insufficient_quota",
         "missing authentication",
+        "usage limit",
+        "hit your usage limit",
     )
 
     def __init__(
@@ -146,13 +147,6 @@ class CodexAgent(HeadlessAgentBase):
         if event_type == "turn.failed":
             error = ev.get("error", {})
             msg = error.get("message", "") if isinstance(error, dict) else str(error)
-            # Check transient errors first — emit AUTH_FAILURE to trigger retry
-            if self._is_transient_error(msg):
-                return AgentEvent(
-                    type=AgentEventType.AUTH_FAILURE,
-                    content=msg,
-                    raw=raw,
-                )
             if self._is_auth_failure(msg):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
@@ -167,23 +161,16 @@ class CodexAgent(HeadlessAgentBase):
 
         if event_type == "error":
             msg = ev.get("message", "")
-            # Detect provider overload at retry limit (5/5) first — no more retries
-            if self._is_overload_exhausted(msg):
-                return AgentEvent(
-                    type=AgentEventType.PROVIDER_OVERLOAD,
-                    content=msg,
-                    raw=raw,
-                )
             if self._is_auth_failure(msg):
                 return AgentEvent(
                     type=AgentEventType.AUTH_FAILURE,
                     content=msg,
                     raw=raw,
                 )
-            # Transient errors (429, rate limit, usage limit) — emit AUTH_FAILURE for retry
-            if self._is_transient_error(msg):
+            # Detect provider overload at retry limit (5/5)
+            if self._is_overload_exhausted(msg):
                 return AgentEvent(
-                    type=AgentEventType.AUTH_FAILURE,
+                    type=AgentEventType.PROVIDER_OVERLOAD,
                     content=msg,
                     raw=raw,
                 )
@@ -304,10 +291,10 @@ class CodexAgent(HeadlessAgentBase):
         # @@DONE@@ - task completion (buffer until turn.completed for usage data)
         if "@@DONE@@" in text:
             self._pending_done_raw = raw
-            content = text.replace("@@DONE@@", "").rstrip()
-            # Only keep the prelude when it actually carries a reviewer verdict.
-            if not content or parse_nightshift_command(content) is None:
+            # Preserve any verdict text that arrived in the same message.
+            if text.strip() == "@@DONE@@":
                 return None
+            content = text.replace("@@DONE@@", "").rstrip()
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=content,
