@@ -80,7 +80,7 @@ This document tracks known issues with the nightshift watcher and their resoluti
 
 ## Open Issues
 
-### 7. Orphan Review Refs After Failed Overlay Teardown
+### 7. Orphan Review Refs After Failed Copy-Back
 
 **Problem:** Review session refs can be left pointing to non-existent commits, corrupting git operations across the repo.
 
@@ -89,15 +89,24 @@ This document tracks known issues with the nightshift watcher and their resoluti
 - `git fsck` reports "invalid sha1 pointer"
 - git-bug GraphQL queries fail with cascading errors ("bug doesn't exist")
 
-**Root cause:** During git overlay teardown, the ref copy-back can succeed while the object copy-back fails (e.g., due to fsck errors, race conditions, or overlay unmount timing). This leaves a ref pointing to a commit that was never copied to the main repo.
+**Root cause:** Review branches are created **directly on host** via `workspace_setup.create_worktree()`:
+
+```python
+subprocess.run(["git", "branch", branch, base_branch], ...)
+# branch = "review/{coder_sid}"
+# base_branch = "agent/{short_id}"
+```
+
+Git creates the ref without verifying the base commit exists. If the agent branch points to a missing commit (due to failed copy-back from overlay), the review branch also points to that missing commit.
 
 **Sequence:**
-1. Review session runs in git overlay (session-dir/git-merged or git-copy)
-2. Agent creates commits in the overlay
-3. Overlay teardown begins: `_copy_git_changes()` called
-4. Ref `refs/heads/review/xxx` is copied to main repo
-5. Object copy fails or is skipped (fsck error, missing objects)
-6. Orphan ref remains pointing to non-existent commit
+1. Coder session creates commits in git overlay
+2. Copy-back fails (fsck error, race condition, etc.)
+3. Agent branch ref exists but points to non-existent commit
+4. Review session starts
+5. `create_worktree()` creates `review/{coder_sid}` from `agent/{short_id}`
+6. Review branch now also points to non-existent commit
+7. Git operations fail across the repo
 
 **Manual fix:**
 ```bash
@@ -106,11 +115,35 @@ git fsck 2>&1 | grep "invalid sha1 pointer"
 
 # Delete each orphan ref
 git update-ref -d refs/heads/review/<session-id>
+git update-ref -d refs/heads/agent/<session-id>
 ```
 
-**Proper fix needed:** GAP-001's `extract_commits()` should verify target commits exist before copying refs. Or: copy objects first, verify, then copy refs atomically.
+**Proper fix needed:** `workspace_setup.create_worktree()` should verify base commit exists before creating branch:
+```python
+result = subprocess.run(["git", "cat-file", "-t", base_branch], ...)
+if result.returncode != 0:
+    raise ValueError(f"Base branch {base_branch} points to missing commit")
+```
 
 **Status:** Open - manual cleanup required when encountered
+
+---
+
+### 8. Review Branch Created From Missing Commit
+
+**Problem:** `create_worktree()` doesn't verify the base commit exists before creating a branch. If the agent branch points to a missing commit (copy-back failed), the review branch creation succeeds but points to garbage.
+
+**Location:** `host/workspace_setup.py:create_worktree()`
+
+**Current behavior:**
+```python
+subprocess.run(["git", "branch", branch, base_branch], ...)
+```
+Git creates the ref even if `base_branch` points to a non-existent commit.
+
+**Fix:** Add commit verification before branch creation.
+
+**Status:** Open - needs fix
 
 ---
 
