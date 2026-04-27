@@ -1083,6 +1083,37 @@ class TestTrackerLockGuardrail:
         # Should mention parent process
         assert "parent" in caplog.text.lower()
 
+    def test_lock_warning_suppressed_for_own_child(self, tmp_path, caplog):
+        """Watcher should not warn when the lock holder is its own child."""
+        import logging
+        import os
+        from unittest.mock import Mock
+
+        w = _make_watcher(tmp_path)
+
+        lock_dir = w.repo_dir / ".git" / "git-bug"
+        lock_dir.mkdir(parents=True)
+        lock_file = lock_dir / "lock"
+        lock_file.write_text("769398\n")
+
+        stale_time = time.time() - LOCK_TIMEOUT_S - 10
+        os.utime(lock_file, (stale_time, stale_time))
+
+        current_pid = os.getpid()
+        mock_ps = Mock()
+        mock_ps.return_value.stdout = f"git-bug webui --no-open --h {current_pid}\n"
+
+        with patch("host.watcher.host_watcher.subprocess.run", mock_ps), \
+             caplog.at_level(logging.WARNING):
+            w._check_tracker_lock()
+
+        assert "git-bug lock held for" not in caplog.text
+        mock_ps.assert_called_once_with(
+            ["ps", "-p", "769398", "-o", "args=,ppid="],
+            capture_output=True,
+            text=True,
+        )
+
     def test_lock_warning_handles_invalid_pid(self, tmp_path, caplog):
         """Lock warning should handle non-numeric lock file content gracefully."""
         import logging
