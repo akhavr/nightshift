@@ -125,11 +125,15 @@ if result.returncode != 0:
     raise ValueError(f"Base branch {base_branch} points to missing commit")
 ```
 
-**Status:** Open - manual cleanup required when encountered
+**Issue ID:** 93b2a3a0
+
+**Status:** Open - filed for nightshift
 
 ---
 
 ### 8. Review Branch Created From Missing Commit
+
+**Issue ID:** 72f3989b3e93
 
 **Problem:** `create_worktree()` doesn't verify the base commit exists before creating a branch. If the agent branch points to a missing commit (copy-back failed), the review branch creation succeeds but points to garbage.
 
@@ -143,11 +147,13 @@ Git creates the ref even if `base_branch` points to a non-existent commit.
 
 **Fix:** Add commit verification before branch creation.
 
-**Status:** Open - needs fix
+**Status:** Open - filed for nightshift
 
 ---
 
 ### 9. Ref Whitelist Regex Mismatch Loses Agent Commits
+
+**Issue ID:** e091cd7c2b90
 
 **Problem:** The ref whitelist regex in `host/git_overlay.py` uses the wrong branch naming pattern, causing `extract_commits()` to skip copying agent branch refs back to the host repo. Commits are lost.
 
@@ -179,7 +185,7 @@ _ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/(agent|review)/[^/]+$")
 
 Security property preserved: `[^/]+` still blocks nested paths and traversal.
 
-**Status:** Open - needs fix
+**Status:** Open - filed for nightshift (currently running)
 
 ---
 
