@@ -86,7 +86,7 @@ def _copy_git_changes(session_dir: Path, repo: Path) -> int:
         return 0
 
     fsck_result = subprocess.run(
-        ["git", "--git-dir", str(source_git), "fsck", "--no-dangling"],
+        ["git", "--git-dir", str(source_git), "fsck", "--connectivity-only"],
         capture_output=True,
         text=True,
     )

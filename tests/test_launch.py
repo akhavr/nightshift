@@ -974,7 +974,7 @@ class TestCopyGitChanges:
         _copy_git_changes(session_dir, repo)
 
         mock_run.assert_called_once_with(
-            ["git", "--git-dir", str(source), "fsck", "--no-dangling"],
+            ["git", "--git-dir", str(source), "fsck", "--connectivity-only"],
             capture_output=True,
             text=True,
         )
