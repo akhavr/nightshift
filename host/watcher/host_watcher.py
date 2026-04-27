@@ -555,6 +555,11 @@ class HostWatcher:
                         parts = ps_output.rsplit(None, 1)
                         if len(parts) == 2:
                             cmdline, ppid_str = parts
+                            try:
+                                if int(ppid_str) == os.getpid():
+                                    return
+                            except ValueError:
+                                pass
                             # Get parent process command line
                             parent_result = subprocess.run(
                                 ["ps", "-p", ppid_str, "-o", "args="],
