@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-_ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/agent-[^/]+$")
+_ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/(agent|review)/[^/]+$")
 
 
 def is_fuse_overlayfs_available() -> bool:
