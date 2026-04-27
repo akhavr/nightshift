@@ -183,6 +183,41 @@ Security property preserved: `[^/]+` still blocks nested paths and traversal.
 
 ---
 
+### 10. Git-bug Cache Becomes Stale During Runtime
+
+**Issue ID:** 4010068
+
+**Problem:** The git-bug GraphQL tracker caches bug excerpts in `.git/git-bug/cache/bugs`. If a bug ref is deleted while the watcher is running (manual deletion, push/pull conflict, etc.), the cache becomes stale. `list_issues()` fails with "bug doesn't exist" on every poll cycle, blocking auto-start.
+
+**Symptoms:**
+- Watcher log shows repeated `list_issues failed: git-bug GraphQL error: [{'message': "bug doesn't exist", 'path': ['repository', 'allBugs', 'nodes', N, 'comments']}]`
+- Auto-start stops picking up new issues
+- Direct GraphQL queries to specific bugs may work while `allBugs` fails
+
+**Root cause:** `lazyBug.load()` calls `cache.Bugs().Resolve(id)` which does a fresh git read. If the ref was deleted after cache build, the read fails. The persisted cache file at `.git/git-bug/cache/bugs` survives webui restarts.
+
+**Diagnosis:**
+```bash
+# Compare counts - mismatch indicates stale cache
+git show-ref | grep refs/bugs | wc -l  # actual refs
+curl -s 'http://localhost:<port>/graphql' -d '{"query":"{ repository { allBugs { nodes { id } } } }"}' | jq '.data.repository.allBugs.nodes | length'  # cached
+```
+
+**Manual fix:**
+```bash
+rm .git/git-bug/cache/bugs
+# Restart watcher (or webui if running standalone)
+```
+
+**Proper fix needed:** Three-layer defense:
+1. On-error recovery: catch "bug doesn't exist", clear cache, restart webui, retry
+2. Periodic health check: compare ref count vs cache count every 5-10 min
+3. SIGHUP trigger: clear cache as part of config reload
+
+**Status:** Open - issue filed (4010068)
+
+---
+
 ## Monitoring Notes
 
 - `git-bug bug timed out after 30s` in logs indicates CLI tracker fallback with lock retry (expected when watcher not running)
