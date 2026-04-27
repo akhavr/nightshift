@@ -127,7 +127,9 @@ if result.returncode != 0:
 
 **Issue ID:** 93b2a3a0
 
-**Status:** Open - filed for nightshift
+**Solution:** Added `detect_orphan_refs()` and `cleanup_orphan_refs()` in `host/watcher/host_watcher.py`. The watcher now detects and cleans orphan refs on startup and periodically during the main loop.
+
+**Status:** Resolved (merged to master, session 93b2a3a0cc18)
 
 ---
 
@@ -139,15 +141,9 @@ if result.returncode != 0:
 
 **Location:** `host/workspace_setup.py:create_worktree()`
 
-**Current behavior:**
-```python
-subprocess.run(["git", "branch", branch, base_branch], ...)
-```
-Git creates the ref even if `base_branch` points to a non-existent commit.
+**Solution:** The orphan ref detection in issue #7 catches and cleans these refs. Additionally, tests were added in `tests/test_workspace_setup.py::test_create_worktree_rejects_missing_base_commit`.
 
-**Fix:** Add commit verification before branch creation.
-
-**Status:** Open - filed for nightshift
+**Status:** Resolved (merged to master, session 93b2a3a0cc18)
 
 ---
 
@@ -178,14 +174,14 @@ The regex was written based on `worktree_name` (which uses hyphens: `agent-abc12
 
 **Introduced:** Commit f7c75219 (GAP-001 security hardening, 2026-04-27)
 
-**Fix:** Change regex to match actual branch naming:
+**Fix:** Changed regex to match actual branch naming:
 ```python
 _ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/(agent|review)/[^/]+$")
 ```
 
 Security property preserved: `[^/]+` still blocks nested paths and traversal.
 
-**Status:** Open - filed for nightshift (currently running)
+**Status:** Resolved (merged to master)
 
 ---
 
