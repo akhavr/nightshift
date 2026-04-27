@@ -175,7 +175,7 @@ def test_git_mount_uses_session_overlay_only(tmp_path, monkeypatch):
     cmd_str = " ".join(cmd)
     # Main .git mount should be read-write
     assert f"{tmp_path / '.git'}:/repo-git:rw" in cmd_str
-    assert f"{tmp_path / '.git'}:/workspace/.git:rw" in cmd_str
+    assert f"{tmp_path / 'ws' / '.git'}:/workspace/.git:rw" in cmd_str
     assert f"{tmp_path / '.git' / 'config'}:/repo-git/config:ro" not in cmd_str
 
 
