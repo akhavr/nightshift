@@ -8,7 +8,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from adapters.agents.codex import CodexAgent
+from core.session import SessionRunner
+from core.state import StateManager, SessionState
 from core.protocols import AgentEvent, AgentEventType
+from core.protocols import Workspace
+from tests.conftest import (
+    MockAgent,
+    MockNotifier,
+    MockTracker,
+    MockWorkspaceManager,
+    make_test_issue,
+)
 
 
 # ── Helpers ────────────────────────────────────────────────
@@ -486,11 +496,31 @@ class TestUsageBuffering:
     def _agent(self):
         return CodexAgent()
 
+    def _make_runner(self, tmp_path: Path, events: list[AgentEvent]):
+        issue = make_test_issue()
+        session_dir = tmp_path / "session"
+        state_mgr = StateManager(session_dir)
+        state_mgr._write(SessionState(issue_id=issue.id, branch="agent/test"))
+
+        agent = MockAgent(events)
+        tracker = MockTracker({issue.id: issue})
+        notifier = MockNotifier()
+        workspace_mgr = MockWorkspaceManager(tmp_path)
+
+        runner = SessionRunner(
+            agent=agent, tracker=tracker, notifier=notifier,
+            workspace_mgr=workspace_mgr, state_mgr=state_mgr,
+            issue=issue, prompt="Fix the bug",
+        )
+        workspace = Workspace(path=tmp_path / "ws", branch="agent/test", is_new=False)
+        workspace.path.mkdir()
+        return runner, state_mgr, workspace
+
     def test_usage_captured_before_done_marker(self):
         """agent_message with @@DONE@@ waits for turn.completed to get usage."""
         agent = self._agent()
-        # First: agent_message contains @@DONE@@ text
-        msg_raw = _item_ev("item.completed", "agent_message", text="Task done @@DONE@@")
+        # First: agent_message contains only the @@DONE@@ marker
+        msg_raw = _item_ev("item.completed", "agent_message", text="@@DONE@@")
         ev1 = agent._parse(msg_raw)
         # Should return None (buffered)
         assert ev1 is None
@@ -512,6 +542,56 @@ class TestUsageBuffering:
         assert ev2.metadata["usage"]["cost_usd"] == 0.05
         # Buffer should be cleared
         assert agent._pending_done_raw is None
+
+    def test_done_with_verdict_emits_text(self):
+        """agent_message with @@DONE@@ and verdict text should not be discarded."""
+        agent = self._agent()
+        raw = _item_ev(
+            "item.completed",
+            "agent_message",
+            text="All good. @nightshift revise @@DONE@@",
+        )
+        ev = agent._parse(raw)
+
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "All good. @nightshift revise"
+        assert ev.raw == raw
+        assert agent._pending_done_raw == raw
+
+    def test_verdict_in_same_message_as_done_logged(self, tmp_path):
+        """conversation.jsonl should keep verdict text when @@DONE@@ is in the same message."""
+        agent = self._agent()
+        text_raw = _item_ev(
+            "item.completed",
+            "agent_message",
+            text="All good. @nightshift approve @@DONE@@",
+        )
+        text_ev = agent._parse(text_raw)
+        assert text_ev is not None
+
+        done_raw = _ev("turn.completed", usage={
+            "input_tokens": 100,
+            "output_tokens": 10,
+        })
+        done_ev = agent._parse(done_raw)
+        assert done_ev is not None
+
+        runner, state_mgr, workspace = self._make_runner(tmp_path, [text_ev, done_ev])
+        runner.run(workspace=workspace)
+
+        entries = [
+            json.loads(line)
+            for line in state_mgr.conversation_log.read_text().strip().splitlines()
+        ]
+        assert any(
+            e["role"] == "assistant" and "@nightshift approve" in e["content"]
+            for e in entries
+        )
+        st = state_mgr.load_state()
+        assert st.status == "waiting:review"
+        assert st.usage.input_tokens == 100
+        assert st.usage.output_tokens == 10
 
     def test_usage_from_turn_completed_after_mcp_done(self):
         """MCP nightshift_done waits for turn.completed to get usage."""
