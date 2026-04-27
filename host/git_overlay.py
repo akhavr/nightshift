@@ -6,9 +6,14 @@ import re
 import logging
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration for cp -a failures (concurrent git operations)
+GIT_COPY_MAX_RETRIES = 3
+GIT_COPY_RETRY_DELAYS = [1, 2, 4]  # exponential backoff: 1s, 2s, 4s
 _ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/(agent|review)/[^/]+$")
 
 
@@ -46,14 +51,37 @@ def teardown_overlay(merged_path: Path) -> None:
 
 
 def setup_git_copy(repo_git: Path, session_dir: Path) -> Path:
-    """Fallback isolation: copy .git into a session-local directory."""
+    """Fallback isolation: copy .git into a session-local directory.
+
+    Retries up to GIT_COPY_MAX_RETRIES times with exponential backoff
+    when cp fails (e.g., due to concurrent git operations locking files).
+    """
     copy_dir = session_dir / "git-copy"
     copy_dir.parent.mkdir(parents=True, exist_ok=True)
     if copy_dir.exists():
         shutil.rmtree(copy_dir)
-    subprocess.run(["cp", "-a", str(repo_git), str(copy_dir)],
-                   capture_output=True, text=True, check=True)
-    return copy_dir
+
+    last_error = None
+    for attempt in range(GIT_COPY_MAX_RETRIES):
+        try:
+            subprocess.run(["cp", "-a", str(repo_git), str(copy_dir)],
+                           capture_output=True, text=True, check=True)
+            return copy_dir
+        except subprocess.CalledProcessError as e:
+            last_error = e
+            if attempt < GIT_COPY_MAX_RETRIES - 1:
+                delay = GIT_COPY_RETRY_DELAYS[attempt]
+                logger.warning(
+                    f"cp -a {repo_git} failed (attempt {attempt + 1}/{GIT_COPY_MAX_RETRIES}): "
+                    f"{e.stderr or e}. Retrying in {delay}s..."
+                )
+                time.sleep(delay)
+                if copy_dir.exists():
+                    shutil.rmtree(copy_dir)
+
+    raise RuntimeError(
+        f"cp -a {repo_git} failed after {GIT_COPY_MAX_RETRIES} attempts: {last_error}"
+    )
 
 
 def _copy_tree(src: Path, dst: Path, overwrite: bool = False) -> None:

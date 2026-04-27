@@ -169,6 +169,47 @@ class TestHandleReviewerReviseRevert:
             f"Expected status to remain reviewing on launch failure, got {state['status']}"
 
 
+class TestReviseLaunchFailureRecovery:
+    """Test that failed revise launches write a marker for later retry."""
+
+    def test_revise_launch_failure_leaves_session_resumable(self, tmp_path):
+        """When launch fails, session stays in a state that allows retry (not done:pending-review).
+
+        A marker file (revise-pending.json) is written with enough context for
+        the SessionMonitor to retry the revise launch later.
+        """
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                  issue_id="issue-abc")
+        review_dir = tmp_path / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "Fix the test. @nightshift revise"}) + "\n"
+        )
+
+        w.telegram.notify = MagicMock()
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+
+        # Simulate launch failure
+        w.reviews.verdicts._launch_background = lambda cmd, sid: False
+
+        w.reviews.verdicts.handle_reviewer_revise("abc", coder_dir, "issue-abc", review_dir)
+
+        # Verify marker file is written
+        marker = coder_dir / "revise-pending.json"
+        assert marker.exists(), "revise-pending.json should be written on launch failure"
+
+        marker_data = json.loads(marker.read_text())
+        assert marker_data["issue_id"] == "issue-abc"
+        assert "review_dir" in marker_data
+
+        # Status should remain in a retryable state
+        state = json.loads((coder_dir / "state.json").read_text())
+        assert state["status"] == "reviewing", \
+            "Session should remain in reviewing (not done:pending-review)"
+
+
 class TestReviseResumesCoderSSM11:
     """SSM-11: Verify revise clears completed_at when resuming coder."""
 

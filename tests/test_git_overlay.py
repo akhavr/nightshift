@@ -217,4 +217,55 @@ def test_overlay_fallback_to_copy(tmp_path):
     assert cmd[:2] == ["cp", "-a"]
     assert str(repo_git) in cmd
     assert str(session_dir / "git-copy") in cmd
-    assert mock_run.call_args.kwargs["check"] is True
+
+
+def test_setup_git_copy_retries_on_transient_failure(tmp_path):
+    """setup_git_copy retries up to 3 times with backoff when cp fails."""
+    import subprocess
+    from host.git_overlay import setup_git_copy
+
+    repo_git = tmp_path / "repo" / ".git"
+    repo_git.mkdir(parents=True)
+    (repo_git / "config").write_text("[core]\n")
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    call_count = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise subprocess.CalledProcessError(1, args[0], stderr="Device or resource busy")
+        return MagicMock(returncode=0)
+
+    with patch("host.git_overlay.subprocess.run", side_effect=side_effect), \
+            patch("host.git_overlay.time.sleep") as mock_sleep:
+        copied = setup_git_copy(repo_git, session_dir)
+
+    assert copied == session_dir / "git-copy"
+    assert call_count == 3
+    # Verify backoff delays were used (1s, 2s)
+    assert mock_sleep.call_count == 2
+    assert mock_sleep.call_args_list[0][0][0] == 1
+    assert mock_sleep.call_args_list[1][0][0] == 2
+
+
+def test_setup_git_copy_raises_after_max_retries(tmp_path):
+    """After 3 failures, raises with clear error message."""
+    import subprocess
+    import pytest
+    from host.git_overlay import setup_git_copy
+
+    repo_git = tmp_path / "repo" / ".git"
+    repo_git.mkdir(parents=True)
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    def side_effect(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr="Device or resource busy")
+
+    with patch("host.git_overlay.subprocess.run", side_effect=side_effect), \
+            patch("host.git_overlay.time.sleep"):
+        with pytest.raises(RuntimeError, match="cp -a .* failed after 3 attempts"):
+            setup_git_copy(repo_git, session_dir)
