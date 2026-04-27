@@ -183,7 +183,7 @@ Security property preserved: `[^/]+` still blocks nested paths and traversal.
 
 ---
 
-### 10. Git-bug Cache Becomes Stale During Runtime
+### 10. Git-bug Cache Auto-Recovery
 
 **Issue ID:** 4010068
 
@@ -209,12 +209,12 @@ rm .git/git-bug/cache/bugs
 # Restart watcher (or webui if running standalone)
 ```
 
-**Proper fix needed:** Three-layer defense:
-1. On-error recovery: catch "bug doesn't exist", clear cache, restart webui, retry
-2. Periodic health check: compare ref count vs cache count every 5-10 min
-3. SIGHUP trigger: clear cache as part of config reload
+**Fix:** Implemented a three-layer recovery path:
+1. On-error recovery in `adapters/trackers/git_bug_graphql.py`: catch "bug doesn't exist", clear `.git/git-bug/cache/bugs`, restart webui, retry once.
+2. Periodic health check in `host/watcher/host_watcher.py`: compare `refs/bugs` count with cached GraphQL issue count and rebuild on mismatch.
+3. SIGHUP handling in `host/watcher/main.py`: mark git-bug cache for clearing before config reload restarts the tracker.
 
-**Status:** Open - issue filed (4010068)
+**Status:** Resolved (session 4010068a8fa6)
 
 ---
 

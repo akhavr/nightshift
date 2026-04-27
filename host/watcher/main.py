@@ -16,6 +16,7 @@ log = logging.getLogger("watcher")
 # Module-level events so signal handlers can set them
 shutdown_event = threading.Event()
 reload_event = threading.Event()
+gitbug_cache_clear_event = threading.Event()
 
 
 def _handle_shutdown(signum, frame):
@@ -26,9 +27,10 @@ def _handle_shutdown(signum, frame):
 
 
 def _handle_reload(signum, frame):
-    """Signal handler for SIGHUP — sets the reload event to trigger config reload."""
-    log.info("Received SIGHUP, scheduling config reload...")
+    """Signal handler for SIGHUP — schedules config reload and cache clear."""
+    log.info("Received SIGHUP, scheduling config reload and git-bug cache clear...")
     reload_event.set()
+    gitbug_cache_clear_event.set()
 
 
 def main():
@@ -67,4 +69,5 @@ def main():
     workflow_path = Path(a.workflow) if a.workflow else None
     watcher = HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start,
                           workflow_path=workflow_path)
-    watcher.run(shutdown_event=shutdown_event, reload_event=reload_event)
+    watcher.run(shutdown_event=shutdown_event, reload_event=reload_event,
+                cache_clear_event=gitbug_cache_clear_event)

@@ -13,7 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import host.watcher as wmod
 from host.watcher import HostWatcher
 from host.watcher.host_watcher import RecentlyLaunchedDict
-from host.constants import RECENTLY_LAUNCHED_FILENAME, ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S
+from host.constants import (
+    RECENTLY_LAUNCHED_FILENAME, ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S,
+    GITBUG_CACHE_HEALTHCHECK_INTERVAL_S,
+)
 from core.config.models import TrackerConfig, WorkflowConfig
 from core.protocols import TrackerIssue, TrackerComment
 
@@ -86,6 +89,67 @@ class TestTrackerSyncConfig:
         w._maybe_sync_tracker()
 
         tracker.sync.assert_called_once()
+
+
+class TestGitBugCacheRecovery:
+    def test_periodic_cache_health_check(self, tmp_path, caplog):
+        w = _make_watcher(tmp_path)
+        tracker = MagicMock()
+        tracker.list_issues.return_value = [_make_issue("bug-1")]
+        tracker.rebuild_cache = MagicMock()
+        w._tracker = tracker
+        w._last_gitbug_cache_health_check = 0.0
+
+        mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="refs/bugs/a\nrefs/bugs/b\n", stderr=""))
+        with patch("host.watcher.host_watcher.subprocess.run", mock_run), \
+             patch("host.watcher.host_watcher.time.time", return_value=GITBUG_CACHE_HEALTHCHECK_INTERVAL_S + 1):
+            w._check_gitbug_cache_health()
+
+        tracker.rebuild_cache.assert_called_once()
+
+    def test_sighup_clears_gitbug_cache(self, tmp_path):
+        import threading
+
+        w = _make_watcher(tmp_path)
+        w._tracker = MagicMock()
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
+        w.monitor.check_orphaned_sessions = lambda: None
+        w.monitor.check_auth_failures = lambda: None
+        w.monitor.check_provider_outages = lambda: None
+        w.monitor.check_zombie_containers = lambda: None
+        w.monitor.check_closed_issues = lambda: None
+        w.monitor.check_new_issues = lambda: None
+        w.check_background_launches = lambda: None
+        w._check_worktree_integrity = lambda: True
+        w._check_disk_space = lambda: True
+        w._check_socket_server_health = lambda: None
+        w._check_tracker_lock = lambda: None
+        w._maybe_sync_tracker = lambda: None
+        w._sync_issue_data = lambda: None
+        w._check_gitbug_cache_health = lambda: None
+
+        call_order = []
+        w._clear_gitbug_cache = MagicMock(side_effect=lambda: call_order.append("clear") or True)
+
+        shutdown = threading.Event()
+        reload_ev = threading.Event()
+        cache_clear_ev = threading.Event()
+        reload_ev.set()
+        cache_clear_ev.set()
+
+        def reload_and_stop():
+            call_order.append("reload")
+            shutdown.set()
+
+        w.reload_config = MagicMock(side_effect=reload_and_stop)
+
+        with patch("host.watcher.host_watcher.repair_lamport_clocks"):
+            w.run(shutdown_event=shutdown, reload_event=reload_ev, cache_clear_event=cache_clear_ev)
+
+        assert call_order == ["clear", "reload"]
+        w._clear_gitbug_cache.assert_called_once()
+        w.reload_config.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
