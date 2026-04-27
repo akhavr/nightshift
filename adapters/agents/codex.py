@@ -17,6 +17,7 @@ from typing import Iterator
 
 from adapters.agents.base import HeadlessAgentBase, TOOL_RESULT_PREVIEW_LEN
 from core.constants import MCP_SIGNAL_SERVER
+from core.review import parse_nightshift_command
 from core.protocols import AgentEvent, AgentEventType
 
 log = logging.getLogger(__name__)
@@ -303,10 +304,10 @@ class CodexAgent(HeadlessAgentBase):
         # @@DONE@@ - task completion (buffer until turn.completed for usage data)
         if "@@DONE@@" in text:
             self._pending_done_raw = raw
-            # Preserve any verdict text that arrived in the same message.
-            if text.strip() == "@@DONE@@":
-                return None
             content = text.replace("@@DONE@@", "").rstrip()
+            # Only keep the prelude when it actually carries a reviewer verdict.
+            if not content or parse_nightshift_command(content) is None:
+                return None
             return AgentEvent(
                 type=AgentEventType.TEXT,
                 content=content,
