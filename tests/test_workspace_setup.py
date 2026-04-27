@@ -237,6 +237,34 @@ class TestCreateWorktreeNoCollateralPrune:
         assert not wt_path.exists()
         assert not (session_dir / "state.json").exists()
 
+    @patch("host.workspace_setup.safe_prune")
+    @patch("host.workspace_setup.subprocess.run")
+    def test_create_worktree_rejects_missing_base_commit(self, mock_run,
+                                                         mock_safe_prune,
+                                                         tmp_path):
+        repo, run = _init_repo(tmp_path)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        wt_path = tmp_path / "worktree"
+
+        def side_effect(cmd, **kwargs):
+            if cmd[:3] == ["git", "cat-file", "-t"]:
+                return subprocess.CompletedProcess(
+                    cmd, 1, stdout="", stderr="fatal: missing commit"
+                )
+            raise AssertionError(f"unexpected subprocess call: {cmd}")
+
+        mock_run.side_effect = side_effect
+
+        from host.workspace_setup import create_worktree
+
+        with pytest.raises(ValueError) as exc_info:
+            create_worktree(repo, wt_path, "review/test123", "agent/test123",
+                            session_dir, "test-issue-123")
+
+        assert "agent/test123" in str(exc_info.value)
+        assert "missing commit" in str(exc_info.value)
+
 
 class TestCreateWorktreeTransaction:
     """WT-4: create_worktree should use WorkspaceTransaction and clean up on failure."""
@@ -372,6 +400,44 @@ class TestCreateWorktreeTransaction:
         assert exc_info.value.code == 1
         assert not wt_path.exists()
         assert session_dir.exists()
+
+
+class TestCreateWorktreeBaseCommitVerification:
+    """Tests for base commit verification before branch creation."""
+
+    def test_create_worktree_rejects_missing_base_commit(self, tmp_path):
+        """ValueError raised when base_branch points to non-existent commit."""
+        repo, run = _init_repo(tmp_path)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        wt_path = tmp_path / "worktree"
+
+        from host.workspace_setup import create_worktree
+
+        with pytest.raises(ValueError) as exc_info:
+            create_worktree(repo, wt_path, "agent/test-branch",
+                            "nonexistent-branch", session_dir, "test-issue-123")
+
+        assert "nonexistent-branch" in str(exc_info.value)
+        assert "missing commit" in str(exc_info.value)
+
+    def test_create_worktree_succeeds_with_valid_base(self, tmp_path):
+        """Branch created successfully when base commit exists."""
+        repo, run = _init_repo(tmp_path)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        wt_path = tmp_path / "worktree"
+
+        from host.workspace_setup import create_worktree
+
+        create_worktree(repo, wt_path, "agent/test-branch",
+                        "master", session_dir, "test-issue-123")
+
+        assert wt_path.exists()
+        assert (session_dir / "state.json").exists()
+        # Verify the branch points to a valid commit
+        result = run("git", "rev-parse", "agent/test-branch")
+        assert result.returncode == 0
 
 
 class TestSyncReviewWorktree:
