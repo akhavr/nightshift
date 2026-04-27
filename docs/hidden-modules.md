@@ -283,7 +283,7 @@ tests/watcher/test_verdict_handler.py::test_revise_resumes_coder
 
 **Solution:** Unified AgentEvent stream that all agents emit.
 
-### AES-1: AgentEvent dataclass and enum
+### AES-1: AgentEvent dataclass and enum [DONE]
 
 **Issue:** 6c728b5705ff
 
@@ -302,11 +302,11 @@ tests/test_agent_events.py::test_event_from_dict
 2. AgentEvent dataclass: type, timestamp, content, metadata
 3. Serialization to/from dict
 
-**Wired:** Foundation exists. No behavior change yet.
+**Wired:** Foundation exists in `core/agent_events.py`.
 
 ---
 
-### AES-2: ClaudeCodeAgent emits AgentEvent
+### AES-2: ClaudeCodeAgent emits AgentEvent [DONE]
 
 **Issue:** b4b4727a0036
 
@@ -325,11 +325,11 @@ tests/test_claude_code_agent.py::test_auth_failure_becomes_auth_event
 2. Marker parsing produces QUESTION/DONE/CHECKPOINT events
 3. stream() yields AgentEvent objects
 
-**Wired:** ClaudeCodeAgent speaks unified events. SessionRunner still works (duck typing).
+**Wired:** ClaudeCodeAgent emits AgentEvent via `_parse()` in `adapters/agents/claude_code.py`.
 
 ---
 
-### AES-3: OpenHandsAgent emits AgentEvent
+### AES-3: OpenHandsAgent emits AgentEvent [DONE]
 
 **Issue:** f24ab295e335
 
@@ -346,11 +346,11 @@ tests/test_openhands_agent.py::test_action_becomes_tool_call
 1. Parse JSON events into AgentEvent
 2. Map OpenHands event types to AgentEventType
 
-**Wired:** OpenHands speaks unified events.
+**Wired:** OpenHandsAgent emits AgentEvent in `adapters/agents/openhands.py`.
 
 ---
 
-### AES-4: CodexAgent emits AgentEvent
+### AES-4: CodexAgent emits AgentEvent [DONE]
 
 **Issue:** 80ed0c0df6ac
 
@@ -366,11 +366,11 @@ tests/test_codex_agent.py::test_jsonl_parsed_to_events
 1. Parse JSONL into AgentEvent
 2. Map Codex event types
 
-**Wired:** All three agents speak unified events.
+**Wired:** CodexAgent emits AgentEvent in `adapters/agents/codex.py`.
 
 ---
 
-### AES-5: SessionRunner consumes AgentEvent stream
+### AES-5: SessionRunner consumes AgentEvent stream [DONE]
 
 **Issue:** de4037a7f524
 
@@ -389,7 +389,7 @@ tests/test_session_runner.py::test_agent_agnostic_event_loop
 2. Remove agent-specific marker parsing
 3. match event.type: case DONE: ... case QUESTION: ...
 
-**Wired:** SessionRunner is agent-agnostic. Adding new agents trivial.
+**Wired:** SessionRunner dispatches on `AgentEventType` in `_dispatch_event()`. Agent-agnostic.
 
 ---
 
@@ -632,19 +632,20 @@ Priority based on impact and dependencies:
 | 1 | SSM-1 to SSM-3 | Race condition eliminated | **DONE** |
 | 2 | SSM-4 to SSM-9 | Full SSM integration | **DONE** |
 | 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix | **DONE** |
-| 3 | AES-1 to AES-2 | Event foundation + ClaudeCode | TODO |
-| 4 | AES-3 to AES-6 | All agents unified | TODO |
+| 3 | AES-1 to AES-5 | Event foundation + all agents | **DONE** |
+| 4 | AES-6 | File signals unified | TODO |
 | 5 | WT-0, WT-1, WT-1.5, WT-1.6, WT-1.7, WT-6 | Git state self-healing + safe prune | **DONE** |
-| 6 | WT-2 to WT-5 | Full transactional git | TODO |
+| 6 | WT-2 to WT-5 | Full transactional git | IN PROGRESS |
 
 **Total: 27 issues, each TDD, each wired to real flow.**
 
-**Completed:** SSM-1 to SSM-11, WT-1.5, WT-1.6, WT-1.7, WT-6 (15 issues)
-**Remaining:** AES-1 to AES-6, WT-0 to WT-5 (12 issues)
+**Completed:** SSM-1 to SSM-11, AES-1 to AES-5, WT-0, WT-1, WT-1.5, WT-1.6, WT-1.7, WT-3, WT-4, WT-6 (24 issues)
+**Remaining:** AES-6, WT-2, WT-5 (3 issues)
 
 After Phase 1 (3 issues): Race condition fixed structurally. **DONE**
 After Phase 2 (6 more): SSM complete, lifecycle explicit. **DONE**
 After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup. **DONE**
-After Phase 4 (6 more): Adding new agents is trivial.
+After Phase 3 (5 more): All agents emit unified AgentEvent stream. **DONE**
+After Phase 4 (1 more): File signals unified into AgentEvent stream.
 After Phase 5 (6 issues): Git state self-heals from container corruption, safe prune prevents collateral damage. **DONE**
-After Phase 6 (5 more): Git operations are bulletproof.
+After Phase 6 (3 more): Git operations are bulletproof.
