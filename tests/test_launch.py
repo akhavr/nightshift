@@ -1,6 +1,7 @@
 """Tests for host/launch.py and its extracted modules."""
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -929,8 +930,8 @@ class TestPostContainer:
         entry = json.loads(usage_file.read_text().strip())
         assert entry["input_tokens"] == 10000
 
-    @patch("host.launch.extract_commits")
-    def test_overlay_extraction_runs_after_container(self, mock_extract,
+    @patch("host.launch._copy_git_changes")
+    def test_overlay_extraction_runs_after_container(self, mock_copy,
                                                      tmp_path, config):
         from host.launch import _post_container
 
@@ -947,7 +948,96 @@ class TestPostContainer:
 
         _post_container(session_dir, config, tmp_path, "issue1")
 
-        mock_extract.assert_called_once_with(session_dir / "git-upper", tmp_path / ".git")
+        mock_copy.assert_called_once_with(session_dir, tmp_path)
+
+
+class TestCopyGitChanges:
+
+    @patch("host.launch.subprocess.run")
+    def test_copy_git_changes_runs_fsck(self, mock_run, tmp_path):
+        from host.launch import _copy_git_changes
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        source = session_dir / "git-copy"
+        source.mkdir()
+        (source / "objects").mkdir()
+        (source / "refs" / "heads").mkdir(parents=True)
+        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        _copy_git_changes(session_dir, repo)
+
+        mock_run.assert_called_once_with(
+            ["git", "--git-dir", str(source), "fsck", "--no-dangling"],
+            capture_output=True,
+            text=True,
+        )
+
+    @patch("host.launch.subprocess.run")
+    def test_copy_git_changes_rejects_invalid_objects(self, mock_run, tmp_path, caplog):
+        from host.launch import _copy_git_changes
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        source = session_dir / "git-copy"
+        source.mkdir()
+        (source / "objects" / "aa").mkdir(parents=True)
+        (source / "objects" / "aa" / "badpack").write_text("corrupt")
+        (source / "refs" / "heads").mkdir(parents=True)
+        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
+
+        mock_run.return_value = MagicMock(returncode=128, stdout="", stderr="fatal: bad object")
+
+        with caplog.at_level(logging.ERROR, logger="host.launch"):
+            result = _copy_git_changes(session_dir, repo)
+
+        assert result != 0
+        assert "git fsck failed" in caplog.text
+        assert not (repo / ".git" / "objects" / "aa" / "badpack").exists()
+        assert not (repo / ".git" / "refs" / "heads" / "agent-123").exists()
+
+    @patch("host.launch.subprocess.run")
+    def test_copy_git_changes_whitelists_refs(self, mock_run, tmp_path, caplog):
+        from host.launch import _copy_git_changes
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        source = session_dir / "git-copy"
+        source.mkdir()
+        (source / "objects").mkdir()
+        (source / "refs" / "heads").mkdir(parents=True)
+        (source / "refs" / "heads" / "agent-good").write_text("0123456789abcdef0123456789abcdef01234567\n")
+        (source / "refs" / "heads" / "agent-bad" / "evil").parent.mkdir(parents=True)
+        (source / "refs" / "heads" / "agent-bad" / "evil").write_text(
+            "fedcba9876543210fedcba9876543210fedcba98\n"
+        )
+        (source / "refs" / "heads" / "main").write_text("89abcdef0123456789abcdef0123456789abcdef\n")
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        with caplog.at_level(logging.WARNING, logger="host.git_overlay"):
+            result = _copy_git_changes(session_dir, repo)
+
+        assert result == 0
+        assert (repo / ".git" / "refs" / "heads" / "agent-good").read_text().strip() == \
+            "0123456789abcdef0123456789abcdef01234567"
+        assert not (repo / ".git" / "refs" / "heads" / "agent-bad" / "evil").exists()
+        assert not (repo / ".git" / "refs" / "heads" / "main").exists()
+        assert "skipped" in caplog.text.lower()
 
 
 # ── Git overlay wiring tests ────────────────────────────

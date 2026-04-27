@@ -7,6 +7,7 @@ Heavy lifting is delegated to workspace_setup, issue_dump, and docker_cmd.
 
 import argparse
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -20,18 +21,14 @@ from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
-from host.git_overlay import (
-    extract_commits,
-    is_fuse_overlayfs_available,
-    setup_git_copy,
-    setup_overlay,
-    teardown_overlay,
-)
+from host.git_overlay import extract_commits, is_fuse_overlayfs_available, setup_git_copy, setup_overlay, teardown_overlay
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
 from host.session_utils import get_repo_root, find_existing_session_by_prefix
 from host.workspace_setup import setup_workspace
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_names(issue_id: str, step: str, config):
@@ -78,19 +75,38 @@ def _teardown_git_overlay(git_mount_path: Path, session_dir: Path) -> None:
         shutil.rmtree(git_mount_path)
 
 
-def _extract_git_overlay(session_dir: Path, repo: Path) -> Path | None:
-    """Copy any new git state from the session-local mount back to .git."""
-    merged = session_dir / "git-merged"
-    if merged.exists():
-        extract_commits(session_dir / "git-upper", repo / ".git")
-        return merged
+def _copy_git_changes(session_dir: Path, repo: Path) -> int:
+    """Validate and copy back git objects and whitelisted refs."""
+    source_git = None
+    for candidate in (session_dir / "git-merged", session_dir / "git-copy"):
+        if candidate.exists():
+            source_git = candidate
+            break
+    if source_git is None:
+        return 0
 
-    copied = session_dir / "git-copy"
-    if copied.exists():
-        extract_commits(copied, repo / ".git")
-        return copied
+    fsck_result = subprocess.run(
+        ["git", "--git-dir", str(source_git), "fsck", "--no-dangling"],
+        capture_output=True,
+        text=True,
+    )
+    if fsck_result.returncode != 0:
+        details = (fsck_result.stderr or fsck_result.stdout or "").strip()
+        if not details:
+            details = "git fsck failed without output"
+        logger.error("git fsck failed for %s: %s", source_git, details)
+        return fsck_result.returncode or 1
 
-    return None
+    repo_git = repo / ".git"
+    skipped_refs = extract_commits(source_git, repo_git)
+
+    if skipped_refs:
+        logger.warning(
+            "Skipped non-whitelisted refs during copy-back: %s",
+            ", ".join(sorted(set(skipped_refs))),
+        )
+
+    return 0
 
 
 def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
@@ -145,11 +161,11 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
     Usage is logged for ALL sessions with usage data (any status/step).
     Proof-of-work comment is only posted for coder sessions in waiting:review.
     """
-    _extract_git_overlay(session_dir, repo)
+    copy_status = _copy_git_changes(session_dir, repo)
 
     state_file = session_dir / "state.json"
     if not state_file.exists():
-        return
+        return copy_status
 
     state = json.loads(state_file.read_text())
 
@@ -168,7 +184,7 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
 
     # Proof-of-work comment only for coder sessions that reached waiting:review
     if state.get("status") != "waiting:review" or step == "review":
-        return
+        return copy_status
 
     checkpoints = state.get("checkpoints", [])
     human_answers = state.get("human_answers", [])
@@ -217,6 +233,7 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
         print(f"Posted review summary to tracker for {issue_id[:SHORT_ID_LEN]}")
     except Exception as e:
         print(f"Failed to post review summary: {e}", file=sys.stderr)
+    return copy_status
 
 
 def main():
@@ -284,7 +301,9 @@ def main():
             git_mount_path=git_mount_path,
             overflow=overflow, agent_kind=actual_agent_kind,
         )
-        _post_container(session_dir, config, repo, args.issue_id, step=args.step)
+        post_status = _post_container(session_dir, config, repo, args.issue_id, step=args.step)
+        if isinstance(post_status, int) and post_status != 0:
+            returncode = post_status
     finally:
         _teardown_git_overlay(git_mount_path, session_dir)
 

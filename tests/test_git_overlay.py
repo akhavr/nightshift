@@ -97,6 +97,49 @@ def test_extract_commits_overwrites_refs(tmp_path):
     assert existing_ref.read_text() == "commit-b"
 
 
+def test_extract_commits_whitelists_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    (upper_dir / "objects").mkdir(parents=True)
+    (upper_dir / "refs" / "heads").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent-good").write_text("deadbeef")
+    (upper_dir / "refs" / "heads" / "agent-bad" / "evil").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent-bad" / "evil").write_text("badc0de")
+    (upper_dir / "refs" / "heads" / "main").write_text("cafebabe")
+
+    skipped = extract_commits(upper_dir, repo_git)
+
+    assert (repo_git / "refs" / "heads" / "agent-good").read_text() == "deadbeef"
+    assert not (repo_git / "refs" / "heads" / "agent-bad" / "evil").exists()
+    assert not (repo_git / "refs" / "heads" / "main").exists()
+    assert "refs/heads/main" in skipped
+    assert "refs/heads/agent-bad/evil" in skipped
+
+
+def test_extract_commits_whitelists_packed_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    (upper_dir / "objects").mkdir(parents=True)
+    (upper_dir / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef refs/heads/agent-good\n"
+        "cafebabecafebabecafebabecafebabecafebabe refs/heads/main\n"
+    )
+
+    skipped = extract_commits(upper_dir, repo_git)
+
+    assert (repo_git / "refs" / "heads" / "agent-good").read_text() == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+    assert not (repo_git / "refs" / "heads" / "main").exists()
+    assert not (repo_git / "packed-refs").exists()
+    assert "refs/heads/main" in skipped
+
+
 def test_extract_commits_still_skips_objects(tmp_path):
     """Regression test: extract_commits must skip existing read-only files.
 
