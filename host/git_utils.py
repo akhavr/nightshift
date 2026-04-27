@@ -111,3 +111,86 @@ def audit_worktree_symlinks(
                 escaping_symlinks.append((symlink_path, target_path))
 
     return escaping_symlinks
+
+
+def validate_git_objects(git_dir: Path) -> tuple[bool, str]:
+    """Run git fsck to validate git objects.
+
+    Args:
+        git_dir: Path to .git directory or worktree git dir
+
+    Returns:
+        (is_valid, error_message) tuple. is_valid is True if no corruption found.
+    """
+    if not git_dir.is_dir():
+        return True, ""
+
+    result = subprocess.run(
+        ["git", "fsck", "--connectivity-only"],
+        capture_output=True, text=True, cwd=str(git_dir),
+    )
+
+    # Filter out known noise (git-bug objects, unknown object types)
+    noise_patterns = [
+        "error: Unknown object type",
+        "error: invalid object",
+        "git-bug",
+        "dangling ",
+    ]
+
+    errors = []
+    for line in result.stderr.splitlines():
+        is_noise = any(p in line for p in noise_patterns)
+        if not is_noise and line.strip():
+            errors.append(line)
+
+    if errors:
+        return False, "\n".join(errors)
+    return True, ""
+
+
+def auto_commit_dirty_worktree(worktree: Path, message: str = "WIP: uncommitted agent changes") -> bool:
+    """Auto-commit any uncommitted changes in the worktree.
+
+    Args:
+        worktree: Path to the git worktree
+        message: Commit message to use
+
+    Returns:
+        True if a commit was made, False if nothing to commit or worktree doesn't exist
+    """
+    if not worktree.is_dir():
+        return False
+
+    # Check if there are uncommitted changes
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, cwd=str(worktree),
+    )
+    if status_result.returncode != 0:
+        return False
+
+    if not status_result.stdout.strip():
+        return False
+
+    # Stage all changes
+    add_result = subprocess.run(
+        ["git", "add", "-A"],
+        capture_output=True, text=True, cwd=str(worktree),
+    )
+    if add_result.returncode != 0:
+        import sys
+        print(f"Warning: git add failed: {add_result.stderr}", file=sys.stderr)
+        return False
+
+    # Commit
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", message],
+        capture_output=True, text=True, cwd=str(worktree),
+    )
+    if commit_result.returncode != 0:
+        import sys
+        print(f"Warning: git commit failed: {commit_result.stderr}", file=sys.stderr)
+        return False
+
+    return True

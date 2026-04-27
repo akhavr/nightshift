@@ -132,3 +132,96 @@ class TestAuditWorktreeSymlinks:
         link.symlink_to(target)
 
         assert audit_worktree_symlinks(worktree, workspace_root=tmp_path) == []
+
+
+from host.git_utils import validate_git_objects, auto_commit_dirty_worktree
+
+
+class TestValidateGitObjects:
+    def test_clean_repo_passes(self, tmp_path):
+        """A repo with no fsck errors passes validation."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        with patch("host.git_utils.subprocess.run") as mock_run:
+            mock_run.return_value = _completed(returncode=0)
+            is_valid, errors = validate_git_objects(git_dir)
+            assert is_valid is True
+            assert errors == ""
+
+    def test_corruption_detected(self, tmp_path):
+        """Real corruption errors are reported."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        with patch("host.git_utils.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                [], 1, stdout="", stderr="error: corrupt loose object abc123\n"
+            )
+            is_valid, errors = validate_git_objects(git_dir)
+            assert is_valid is False
+            assert "corrupt loose object" in errors
+
+    def test_git_bug_noise_filtered(self, tmp_path):
+        """Git-bug related warnings are ignored."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        with patch("host.git_utils.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout="", stderr="dangling blob abc123 (git-bug)\n"
+            )
+            is_valid, errors = validate_git_objects(git_dir)
+            assert is_valid is True
+
+    def test_unknown_object_type_filtered(self, tmp_path):
+        """Unknown object type errors (git-bug) are ignored."""
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        with patch("host.git_utils.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout="", stderr="error: Unknown object type 14\n"
+            )
+            is_valid, errors = validate_git_objects(git_dir)
+            assert is_valid is True
+
+    def test_nonexistent_dir_passes(self):
+        """Non-existent directory returns True (no corruption)."""
+        is_valid, errors = validate_git_objects(Path("/nonexistent/path"))
+        assert is_valid is True
+        assert errors == ""
+
+
+class TestAutoCommitDirtyWorktree:
+    def test_commits_dirty_worktree(self, tmp_path):
+        """Uncommitted changes get committed."""
+        with patch("host.git_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                _completed("M file.py\n"),  # status --porcelain
+                _completed(),  # git add -A
+                _completed(),  # git commit
+            ]
+            result = auto_commit_dirty_worktree(tmp_path)
+            assert result is True
+            assert mock_run.call_count == 3
+
+    def test_clean_worktree_no_commit(self, tmp_path):
+        """Clean worktree does not create a commit."""
+        with patch("host.git_utils.subprocess.run") as mock_run:
+            mock_run.return_value = _completed("")  # empty status
+            result = auto_commit_dirty_worktree(tmp_path)
+            assert result is False
+            assert mock_run.call_count == 1
+
+    def test_commit_failure_returns_false(self, tmp_path):
+        """Failed commit returns False."""
+        with patch("host.git_utils.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                _completed("M file.py\n"),  # status
+                _completed(),  # add
+                _completed(returncode=1),  # commit fails
+            ]
+            result = auto_commit_dirty_worktree(tmp_path)
+            assert result is False
+
+    def test_nonexistent_dir_returns_false(self):
+        """Non-existent directory returns False."""
+        result = auto_commit_dirty_worktree(Path("/nonexistent/path"))
+        assert result is False
