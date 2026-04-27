@@ -81,8 +81,9 @@ class TestCreateWorktree:
         issue_id = "abc123def456"
 
         # Simulate subprocess calls:
-        # 1. git branch          -> ok
-        # 2. git worktree add    -> ok (creates the wt dir with a file)
+        # 1. git cat-file -t     -> ok (verify base commit exists)
+        # 2. git branch          -> ok
+        # 3. git worktree add    -> ok (creates the wt dir with a file)
         # (WT-6: safe_prune is mocked, not called via subprocess)
         def side_effect(cmd, **kwargs):
             result = MagicMock(returncode=0, stderr="", stdout="")
@@ -114,9 +115,10 @@ class TestCreateWorktree:
         mock_safe_prune.assert_called_once_with(repo)
 
         # Correct git commands were called
-        assert mock_run.call_count == 2
-        assert mock_run.call_args_list[0][0][0] == ["git", "branch", branch, base_branch]
-        assert mock_run.call_args_list[1][0][0] == ["git", "worktree", "add", str(wt_path), branch]
+        assert mock_run.call_count == 3
+        assert mock_run.call_args_list[0][0][0] == ["git", "cat-file", "-t", base_branch]
+        assert mock_run.call_args_list[1][0][0] == ["git", "branch", branch, base_branch]
+        assert mock_run.call_args_list[2][0][0] == ["git", "worktree", "add", str(wt_path), branch]
 
     @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
@@ -127,8 +129,9 @@ class TestCreateWorktree:
         session_dir = tmp_path / "session"
 
         mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
-        # WT-6: safe_prune is mocked, so only 2 subprocess calls
+        # WT-6: safe_prune is mocked, so only 3 subprocess calls
         mock_run.side_effect = [
+            MagicMock(returncode=0),  # cat-file -t (verify base exists)
             MagicMock(returncode=0),  # branch
             MagicMock(returncode=1, stderr="fatal: already exists"),  # worktree add
         ]
