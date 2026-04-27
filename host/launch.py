@@ -21,7 +21,7 @@ from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
-from host.git_overlay import is_fuse_overlayfs_available, setup_git_copy, setup_overlay, teardown_overlay
+from host.git_overlay import extract_commits, is_fuse_overlayfs_available, setup_git_copy, setup_overlay, teardown_overlay
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
@@ -75,79 +75,6 @@ def _teardown_git_overlay(git_mount_path: Path, session_dir: Path) -> None:
         shutil.rmtree(git_mount_path)
 
 
-def _is_allowed_ref(ref_name: str) -> bool:
-    """Return True for refs allowed to copy back into the host repo."""
-    return ref_name.startswith("refs/heads/agent-")
-
-
-def _copy_objects(src_git: Path, dst_git: Path) -> None:
-    """Copy loose objects from the overlay git dir into the host git dir."""
-    objects_dir = src_git / "objects"
-    if not objects_dir.exists():
-        return
-    for path in objects_dir.rglob("*"):
-        if path.is_dir():
-            continue
-        rel = path.relative_to(src_git)
-        target = dst_git / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            shutil.copy2(path, target)
-
-
-def _copy_loose_refs(src_refs: Path, dst_git: Path) -> tuple[list[str], list[str]]:
-    """Copy loose refs that match the whitelist and report skipped refs."""
-    copied: list[str] = []
-    skipped: list[str] = []
-    if not src_refs.exists():
-        return copied, skipped
-
-    dst_refs = dst_git / "refs"
-    for path in src_refs.rglob("*"):
-        if path.is_dir():
-            continue
-        rel = path.relative_to(src_refs)
-        ref_name = f"refs/{rel.as_posix()}"
-        if not _is_allowed_ref(ref_name):
-            skipped.append(ref_name)
-            continue
-        target = dst_refs / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-        copied.append(ref_name)
-    return copied, skipped
-
-
-def _copy_packed_refs(src_git: Path, dst_git: Path, copied_refs: set[str]) -> list[str]:
-    """Copy allowed packed refs as loose refs in the host repo."""
-    packed_refs = src_git / "packed-refs"
-    skipped: list[str] = []
-    if not packed_refs.exists():
-        return skipped
-
-    dst_refs = dst_git / "refs"
-    for raw_line in packed_refs.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith("^"):
-            continue
-        try:
-            object_id, ref_name = line.split(" ", 1)
-        except ValueError:
-            continue
-        ref_name = ref_name.strip()
-        if not _is_allowed_ref(ref_name):
-            skipped.append(ref_name)
-            continue
-        if ref_name in copied_refs:
-            continue
-        rel = Path(*ref_name.split("/")[1:])
-        target = dst_refs / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f"{object_id}\n")
-        copied_refs.add(ref_name)
-    return skipped
-
-
 def _copy_git_changes(session_dir: Path, repo: Path) -> int:
     """Validate and copy back git objects and whitelisted refs."""
     source_git = None
@@ -171,11 +98,7 @@ def _copy_git_changes(session_dir: Path, repo: Path) -> int:
         return fsck_result.returncode or 1
 
     repo_git = repo / ".git"
-    repo_git.mkdir(parents=True, exist_ok=True)
-
-    _copy_objects(source_git, repo_git)
-    copied_refs, skipped_refs = _copy_loose_refs(source_git / "refs", repo_git)
-    skipped_refs.extend(_copy_packed_refs(source_git, repo_git, set(copied_refs)))
+    skipped_refs = extract_commits(source_git, repo_git)
 
     if skipped_refs:
         logger.warning(

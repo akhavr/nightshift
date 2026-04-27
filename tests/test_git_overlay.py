@@ -97,6 +97,24 @@ def test_extract_commits_overwrites_refs(tmp_path):
     assert existing_ref.read_text() == "commit-b"
 
 
+def test_extract_commits_whitelists_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    (upper_dir / "objects").mkdir(parents=True)
+    (upper_dir / "refs" / "heads").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent-test").write_text("deadbeef")
+    (upper_dir / "refs" / "heads" / "main").write_text("cafebabe")
+
+    skipped = extract_commits(upper_dir, repo_git)
+
+    assert (repo_git / "refs" / "heads" / "agent-test").read_text() == "deadbeef"
+    assert not (repo_git / "refs" / "heads" / "main").exists()
+    assert "refs/heads/main" in skipped
+
+
 def test_extract_commits_still_skips_objects(tmp_path):
     """Regression test: extract_commits must skip existing read-only files.
 
