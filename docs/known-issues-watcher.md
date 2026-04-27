@@ -147,6 +147,42 @@ Git creates the ref even if `base_branch` points to a non-existent commit.
 
 ---
 
+### 9. Ref Whitelist Regex Mismatch Loses Agent Commits
+
+**Problem:** The ref whitelist regex in `host/git_overlay.py` uses the wrong branch naming pattern, causing `extract_commits()` to skip copying agent branch refs back to the host repo. Commits are lost.
+
+**Symptoms:**
+- Agent completes work, commits inside container, tests pass
+- On host, files appear as untracked/modified, no commit exists
+- Session shows 0 CPS and step 0 despite successful work
+- `git log` in worktree shows no agent commits
+
+**Root cause:** Branch naming convention mismatch:
+```python
+# launch.py:43 - actual branch names use slash
+"branch": f"{prefix}/{short_id}"  # produces "agent/abc123"
+
+# git_overlay.py:12 - regex expects hyphen
+_ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/agent-[^/]+$")  # expects "agent-abc123"
+```
+
+The regex was written based on `worktree_name` (which uses hyphens: `agent-abc123`) instead of `branch` (which uses slashes: `agent/abc123`).
+
+**Why objects don't help:** Git objects ARE copied back (no filtering). But without the ref pointing to the commit, git doesn't know about the commit chain. Working directory changes persist (direct mount), but `git status` shows them as uncommitted.
+
+**Introduced:** Commit f7c75219 (GAP-001 security hardening, 2026-04-27)
+
+**Fix:** Change regex to match actual branch naming:
+```python
+_ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/(agent|review)/[^/]+$")
+```
+
+Security property preserved: `[^/]+` still blocks nested paths and traversal.
+
+**Status:** Open - needs fix
+
+---
+
 ## Monitoring Notes
 
 - `git-bug bug timed out after 30s` in logs indicates CLI tracker fallback with lock retry (expected when watcher not running)
