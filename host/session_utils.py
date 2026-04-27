@@ -340,13 +340,9 @@ def safe_prune(repo: Path) -> None:
 # ── Worktree cleanup ────────────────────────────────────
 
 def force_remove_dir(path: Path) -> None:
-    """Remove a directory, handling root-owned files from Docker.
-
-    Uses ignore_errors=True to handle race conditions where subdirs disappear
-    during iteration (e.g., concurrent git/fuse-overlayfs modifications).
-    """
+    """Remove a directory, handling root-owned files from Docker."""
     try:
-        shutil.rmtree(path, ignore_errors=True)
+        shutil.rmtree(path)
     except (PermissionError, OSError):
         subprocess.run(
             ["docker", "run", "--rm",

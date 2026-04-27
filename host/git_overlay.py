@@ -10,10 +10,8 @@ import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-# Retry configuration for cp -a failures (concurrent git operations)
 GIT_COPY_MAX_RETRIES = 3
-GIT_COPY_RETRY_DELAYS = [1, 2, 4]  # exponential backoff: 1s, 2s, 4s
+GIT_COPY_RETRY_DELAYS = [1, 2, 4]
 _ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/(agent|review)/[^/]+$")
 
 
@@ -51,11 +49,7 @@ def teardown_overlay(merged_path: Path) -> None:
 
 
 def setup_git_copy(repo_git: Path, session_dir: Path) -> Path:
-    """Fallback isolation: copy .git into a session-local directory.
-
-    Retries up to GIT_COPY_MAX_RETRIES times with exponential backoff
-    when cp fails (e.g., due to concurrent git operations locking files).
-    """
+    """Fallback isolation: copy .git into a session-local directory."""
     copy_dir = session_dir / "git-copy"
     copy_dir.parent.mkdir(parents=True, exist_ok=True)
     if copy_dir.exists():

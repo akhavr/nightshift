@@ -297,12 +297,12 @@ class TestSessionsDir:
 # ── force_remove_dir ──────────────────────────────────────────────────────────
 
 class TestForceRemoveDir:
-    def test_normal_case_calls_rmtree_with_ignore_errors(self, tmp_path):
+    def test_normal_case_calls_rmtree(self, tmp_path):
         target = tmp_path / "to_remove"
         target.mkdir()
         with patch("host.session_utils.shutil.rmtree") as mock_rmtree:
             force_remove_dir(target)
-        mock_rmtree.assert_called_once_with(target, ignore_errors=True)
+        mock_rmtree.assert_called_once_with(target)
 
     def test_removes_real_directory(self, tmp_path):
         target = tmp_path / "to_remove"
@@ -317,12 +317,9 @@ class TestForceRemoveDir:
 
         rmtree_calls = []
 
-        def rmtree_side_effect(path, ignore_errors=False):
+        def rmtree_side_effect(path):
             call_count = len(rmtree_calls)
             rmtree_calls.append(path)
-            if ignore_errors:
-                # With ignore_errors=True, shutil.rmtree catches exceptions internally
-                return
             if call_count == 0:
                 raise PermissionError("Permission denied")
             # second call (after docker) succeeds silently
@@ -331,14 +328,17 @@ class TestForceRemoveDir:
              patch("host.session_utils.subprocess.run") as mock_run:
             force_remove_dir(target)
 
-        # With ignore_errors=True, Docker fallback is NOT triggered
-        # because shutil.rmtree handles errors internally
+        # Docker should have been called
         docker_calls = [c for c in mock_run.call_args_list
-                        if c.args and c.args[0][0] == "docker"]
-        assert len(docker_calls) == 0
+                        if c.args[0][0] == "docker"]
+        assert len(docker_calls) == 1
+        docker_cmd = docker_calls[0].args[0]
+        assert "ubuntu:24.04" in docker_cmd
+        assert "rm" in docker_cmd
+        assert "-rf" in docker_cmd
 
-        # rmtree should have been called once with ignore_errors=True
-        assert mock_rmtree.call_count == 1
+        # rmtree should have been called twice
+        assert mock_rmtree.call_count == 2
 
     def test_permission_error_docker_volume_includes_path(self, tmp_path):
         target = tmp_path / "locked_dir"
@@ -346,10 +346,8 @@ class TestForceRemoveDir:
 
         call_count = [0]
 
-        def rmtree_side_effect(path, ignore_errors=False):
+        def rmtree_side_effect(path):
             call_count[0] += 1
-            if ignore_errors:
-                return  # ignore_errors=True means no exception raised
             if call_count[0] == 1:
                 raise PermissionError("denied")
 
@@ -357,10 +355,10 @@ class TestForceRemoveDir:
              patch("host.session_utils.subprocess.run") as mock_run:
             force_remove_dir(target)
 
-        # With ignore_errors=True, no Docker fallback is needed
-        docker_calls = [c for c in mock_run.call_args_list
-                        if c.args and c.args[0][0] == "docker"]
-        assert len(docker_calls) == 0
+        docker_call = next(c for c in mock_run.call_args_list
+                           if c.args[0][0] == "docker")
+        cmd = docker_call.args[0]
+        assert any(str(target) in part for part in cmd)
 
     def test_permission_error_file_not_found_after_docker_is_ok(self, tmp_path):
         target = tmp_path / "locked_dir"
@@ -368,52 +366,15 @@ class TestForceRemoveDir:
 
         call_count = [0]
 
-        def rmtree_side_effect(path, ignore_errors=False):
+        def rmtree_side_effect(path):
             call_count[0] += 1
-            if ignore_errors:
-                return  # ignore_errors=True means no exception raised
             if call_count[0] == 1:
                 raise PermissionError("denied")
             raise FileNotFoundError("already gone")
 
         with patch("host.session_utils.shutil.rmtree", side_effect=rmtree_side_effect), \
              patch("host.session_utils.subprocess.run"):
-            # Should not raise - ignore_errors=True handles everything
-            force_remove_dir(target)
-
-    def test_force_remove_dir_ignores_missing_subdirs(self, tmp_path):
-        """force_remove_dir() succeeds even if subdirs disappear during iteration."""
-        target = tmp_path / "target"
-        target.mkdir()
-        (target / "subdir").mkdir()
-        (target / "file.txt").write_text("content")
-
-        # Should succeed without raising
-        force_remove_dir(target)
-        assert not target.exists()
-
-    def test_force_remove_dir_race_condition(self, tmp_path):
-        """Concurrent modification during rmtree doesn't raise exception."""
-        import shutil
-        from unittest.mock import patch
-
-        target = tmp_path / "target"
-        target.mkdir()
-        (target / "tags").mkdir()
-
-        # Simulate race: directory removed during iteration
-        original_rmtree = shutil.rmtree
-        call_count = [0]
-
-        def racing_rmtree(path, ignore_errors=False):
-            call_count[0] += 1
-            if call_count[0] == 1 and not ignore_errors:
-                # Simulate FileNotFoundError for 'tags' subdirectory
-                raise FileNotFoundError(2, "No such file or directory", "tags")
-            return original_rmtree(path, ignore_errors=ignore_errors)
-
-        with patch("shutil.rmtree", side_effect=racing_rmtree):
-            # With ignore_errors=True, this should not raise
+            # Should not raise
             force_remove_dir(target)
 
 

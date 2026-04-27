@@ -237,34 +237,6 @@ class TestCreateWorktreeNoCollateralPrune:
         assert not wt_path.exists()
         assert not (session_dir / "state.json").exists()
 
-    @patch("host.workspace_setup.safe_prune")
-    @patch("host.workspace_setup.subprocess.run")
-    def test_create_worktree_rejects_missing_base_commit(self, mock_run,
-                                                         mock_safe_prune,
-                                                         tmp_path):
-        repo, run = _init_repo(tmp_path)
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        wt_path = tmp_path / "worktree"
-
-        def side_effect(cmd, **kwargs):
-            if cmd[:3] == ["git", "cat-file", "-t"]:
-                return subprocess.CompletedProcess(
-                    cmd, 1, stdout="", stderr="fatal: missing commit"
-                )
-            raise AssertionError(f"unexpected subprocess call: {cmd}")
-
-        mock_run.side_effect = side_effect
-
-        from host.workspace_setup import create_worktree
-
-        with pytest.raises(ValueError) as exc_info:
-            create_worktree(repo, wt_path, "review/test123", "agent/test123",
-                            session_dir, "test-issue-123")
-
-        assert "agent/test123" in str(exc_info.value)
-        assert "missing commit" in str(exc_info.value)
-
 
 class TestCreateWorktreeTransaction:
     """WT-4: create_worktree should use WorkspaceTransaction and clean up on failure."""

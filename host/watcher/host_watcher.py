@@ -511,7 +511,6 @@ class HostWatcher:
                 self._reload.clear()
                 self.reload_config()
             self._check_gitbug_cache_health()
-            self._check_orphan_refs()
             if not self._check_worktree_integrity():
                 break
             if not self._check_disk_space():
