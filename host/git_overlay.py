@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 import logging
 import shutil
 import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+_ALLOWED_AGENT_REF_RE = re.compile(r"^refs/heads/agent-[^/]+$")
 
 
 def is_fuse_overlayfs_available() -> bool:
@@ -88,7 +90,7 @@ def _copy_file(src: Path, dst: Path, overwrite: bool = False) -> None:
 
 def _is_allowed_ref(ref_name: str) -> bool:
     """Return True for refs allowed to copy back into the host repo."""
-    return ref_name.startswith("refs/heads/agent-")
+    return _ALLOWED_AGENT_REF_RE.fullmatch(ref_name) is not None
 
 
 def _copy_loose_refs(src_refs: Path, dst_git: Path) -> tuple[list[str], list[str]]:

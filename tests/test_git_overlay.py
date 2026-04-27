@@ -105,14 +105,18 @@ def test_extract_commits_whitelists_refs(tmp_path):
 
     (upper_dir / "objects").mkdir(parents=True)
     (upper_dir / "refs" / "heads").mkdir(parents=True)
-    (upper_dir / "refs" / "heads" / "agent-test").write_text("deadbeef")
+    (upper_dir / "refs" / "heads" / "agent-good").write_text("deadbeef")
+    (upper_dir / "refs" / "heads" / "agent-bad" / "evil").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent-bad" / "evil").write_text("badc0de")
     (upper_dir / "refs" / "heads" / "main").write_text("cafebabe")
 
     skipped = extract_commits(upper_dir, repo_git)
 
-    assert (repo_git / "refs" / "heads" / "agent-test").read_text() == "deadbeef"
+    assert (repo_git / "refs" / "heads" / "agent-good").read_text() == "deadbeef"
+    assert not (repo_git / "refs" / "heads" / "agent-bad" / "evil").exists()
     assert not (repo_git / "refs" / "heads" / "main").exists()
     assert "refs/heads/main" in skipped
+    assert "refs/heads/agent-bad/evil" in skipped
 
 
 def test_extract_commits_still_skips_objects(tmp_path):
