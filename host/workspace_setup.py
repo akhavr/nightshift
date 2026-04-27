@@ -11,8 +11,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.constants import MERGE_NEEDED_FILENAME
+from core.workspace_transaction import WorkspaceTransaction
 from host.git_utils import fetch_and_resolve_ref
 from host.session_utils import force_remove_dir, safe_prune
+
+
+def _cleanup_partial_worktree(wt_path: Path) -> None:
+    """Remove a partially created worktree directory if it exists."""
+    if wt_path.exists():
+        force_remove_dir(wt_path)
 
 
 def create_worktree(repo: Path, wt_path: Path, branch: str,
@@ -38,24 +45,37 @@ def create_worktree(repo: Path, wt_path: Path, branch: str,
     )
     if result.returncode != 0:
         print(f"Failed to create worktree:\n{result.stderr}", file=sys.stderr)
+        _cleanup_partial_worktree(wt_path)
         sys.exit(1)
 
-    gitignore_src = repo / ".gitignore"
-    gitignore_dst = wt_path / ".gitignore"
-    if gitignore_src.exists() and not gitignore_dst.exists():
-        shutil.copy2(str(gitignore_src), str(gitignore_dst))
+    try:
+        with WorkspaceTransaction(wt_path):
+            gitignore_src = repo / ".gitignore"
+            gitignore_dst = wt_path / ".gitignore"
+            if gitignore_src.exists() and not gitignore_dst.exists():
+                shutil.copy2(str(gitignore_src), str(gitignore_dst))
 
-    files = [f for f in wt_path.iterdir() if f.name != ".git"]
-    if not files:
-        print(f"Worktree at {wt_path} is empty — check base_branch", file=sys.stderr)
+            files = [f for f in wt_path.iterdir() if f.name != ".git"]
+            if not files:
+                print(f"Worktree at {wt_path} is empty — check base_branch",
+                      file=sys.stderr)
+                raise RuntimeError("empty worktree")
+
+            (session_dir / "state.json").write_text(json.dumps({
+                "issue_id": issue_id, "branch": branch,
+                "status": "starting", "step": 0,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "checkpoints": [], "human_answers": [],
+            }, indent=2))
+    except Exception as exc:
+        print(f"Failed to initialize worktree at {wt_path}: {exc}",
+              file=sys.stderr)
+        state_file = session_dir / "state.json"
+        if state_file.exists():
+            state_file.unlink()
+        _cleanup_partial_worktree(wt_path)
         sys.exit(1)
 
-    (session_dir / "state.json").write_text(json.dumps({
-        "issue_id": issue_id, "branch": branch,
-        "status": "starting", "step": 0,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "checkpoints": [], "human_answers": [],
-    }, indent=2))
     print(f"Created worktree at {wt_path}")
 
 
