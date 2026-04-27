@@ -967,14 +967,15 @@ class TestCopyGitChanges:
         source.mkdir()
         (source / "objects").mkdir()
         (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
+        (source / "refs" / "heads" / "agent" / "123").parent.mkdir(parents=True)
+        (source / "refs" / "heads" / "agent" / "123").write_text("0123456789abcdef0123456789abcdef01234567\n")
 
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         _copy_git_changes(session_dir, repo)
 
         mock_run.assert_called_once_with(
-            ["git", "--git-dir", str(source), "fsck", "--no-dangling"],
+            ["git", "--git-dir", str(source), "fsck", "--connectivity-only"],
             capture_output=True,
             text=True,
         )

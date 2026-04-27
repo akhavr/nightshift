@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.protocols import SHORT_ID_LEN, TrackerComment, TrackerIssue
+from adapters.trackers.git_bug_graphql import GitBugGraphQLError
 
 
 class FakeResponse:
@@ -261,6 +262,43 @@ def test_list_issues_queries_all(graphql_tracker, monkeypatch):
 
     assert [issue.id for issue in issues] == ["abc123", "def456"]
     assert all(isinstance(issue, TrackerIssue) for issue in issues)
+    tracker.shutdown()
+
+
+def test_stale_cache_auto_recovery(graphql_tracker, monkeypatch):
+    tracker, _popen, _proc = graphql_tracker
+    bug = bug_payload("abc123", "open")
+    bug_nodes = MagicMock(side_effect=[
+        RuntimeError("git-bug GraphQL error: [{'message': \"bug doesn't exist\", 'path': ['repository', 'allBugs', 'nodes', 0, 'comments']}]"),
+        [bug],
+    ])
+    monkeypatch.setattr(tracker, "_bug_nodes", bug_nodes)
+    rebuild_cache = MagicMock()
+    monkeypatch.setattr(tracker, "rebuild_cache", rebuild_cache)
+
+    issues = tracker.list_issues()
+
+    assert [issue.id for issue in issues] == ["abc123"]
+    rebuild_cache.assert_called_once()
+    assert bug_nodes.call_count == 2
+    tracker.shutdown()
+
+
+def test_stale_cache_recovery_logs_bug_id(graphql_tracker, monkeypatch, caplog):
+    tracker, _popen, _proc = graphql_tracker
+    bug = bug_payload("abc123", "open")
+    error = GitBugGraphQLError(
+        [{"message": "bug doesn't exist"}],
+        {"repository": {"allBugs": {"nodes": [{"id": "abc123"}]}}},
+    )
+    bug_nodes = MagicMock(side_effect=[error, [bug]])
+    monkeypatch.setattr(tracker, "_bug_nodes", bug_nodes)
+    monkeypatch.setattr(tracker, "rebuild_cache", MagicMock())
+
+    with caplog.at_level("WARNING"):
+        tracker.list_issues()
+
+    assert "bug=abc123" in caplog.text
     tracker.shutdown()
 
 

@@ -182,6 +182,33 @@ def _setup_conflict_marker_repo(tmp_path):
     return repo, run, pre_merge, ns_dir
 
 
+def _setup_symlink_accept_repo(tmp_path):
+    """Create a repo/worktree/session setup for symlink-audit accept tests."""
+    repo, run = _init_repo(tmp_path)
+
+    run("git", "checkout", "-b", "agent/sym123")
+    (repo / "agent.txt").write_text("agent work\n")
+    run("git", "add", ".")
+    run("git", "commit", "-m", "agent commit")
+    run("git", "checkout", "main")
+
+    wt_dir = repo / ".worktrees" / "agent-sym123"
+    wt_dir.parent.mkdir(parents=True, exist_ok=True)
+    run("git", "worktree", "add", str(wt_dir), "agent/sym123")
+
+    ns_dir = repo / ".nightshift" / "sessions" / "sym123"
+    ns_dir.mkdir(parents=True)
+    (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+    return repo, run, wt_dir, ns_dir
+
+
 def test_accept_aborts_on_conflict_markers(tmp_path):
     """cmd_accept should abort and reset the merge if conflict markers are found."""
     repo, run, pre_merge, ns_dir = _setup_conflict_marker_repo(tmp_path)
@@ -189,6 +216,7 @@ def test_accept_aborts_on_conflict_markers(tmp_path):
     with patch("host.cli.repo_root", return_value=repo), \
          patch("host.cli.resolve_session", return_value="test789"), \
          patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+         patch("host.cli.audit_worktree_symlinks", return_value=[]), \
          patch("host.cli._report_accept_failure") as mock_report:
         mock_tracker.return_value = MagicMock()
         args = MagicMock()
