@@ -80,7 +80,37 @@ This document tracks known issues with the nightshift watcher and their resoluti
 
 ## Open Issues
 
-None currently tracked
+### 7. Orphan Review Refs After Failed Overlay Teardown
+
+**Problem:** Review session refs can be left pointing to non-existent commits, corrupting git operations across the repo.
+
+**Symptoms:**
+- `git show-ref` fails with "bad ref refs/heads/review/xxx"
+- `git fsck` reports "invalid sha1 pointer"
+- git-bug GraphQL queries fail with cascading errors ("bug doesn't exist")
+
+**Root cause:** During git overlay teardown, the ref copy-back can succeed while the object copy-back fails (e.g., due to fsck errors, race conditions, or overlay unmount timing). This leaves a ref pointing to a commit that was never copied to the main repo.
+
+**Sequence:**
+1. Review session runs in git overlay (session-dir/git-merged or git-copy)
+2. Agent creates commits in the overlay
+3. Overlay teardown begins: `_copy_git_changes()` called
+4. Ref `refs/heads/review/xxx` is copied to main repo
+5. Object copy fails or is skipped (fsck error, missing objects)
+6. Orphan ref remains pointing to non-existent commit
+
+**Manual fix:**
+```bash
+# Find orphan refs
+git fsck 2>&1 | grep "invalid sha1 pointer"
+
+# Delete each orphan ref
+git update-ref -d refs/heads/review/<session-id>
+```
+
+**Proper fix needed:** GAP-001's `extract_commits()` should verify target commits exist before copying refs. Or: copy objects first, verify, then copy refs atomically.
+
+**Status:** Open - manual cleanup required when encountered
 
 ---
 
