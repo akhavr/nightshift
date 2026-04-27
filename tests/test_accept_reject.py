@@ -386,6 +386,7 @@ class TestAcceptSanitizesConfig:
         with patch("host.cli.repo_root", return_value=repo), \
              patch("host.cli.resolve_session", return_value="sss123"), \
              patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli.audit_worktree_symlinks", return_value=[]), \
              patch("host.cli.archive_session"), \
              patch("host.cli.remove_worktree"), \
              patch("host.cli._cleanup_review_artifacts"):
@@ -456,7 +457,8 @@ class TestAcceptConflictHandling:
              patch("host.cli.resolve_session", return_value="conf123"), \
              patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
              patch("host.cli._report_accept_failure") as mock_report, \
-             patch("host.cli.check_branch_not_behind_base", return_value=None):
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.audit_worktree_symlinks", return_value=[]):
             mock_tracker.return_value = MagicMock()
             args = MagicMock()
             args.issue_id = "conf123"
@@ -495,7 +497,8 @@ class TestAcceptConflictHandling:
              patch("host.cli.resolve_session", return_value="conf123"), \
              patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
              patch("host.cli._report_accept_failure"), \
-             patch("host.cli.check_branch_not_behind_base", return_value=None):
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.audit_worktree_symlinks", return_value=[]):
             mock_tracker.return_value = MagicMock()
             args = MagicMock()
             args.issue_id = "conf123"
@@ -518,3 +521,122 @@ class TestAcceptConflictHandling:
         # Ensure main branch is still checked out (not on agent branch)
         current_branch = run("git", "branch", "--show-current").stdout.strip()
         assert current_branch == "main"
+
+
+def _setup_symlink_accept_repo(tmp_path):
+    """Create a repo/worktree/session setup for symlink-audit accept tests."""
+    repo, run = _init_repo(tmp_path)
+
+    run("git", "checkout", "-b", "agent/sym123")
+    (repo / "agent.txt").write_text("agent work\n")
+    run("git", "add", ".")
+    run("git", "commit", "-m", "agent commit")
+    run("git", "checkout", "main")
+
+    wt_dir = repo / ".worktrees" / "agent-sym123"
+    wt_dir.parent.mkdir(parents=True, exist_ok=True)
+    run("git", "worktree", "add", str(wt_dir), "agent/sym123")
+
+    ns_dir = repo / ".nightshift" / "sessions" / "sym123"
+    ns_dir.mkdir(parents=True)
+    (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+    return repo, run, wt_dir, ns_dir
+
+
+class TestAcceptSymlinkAudit:
+    """Tests that cmd_accept rejects symlink escapes before merge."""
+
+    def test_accept_rejects_external_symlinks(self, tmp_path):
+        repo, run, wt_dir, ns_dir = _setup_symlink_accept_repo(tmp_path)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("escape target\n")
+        (wt_dir / "escape.txt").symlink_to(outside)
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="sym123"), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli._report_accept_failure") as mock_report, \
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.audit_worktree_symlinks", return_value=[(wt_dir / "escape.txt", outside.resolve())]), \
+             patch("host.cli.merge_with_rebase_fallback") as mock_merge:
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "sym123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_accept(args)
+
+            assert exc_info.value.code == 1
+
+        mock_merge.assert_not_called()
+        mock_report.assert_called_once()
+        call_msg = mock_report.call_args[0][3]
+        assert "symlink" in call_msg.lower()
+        assert "escape.txt" in call_msg
+
+    def test_accept_allows_internal_symlinks(self, tmp_path):
+        repo, run, wt_dir, ns_dir = _setup_symlink_accept_repo(tmp_path)
+        internal_target = wt_dir / "target.txt"
+        internal_target.write_text("inside\n")
+        (wt_dir / "internal.txt").symlink_to(internal_target)
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="sym123"), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli._report_accept_failure") as mock_report, \
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.audit_worktree_symlinks", return_value=[]), \
+             patch("host.cli.merge_with_rebase_fallback") as mock_merge, \
+             patch("host.cli.verify_no_conflict_markers"), \
+             patch("host.cli.archive_session"), \
+             patch("host.cli.remove_worktree"), \
+             patch("host.cli._cleanup_review_artifacts"):
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "sym123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            cmd_accept(args)
+
+        mock_report.assert_not_called()
+        mock_merge.assert_called_once()
+
+    def test_accept_allows_gitignored_symlinks(self, tmp_path):
+        repo, run, wt_dir, ns_dir = _setup_symlink_accept_repo(tmp_path)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("escape target\n")
+        gitignored_dir = wt_dir / ".venv"
+        gitignored_dir.mkdir()
+        (gitignored_dir / "python").symlink_to(outside)
+        (wt_dir / ".gitignore").write_text(".venv/\n")
+
+        with patch("host.cli.repo_root", return_value=repo), \
+             patch("host.cli.resolve_session", return_value="sym123"), \
+             patch("host.cli.get_tracker_with_fallback") as mock_tracker, \
+             patch("host.cli._report_accept_failure") as mock_report, \
+             patch("host.cli.check_branch_not_behind_base", return_value=None), \
+             patch("host.cli.merge_with_rebase_fallback") as mock_merge, \
+             patch("host.cli.verify_no_conflict_markers"), \
+             patch("host.cli.archive_session"), \
+             patch("host.cli.remove_worktree"), \
+             patch("host.cli._cleanup_review_artifacts"):
+            mock_tracker.return_value = MagicMock()
+            args = MagicMock()
+            args.issue_id = "sym123"
+            args.workflow = str(repo / "WORKFLOW.md")
+
+            from host.cli import cmd_accept
+            cmd_accept(args)
+
+        mock_report.assert_not_called()
+        mock_merge.assert_called_once()
