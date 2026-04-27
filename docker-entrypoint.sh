@@ -14,7 +14,20 @@ sanitize_core_worktree() {
 }
 
 cleanup_workspace() {
-    python3 /opt/nightshift/entrypoint.py --cleanup 2>/dev/null || true
+    cleanup_status=0
+    if python3 /opt/nightshift/entrypoint.py --cleanup 2>/dev/null; then
+        cleanup_status=0
+    else
+        cleanup_status=$?
+    fi
+
+    if [ "$cleanup_status" -ne 0 ]; then
+        WORKTREE_PATH="${WORKTREE_PATH:-/workspace}"
+        if [ -n "${ORIGINAL_GIT_CONTENT_FILE:-}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ] && [ -f "$WORKTREE_PATH/.git" ]; then
+            cp "$ORIGINAL_GIT_CONTENT_FILE" "$WORKTREE_PATH/.git" 2>/dev/null || true
+            echo "Restored .git pointer from shell fallback"
+        fi
+    fi
     sanitize_core_worktree exit
 }
 trap cleanup_workspace EXIT
@@ -51,6 +64,7 @@ fi
 if [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
     export GIT_DIR="/repo-git/worktrees/${WORKTREE_NAME}"
     export GIT_WORK_TREE="/workspace"
+    export WORKTREE_PATH="/workspace"
 fi
 
 # Save the original .git pointer for the exit cleanup helper.

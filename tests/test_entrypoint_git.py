@@ -78,10 +78,22 @@ set -eu
 
 export GIT_DIR="{git_dir}"
 export GIT_WORK_TREE="{worktree}"
+export WORKTREE_PATH="{worktree}"
+export ORIGINAL_GIT_CONTENT_FILE="{original_git_file}"
 
 cleanup() {{
-    ORIGINAL_GIT_CONTENT_FILE="{original_git_file}" WORKTREE_PATH="{worktree}" GIT_DIR="{git_dir}" \\
-        python3 /workspace/entrypoint.py --cleanup
+    cleanup_status=0
+    if python3 /workspace/entrypoint.py --cleanup; then
+        cleanup_status=0
+    else
+        cleanup_status=$?
+    fi
+
+    if [ "$cleanup_status" -ne 0 ]; then
+        if [ -n "${{ORIGINAL_GIT_CONTENT_FILE:-}}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ] && [ -f "$WORKTREE_PATH/.git" ]; then
+            cp "$ORIGINAL_GIT_CONTENT_FILE" "$WORKTREE_PATH/.git" 2>/dev/null || true
+        fi
+    fi
 }}
 trap cleanup EXIT
 
@@ -281,6 +293,35 @@ class TestGitPointerRestoration:
         env = {
             "HOME": str(tmp_path),
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        assert result.returncode == 1
+        assert git_file.read_text() == original_content
+
+    def test_git_pointer_restored_when_cleanup_helper_fails(self, tmp_path):
+        """Shell fallback restores .git when the Python cleanup helper cannot run."""
+        _, worktree, git_dir = _init_repo_with_worktree(tmp_path)
+        git_file = worktree / ".git"
+        original_content = git_file.read_text()
+        script = _write_cleanup_harness(tmp_path, worktree, git_dir, exit_code=1)
+
+        fake_bin = tmp_path / "fake-bin"
+        fake_bin.mkdir()
+        fake_python = fake_bin / "python3"
+        fake_python.write_text("#!/bin/sh\nexit 1\n")
+        fake_python.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "WORKTREE_PATH": str(worktree),
         }
         result = subprocess.run(
             ["/bin/sh", str(script)],
