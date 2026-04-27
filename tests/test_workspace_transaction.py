@@ -8,6 +8,8 @@ import pytest
 from core.workspace_transaction import (
     WorktreeCorruptError,
     check_worktree_integrity,
+    TransactionError,
+    WorkspaceTransaction,
 )
 
 
@@ -66,3 +68,50 @@ def test_check_worktree_integrity_auto_repair(tmp_path):
         capture_output=True,
         text=True,
     )
+
+
+def test_context_manager_restores_git_pointer(tmp_path):
+    """WorkspaceTransaction restores .git content on normal exit."""
+    worktree = _make_worktree(tmp_path)
+    git_file = worktree / ".git"
+    original = git_file.read_text()
+
+    with WorkspaceTransaction(worktree) as txn:
+        txn.rewrite_git_pointer("gitdir: /tmp/other-metadata\n")
+        assert git_file.read_text() == "gitdir: /tmp/other-metadata\n"
+
+    assert git_file.read_text() == original
+
+
+def test_exception_triggers_restore(tmp_path):
+    """WorkspaceTransaction restores .git content even if the body raises."""
+    worktree = _make_worktree(tmp_path)
+    git_file = worktree / ".git"
+    original = git_file.read_text()
+
+    with pytest.raises(RuntimeError):
+        with WorkspaceTransaction(worktree) as txn:
+            txn.rewrite_git_pointer("gitdir: /tmp/temporary-metadata\n")
+            raise RuntimeError("boom")
+
+    assert git_file.read_text() == original
+
+
+def test_rewrite_git_pointer(tmp_path):
+    """rewrite_git_pointer updates the .git file in place."""
+    worktree = _make_worktree(tmp_path)
+    git_file = worktree / ".git"
+
+    with WorkspaceTransaction(worktree) as txn:
+        txn.rewrite_git_pointer("gitdir: /tmp/new-pointer\n")
+        assert git_file.read_text() == "gitdir: /tmp/new-pointer\n"
+
+
+def test_nested_transactions_error(tmp_path):
+    """Nested WorkspaceTransaction usage is rejected."""
+    worktree = _make_worktree(tmp_path)
+
+    with WorkspaceTransaction(worktree):
+        with pytest.raises(TransactionError):
+            with WorkspaceTransaction(worktree):
+                pass

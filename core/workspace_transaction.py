@@ -4,13 +4,53 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+_thread_state = threading.local()
 
 
 class WorktreeCorruptError(RuntimeError):
     """Raised when a worktree's git metadata is missing or invalid."""
+
+
+class TransactionError(RuntimeError):
+    """Raised when workspace transactions are nested in the same thread."""
+
+
+class WorkspaceTransaction:
+    """Context manager that temporarily rewrites a worktree's .git pointer."""
+
+    def __init__(self, worktree_path: Path):
+        self.worktree_path = Path(worktree_path)
+        self.active = False
+        self._git_file = self.worktree_path / ".git"
+        self._original_git_content: str | None = None
+
+    def __enter__(self) -> "WorkspaceTransaction":
+        if getattr(_thread_state, "active_transaction", None) is not None:
+            raise TransactionError(
+                "WorkspaceTransaction cannot be nested in the same thread"
+            )
+
+        self._original_git_content = self._git_file.read_text()
+        _thread_state.active_transaction = self
+        self.active = True
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        try:
+            if self._original_git_content is not None:
+                self._git_file.write_text(self._original_git_content)
+        finally:
+            self.active = False
+            if getattr(_thread_state, "active_transaction", None) is self:
+                _thread_state.active_transaction = None
+        return False
+
+    def rewrite_git_pointer(self, new_content: str) -> None:
+        self._git_file.write_text(new_content)
 
 
 def repair_worktree(worktree_path: Path) -> None:
