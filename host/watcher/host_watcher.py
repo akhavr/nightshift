@@ -114,6 +114,66 @@ def _diff_config(old: WorkflowConfig, new: WorkflowConfig) -> list[str]:
     return changes
 
 
+def detect_orphan_refs(repo: Path) -> list[str]:
+    """Return refs under agent/review branches that point to missing commits."""
+    result = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/heads/agent/",
+            "refs/heads/review/",
+        ],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        log.warning(
+            "Failed to enumerate agent/review refs for orphan detection: %s",
+            result.stderr.strip() or result.stdout.strip(),
+        )
+
+    orphans: list[str] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            log.warning("Skipping malformed ref line during orphan detection: %r", line)
+            continue
+        ref, sha = parts
+        verify = subprocess.run(
+            ["git", "cat-file", "-t", sha],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+        )
+        if verify.returncode != 0 or verify.stdout.strip() != "commit":
+            orphans.append(ref)
+    return orphans
+
+
+def cleanup_orphan_refs(repo: Path, refs: list[str]) -> None:
+    """Delete orphaned refs from the repository."""
+    for ref in refs:
+        result = subprocess.run(
+            ["git", "update-ref", "-d", ref],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            log.warning("Deleted orphan ref: %s", ref)
+        else:
+            log.warning(
+                "Failed to delete orphan ref %s: %s",
+                ref,
+                result.stderr.strip() or result.stdout.strip(),
+            )
+
+
 class HostWatcher:
     """Coordinator: lifecycle orchestration for the watcher subsystem.
 
@@ -142,6 +202,7 @@ class HostWatcher:
         self._socket_restart_count = 0
         self._socket_last_restart: float = 0.0
         self._last_gitbug_cache_health_check: float = 0.0
+        self._startup_orphan_refs_checked = False
 
         tg_level = self._telegram_level_from_config()
         self.telegram = TelegramRelay(
@@ -216,6 +277,24 @@ class HostWatcher:
         if self._writer is not None:
             return self._writer.tracker
         return self._tracker
+
+    def _check_orphan_refs(self):
+        """Detect and clean refs that point to missing commits."""
+        try:
+            orphan_refs = detect_orphan_refs(self.repo_dir)
+        except Exception as e:
+            log.warning("Orphan ref check failed: %s", e)
+            return
+        if orphan_refs:
+            log.warning("Orphan agent/review refs detected: %s", ", ".join(orphan_refs))
+            cleanup_orphan_refs(self.repo_dir, orphan_refs)
+
+    def _cleanup_orphan_refs_once(self):
+        """Run the orphan-ref sweep only once during startup."""
+        if self._startup_orphan_refs_checked:
+            return
+        self._startup_orphan_refs_checked = True
+        self._check_orphan_refs()
 
     def _clear_gitbug_cache(self) -> bool:
         """Clear the persisted git-bug cache if the tracker supports it."""
@@ -403,6 +482,9 @@ class HostWatcher:
         # Remove stale blocked:<id> labels where the blocking issue is already closed
         self.monitor.cleanup_stale_blocked_labels()
 
+        # Clean up orphaned agent/review refs before entering the main loop
+        self._cleanup_orphan_refs_once()
+
         log.info(f"Watching {self.sessions_dir}")
         if self.telegram.enabled:
             log.info("Telegram polling enabled")
@@ -429,6 +511,7 @@ class HostWatcher:
                 self._reload.clear()
                 self.reload_config()
             self._check_gitbug_cache_health()
+            self._check_orphan_refs()
             if not self._check_worktree_integrity():
                 break
             if not self._check_disk_space():
