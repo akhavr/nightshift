@@ -249,6 +249,9 @@ def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
         details = _format_conflict_details("Rebase", exc.stderr, exc.conflicting_files)
         _pop_stash_if_needed(worktree_path, had_stash, "after rebase abort")
         return RebaseResult(success=False, conflict_details=details)
+    except RuntimeError as exc:
+        _pop_stash_if_needed(worktree_path, had_stash, "after rebase failure")
+        return RebaseResult(success=False, conflict_details=str(exc))
 
     _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
     return RebaseResult(success=True)

@@ -216,6 +216,23 @@ class TestRebase:
         last_call = mock_run.call_args_list[-1]
         assert "--abort" in str(last_call)
 
+    def test_non_conflict_runtime_error_returns_failure(self, tmp_path):
+        """Non-conflict transaction errors are surfaced as a failure result."""
+        worktree = _make_worktree(tmp_path)
+        txn = MagicMock()
+        txn.__enter__.return_value = txn
+        txn.__exit__.return_value = False
+        txn.rebase.side_effect = RuntimeError("git rebase origin/master failed: fatal: unknown revision")
+
+        with patch("host.rebase._stash_changes", return_value=False), \
+             patch("host.rebase._fetch_and_get_target", return_value="origin/master"), \
+             patch("host.rebase.WorkspaceTransaction", return_value=txn):
+            result = _rebase(worktree, "master")
+
+        assert not result.success
+        assert "unknown revision" in result.conflict_details
+        txn.rebase.assert_called_once_with("origin/master")
+
     def test_rebase_stashes_uncommitted_changes(self, tmp_path):
         """Uncommitted changes are stashed before rebase."""
         with patch("subprocess.run") as mock_run:
