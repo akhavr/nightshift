@@ -154,6 +154,9 @@ def extract_commits(upper_dir: Path, repo_git: Path) -> list[str]:
     copied_refs, skipped_refs = _copy_loose_refs(upper_dir / "refs", repo_git)
     skipped_refs.extend(_copy_packed_refs(upper_dir, repo_git, set(copied_refs)))
     _copy_tree(upper_dir / "logs", repo_git / "logs", overwrite=True)
-    for name in ("HEAD", "packed-refs", "FETCH_HEAD", "ORIG_HEAD"):
+    # Do not copy packed-refs wholesale; allowed packed refs are materialized
+    # as loose refs above, and copying the file verbatim would bypass the
+    # whitelist.
+    for name in ("HEAD", "FETCH_HEAD", "ORIG_HEAD"):
         _copy_file(upper_dir / name, repo_git / name, overwrite=True)
     return skipped_refs
