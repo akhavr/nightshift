@@ -122,7 +122,7 @@ def _rebase_and_retry_merge(repo: Path, branch: str, base: str,
         report_failure(
             config, repo, issue_id,
             f"Cannot rebase `{branch}` against `{base}` without a workspace "
-            f"transaction worktree.")
+            f"transaction worktree; manual conflict resolution is required.")
         sys.exit(1)
 
     if (rebase_dir / ".git").exists():
