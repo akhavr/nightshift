@@ -1016,7 +1016,44 @@ class TestCopyGitChanges:
         )
 
     @patch("host.launch.subprocess.run")
-    def test_copy_git_changes_rejects_invalid_objects(self, mock_run, tmp_path, caplog):
+    def test_fsck_filters_gitbug_noise(self, mock_run, tmp_path, caplog):
+        from host.launch import _copy_git_changes
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        source = session_dir / "git-copy"
+        source.mkdir()
+        (source / "objects").mkdir()
+        (source / "refs" / "heads").mkdir(parents=True)
+        (source / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
+        (source / "refs" / "heads" / "agent" / "good").write_text(
+            "0123456789abcdef0123456789abcdef01234567\n"
+        )
+
+        mock_run.return_value = MagicMock(
+            returncode=128,
+            stdout="",
+            stderr=(
+                "error: Unknown object type for b6f32d868edadd0a96e6f0256fdc568c6688deae\n"
+                "error: Could not read b619a2a6fb4d71eda862f66e0f9847ed7784aa18\n"
+                "fatal: not a git repository (or any of the parent directories): .git\n"
+            ),
+        )
+
+        with caplog.at_level(logging.ERROR, logger="host.launch"):
+            result = _copy_git_changes(session_dir, repo)
+
+        assert result == 0
+        assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+        assert (repo / ".git" / "refs" / "heads" / "agent" / "good").read_text().strip() == \
+            "0123456789abcdef0123456789abcdef01234567"
+
+    @patch("host.launch.subprocess.run")
+    def test_fsck_reports_real_corruption(self, mock_run, tmp_path, caplog):
         from host.launch import _copy_git_changes
 
         repo = tmp_path / "repo"
@@ -1032,13 +1069,22 @@ class TestCopyGitChanges:
         (source / "refs" / "heads").mkdir(parents=True)
         (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
 
-        mock_run.return_value = MagicMock(returncode=128, stdout="", stderr="fatal: bad object")
+        mock_run.return_value = MagicMock(
+            returncode=128,
+            stdout="",
+            stderr=(
+                "error: Unknown object type for b6f32d868edadd0a96e6f0256fdc568c6688deae\n"
+                "fatal: bad object 0123456789abcdef0123456789abcdef01234567\n"
+            ),
+        )
 
         with caplog.at_level(logging.ERROR, logger="host.launch"):
             result = _copy_git_changes(session_dir, repo)
 
         assert result != 0
-        assert "git fsck failed" in caplog.text
+        assert "git fsck found issues" in caplog.text
+        assert "fatal: bad object" in caplog.text
+        assert "Unknown object type" not in caplog.text
         assert not (repo / ".git" / "objects" / "aa" / "badpack").exists()
         assert not (repo / ".git" / "refs" / "heads" / "agent-123").exists()
 
