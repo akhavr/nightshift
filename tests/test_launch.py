@@ -1053,9 +1053,11 @@ class TestCopyGitChanges:
         source.mkdir()
         (source / "objects").mkdir()
         (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent-good").write_text("0123456789abcdef0123456789abcdef01234567\n")
-        (source / "refs" / "heads" / "agent-bad" / "evil").parent.mkdir(parents=True)
-        (source / "refs" / "heads" / "agent-bad" / "evil").write_text(
+        # Use agent/xxx format (slash, not hyphen) per current ref whitelist
+        (source / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
+        (source / "refs" / "heads" / "agent" / "good").write_text("0123456789abcdef0123456789abcdef01234567\n")
+        (source / "refs" / "heads" / "agent" / "bad" / "evil").parent.mkdir(parents=True)
+        (source / "refs" / "heads" / "agent" / "bad" / "evil").write_text(
             "fedcba9876543210fedcba9876543210fedcba98\n"
         )
         (source / "refs" / "heads" / "main").write_text("89abcdef0123456789abcdef0123456789abcdef\n")
@@ -1066,9 +1068,9 @@ class TestCopyGitChanges:
             result = _copy_git_changes(session_dir, repo)
 
         assert result == 0
-        assert (repo / ".git" / "refs" / "heads" / "agent-good").read_text().strip() == \
+        assert (repo / ".git" / "refs" / "heads" / "agent" / "good").read_text().strip() == \
             "0123456789abcdef0123456789abcdef01234567"
-        assert not (repo / ".git" / "refs" / "heads" / "agent-bad" / "evil").exists()
+        assert not (repo / ".git" / "refs" / "heads" / "agent" / "bad" / "evil").exists()
         assert not (repo / ".git" / "refs" / "heads" / "main").exists()
         assert "skipped" in caplog.text.lower()
 
