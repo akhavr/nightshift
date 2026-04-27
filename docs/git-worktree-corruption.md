@@ -131,12 +131,12 @@ This happens because:
 - Normal git operations (status, fetch, merge, rebase) in worktrees
 - Git commands with GIT_WORK_TREE env var set
 
-**The read-only mount DOES work** — tested in Docker with exact mount pattern:
+**The main repo config mount stays read-only**, while the worktree pointer mount must remain writable so transactional cleanup can restore it:
 ```
 -v /repo/.git:/repo-git:rw
 -v /repo/.git/config:/repo-git/config:ro
 ```
-Result: `error: could not write config file /repo-git/config: Resource busy`
+Result: direct config writes fail as expected, while the `.git` pointer can still be restored by the cleanup transaction.
 
 **Bug in sanitize function**: `docker-entrypoint.sh` prints "Sanitized" even when unset FAILS (due to `|| true`), giving false confidence that cleanup succeeded.
 
