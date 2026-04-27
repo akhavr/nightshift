@@ -85,6 +85,10 @@ class StateManager:
         self.waiting_signal = self.session_dir / "waiting.json"
         self.answer_file = self.session_dir / "answer.txt"
         self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.conversation_log.touch(exist_ok=True)
+        # Create the file if needed, but do not refresh mtime on existing logs.
+        if not self.raw_output_log.exists():
+            self.raw_output_log.touch()
         self._ssm: SessionStateMachine | None = None
 
     def load_state(self) -> SessionState:

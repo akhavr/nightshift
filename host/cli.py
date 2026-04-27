@@ -48,6 +48,7 @@ from host.merge import (
     merge_with_rebase_fallback, verify_no_conflict_markers,
     check_branch_not_behind_base,
 )
+from host.git_utils import audit_worktree_symlinks
 from host.rebase import sanitize_git_config
 from host.session_utils import (
     archive_session,
@@ -992,14 +993,28 @@ def cmd_accept(a):
     base = config.workspace.base_branch
     wt = r / config.workspace.root / f"agent-{sid}"
 
-    merge_ref = resolve_merge_ref(r, branch, wt)
-
     # Verify agent branch is not behind base
     behind_msg = check_branch_not_behind_base(r, branch, base)
     if behind_msg:
         print(behind_msg, file=sys.stderr)
         _report_accept_failure(config, r, a.issue_id, behind_msg)
         sys.exit(1)
+
+    escaping_symlinks = audit_worktree_symlinks(wt)
+    if escaping_symlinks:
+        details = "\n".join(
+            f"- {symlink_path} -> {target_path}"
+            for symlink_path, target_path in escaping_symlinks
+        )
+        message = (
+            f"Refusing to accept because worktree symlinks resolve outside /workspace:\n"
+            f"{details}"
+        )
+        print(message, file=sys.stderr)
+        _report_accept_failure(config, r, a.issue_id, message)
+        sys.exit(1)
+
+    merge_ref = resolve_merge_ref(r, branch, wt)
 
     # Show what will be merged
     subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))
