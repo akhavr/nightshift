@@ -1048,7 +1048,8 @@ class TestCopyGitChanges:
 
         assert result == 0
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
-        assert not (repo / ".git" / "refs" / "heads" / "agent-123").exists()
+        assert (repo / ".git" / "refs" / "heads" / "agent-123").read_text().strip() == \
+            "0123456789abcdef0123456789abcdef01234567"
 
     @patch("host.launch.subprocess.run")
     def test_fsck_reports_real_corruption(self, mock_run, tmp_path, caplog):

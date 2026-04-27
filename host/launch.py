@@ -81,6 +81,14 @@ def _teardown_git_overlay(git_mount_path: Path, session_dir: Path) -> None:
         shutil.rmtree(git_mount_path)
 
 
+def _fsck_real_errors(details: str) -> list[str]:
+    """Return fsck lines that are not known git-bug/session-cleanup noise."""
+    return [
+        line for line in details.splitlines()
+        if not any(skip in line for skip in _FSCK_NOISE_SUBSTRINGS)
+    ]
+
+
 def _copy_git_changes(session_dir: Path, repo: Path) -> int:
     """Validate and copy back git objects and whitelisted refs."""
     source_git = None
@@ -98,18 +106,14 @@ def _copy_git_changes(session_dir: Path, repo: Path) -> int:
     )
     if fsck_result.returncode != 0:
         details = fsck_result.stderr or fsck_result.stdout or ""
-        real_errors = [
-            line for line in details.splitlines()
-            if not any(skip in line for skip in _FSCK_NOISE_SUBSTRINGS)
-        ]
-        if not real_errors:
-            return 0
-        logger.error(
-            "git fsck found issues for %s:\n%s",
-            source_git,
-            "\n".join(real_errors),
-        )
-        return fsck_result.returncode or 1
+        real_errors = _fsck_real_errors(details)
+        if real_errors:
+            logger.error(
+                "git fsck found issues for %s:\n%s",
+                source_git,
+                "\n".join(real_errors),
+            )
+            return fsck_result.returncode or 1
 
     repo_git = repo / ".git"
     skipped_refs = extract_commits(source_git, repo_git)
