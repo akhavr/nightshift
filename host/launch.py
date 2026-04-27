@@ -109,6 +109,56 @@ def _copy_git_changes(session_dir: Path, repo: Path) -> int:
     return 0
 
 
+def _auto_commit_uncommitted_changes(repo: Path, session_id: str) -> bool:
+    """Commit dirty worktree changes left behind after @@DONE@@."""
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    if status_result.returncode != 0:
+        details = (status_result.stderr or status_result.stdout or "").strip()
+        if not details:
+            details = "git status failed without output"
+        logger.warning("[%s] Could not inspect worktree status: %s",
+                       session_id, details)
+        return False
+
+    if not status_result.stdout.strip():
+        return False
+
+    logger.warning("[%s] Container exited with uncommitted changes", session_id)
+
+    add_result = subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    if add_result.returncode != 0:
+        details = (add_result.stderr or add_result.stdout or "").strip()
+        if not details:
+            details = "git add failed without output"
+        logger.warning("[%s] Auto-commit staging failed: %s", session_id, details)
+        return False
+
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", "WIP: auto-commit uncommitted changes on @@DONE@@"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    if commit_result.returncode != 0:
+        details = (commit_result.stderr or commit_result.stdout or "").strip()
+        if not details:
+            details = "git commit failed without output"
+        logger.warning("[%s] Auto-commit failed: %s", session_id, details)
+        return False
+
+    return True
+
+
 def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
                       step="coder"):
     """Append a usage entry to .nightshift/usage.jsonl (survives session cleanup).
@@ -185,6 +235,8 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
     # Proof-of-work comment only for coder sessions that reached waiting:review
     if state.get("status") != "waiting:review" or step == "review":
         return copy_status
+
+    _auto_commit_uncommitted_changes(repo, state.get("branch", issue_id))
 
     checkpoints = state.get("checkpoints", [])
     human_answers = state.get("human_answers", [])

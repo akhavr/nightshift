@@ -49,6 +49,22 @@ def sample_issue():
     )
 
 
+def _mock_git_run(cmd, status_stdout="", diff_stdout="", fsck_stdout="", commit_returncode=0):
+    """Return a subprocess result tailored to the git command under test."""
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    if cmd[:3] == ["git", "status", "--porcelain"]:
+        result.stdout = status_stdout
+    elif len(cmd) >= 4 and cmd[:2] == ["git", "--git-dir"] and cmd[3] == "fsck":
+        result.stdout = fsck_stdout
+    elif cmd[:2] == ["git", "diff"]:
+        result.stdout = diff_stdout
+    elif cmd[:2] == ["git", "add"]:
+        result.stdout = ""
+    elif cmd[:2] == ["git", "commit"]:
+        result.returncode = commit_returncode
+    return result
+
+
 # ── create_worktree tests ───────────────────────────────
 
 class TestCreateWorktree:
@@ -779,7 +795,11 @@ class TestPostContainer:
             "human_answers": [{"q": "why?", "a": "because"}],
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+            diff_stdout="1 file changed",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -806,7 +826,10 @@ class TestPostContainer:
             "human_answers": [],
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_create_tracker.side_effect = Exception("tracker down")
 
         # Should not raise
@@ -836,7 +859,11 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+            diff_stdout="1 file changed",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -875,7 +902,10 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -914,7 +944,10 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
