@@ -286,6 +286,20 @@ class TestParseErrorEvents:
         assert ev.type == AgentEventType.AUTH_FAILURE
         assert "usage limit" in ev.content
 
+    def test_turn_failed_usage_limit_retries_transiently(self):
+        """Usage limit errors should enter the transient retry path."""
+        agent = self._agent()
+        raw = _ev("turn.failed", error={
+            "message": "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
+        })
+        ev = agent._parse(raw)
+        agent._store_start_params("prompt", Path("/tmp"), 50)
+        with patch("time.sleep") as mock_sleep, patch.object(agent, "_restart") as mock_restart:
+            handled = agent._maybe_retry_transient(ev)
+        assert handled is True
+        mock_sleep.assert_called_once()
+        mock_restart.assert_called_once()
+
     def test_error_rate_limit_emits_auth_failure_for_retry(self):
         """Rate limit errors emit AUTH_FAILURE to trigger transient retry logic."""
         agent = self._agent()

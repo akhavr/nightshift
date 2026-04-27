@@ -164,8 +164,18 @@ def setup_workspace(config, repo: Path, names: dict, is_resume: bool,
         if not (session_dir / "state.json").exists():
             print(f"No session state at {session_dir}", file=sys.stderr)
             sys.exit(1)
-        # Merge latest base branch into agent branch before resuming
-        if not names.get("is_review"):
+        if names.get("is_review"):
+            coder_session = repo / ".nightshift" / "sessions" / names["short_id"]
+            sync_review_worktree(
+                repo,
+                wt_path,
+                session_dir,
+                coder_session,
+                names["short_id"],
+                config.workspace.base_branch,
+            )
+        else:
+            # Merge latest base branch into agent branch before resuming
             merge_base_into_worktree(repo, wt_path, names["base_branch"],
                                      session_dir=session_dir)
         print(f"Resuming session for {names['session_name']}")

@@ -1,6 +1,7 @@
 """Tests for host/workspace_setup.py — workspace setup and merge handling."""
 
 import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -534,3 +535,41 @@ class TestSyncReviewWorktree:
         )
         current_commit = review_run("git", "rev-parse", "HEAD").stdout.strip()
         assert current_commit == agent_commit
+
+
+class TestSetupWorkspaceResumeReview:
+    def test_resume_review_sessions_sync_review_worktree(self, tmp_path):
+        repo, _ = _init_repo(tmp_path)
+        session_dir = repo / ".nightshift" / "sessions" / "review-abc123"
+        session_dir.mkdir(parents=True)
+        (session_dir / "state.json").write_text("{}")
+        wt_path = repo / ".worktrees" / "review-abc123"
+        config = SimpleNamespace(
+            workspace=SimpleNamespace(root=".worktrees", base_branch="master")
+        )
+        names = {
+            "session_name": "review-abc123",
+            "worktree_name": "review-abc123",
+            "branch": "review/abc123",
+            "base_branch": "agent/abc123",
+            "is_review": True,
+            "short_id": "abc123",
+        }
+
+        with patch("host.workspace_setup.sync_review_worktree") as mock_sync, \
+                patch("host.workspace_setup.merge_base_into_worktree") as mock_merge:
+            from host.workspace_setup import setup_workspace
+
+            result = setup_workspace(config, repo, names, is_resume=True,
+                                     issue_id="abc123")
+
+        assert result == str(wt_path)
+        mock_merge.assert_not_called()
+        mock_sync.assert_called_once_with(
+            repo,
+            wt_path,
+            session_dir,
+            repo / ".nightshift" / "sessions" / "abc123",
+            "abc123",
+            "master",
+        )
