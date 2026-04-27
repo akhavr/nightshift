@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+import yaml
+
 log = logging.getLogger("watchdog")
 
 STUCK_THRESHOLD_MINUTES = 30
@@ -77,8 +79,6 @@ def find_stuck_sessions(
     """Find stuck sessions across all registered projects."""
     if not projects_d.exists():
         return
-
-    import yaml
 
     for reg_file in projects_d.glob("*.yaml"):
         try:

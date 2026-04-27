@@ -1,6 +1,7 @@
 """Send alerts for watchdog issues."""
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,8 +29,6 @@ class AlertConfig:
     @classmethod
     def load(cls, path: Path | None = None) -> "AlertConfig":
         """Load config from YAML file, falling back to env vars."""
-        import os
-
         cfg = cls()
         config_path = path or DEFAULT_CONFIG_PATH
         if config_path.exists():
@@ -58,8 +57,6 @@ class AlertConfig:
     @staticmethod
     def _resolve_env(value: str) -> str:
         """Resolve $VAR references in value."""
-        import os
-
         if value.startswith("$"):
             return os.environ.get(value[1:], "")
         return value
