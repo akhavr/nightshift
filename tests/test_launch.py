@@ -86,7 +86,7 @@ class TestCreateWorktree:
         # 3. git worktree add    -> ok (creates the wt dir with a file)
         # (WT-6: safe_prune is mocked, not called via subprocess)
         def side_effect(cmd, **kwargs):
-            result = MagicMock(returncode=0, stderr="", stdout="")
+            result = MagicMock(returncode=0, stderr="", stdout="commit")
             if cmd[1] == "worktree" and cmd[2] == "add":
                 # simulate worktree directory being created with content
                 wt_path.mkdir(exist_ok=True)

@@ -69,5 +69,6 @@ def main():
     workflow_path = Path(a.workflow) if a.workflow else None
     watcher = HostWatcher(Path(a.sessions_dir), repo, auto_start=not a.no_auto_start,
                           workflow_path=workflow_path)
+    watcher._cleanup_orphan_refs_once()
     watcher.run(shutdown_event=shutdown_event, reload_event=reload_event,
                 cache_clear_event=gitbug_cache_clear_event)
