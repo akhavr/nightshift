@@ -1,6 +1,7 @@
 """Tests for core/state.py — atomic session state operations."""
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -9,6 +10,43 @@ import pytest
 
 from core.state import StateManager, SessionState, state_lock
 from core.state_machine import InvalidTransition
+
+
+class TestRawOutputLog:
+    """Tests for raw-output.log initialization and writes."""
+
+    def test_state_manager_creates_raw_output_log(self, tmp_path):
+        """StateManager should create raw-output.log during init."""
+        session_dir = tmp_path / "session"
+
+        StateManager(session_dir)
+
+        assert (session_dir / "raw-output.log").exists()
+
+    def test_append_raw_works_immediately_after_init(self, tmp_path):
+        """append_raw() should succeed on the first call after init."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+
+        sm.append_raw("hello world")
+
+        assert (session_dir / "raw-output.log").read_text() == "hello world\n"
+
+    def test_state_manager_does_not_refresh_existing_raw_output_log_mtime(self, tmp_path):
+        """StateManager init should not clobber the last raw-output timestamp."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        raw_log = session_dir / "raw-output.log"
+        raw_log.write_text("some output\n")
+
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+        before = raw_log.stat().st_mtime
+
+        StateManager(session_dir)
+
+        after = raw_log.stat().st_mtime
+        assert after == before
 
 
 class TestMarkDone:
