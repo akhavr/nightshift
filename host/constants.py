@@ -27,6 +27,7 @@ COMMAND_BACKOFF_CAP_S = 1800          # Max backoff (30 min)
 COMMAND_BACKOFF_CAP_CYCLES = 30       # Max backoff cycles (used for log messages)
 DEFAULT_MAX_REVIEW_ROUNDS = 3         # Fallback max review rounds when config unavailable
 BACKGROUND_LAUNCH_CHECK_S = 10        # How long to wait before checking background launches for early exit
+GITBUG_CACHE_HEALTHCHECK_INTERVAL_S = 300  # How often to compare git-bug refs vs GraphQL cache
 
 # ── Telegram ─────────────────────────────────────────────
 TG_LONG_POLL_TIMEOUT_S = 1
@@ -52,6 +53,9 @@ ARCHIVE_DIR = "archive"  # Subdirectory of .nightshift/ for archived session dat
 # ── Usage tracking ────────────────────────────────────
 USAGE_LOG_FILENAME = "usage.jsonl"  # Append-only usage log in .nightshift/
 
+# ── Tracker lock monitoring ──────────────────────────
+LOCK_TIMEOUT_S = 60  # Warn if git-bug lock held longer than this
+
 # ── Tracker IPC (single-writer architecture) ──────────
 TRACKER_SOCKET_FILENAME = "tracker.sock"  # Unix socket in .nightshift/
 TRACKER_WRITER_QUEUE_SIZE = 100          # Bounded queue to prevent memory issues
@@ -59,6 +63,9 @@ TRACKER_SOCKET_MAX_WORKERS = 4           # ThreadPool for socket connections
 SOCKET_SERVER_RESTART_BACKOFF_BASE_S = 5  # Base backoff for socket server restart
 SOCKET_SERVER_RESTART_BACKOFF_CAP_S = 300  # Max backoff (5 min)
 SOCKET_SERVER_MAX_RESTARTS = 10           # Stop restarting after this many failures
+TRACKER_RELOAD_MAX_ATTEMPTS = 3           # Retry tracker creation on SIGHUP
+TRACKER_RELOAD_BACKOFF_BASE_S = 0.5       # Base backoff between retries
+TRACKER_TERMINATION_WAIT_S = 0.5          # Wait for old tracker to fully terminate
 
 # ── Recently launched persistence ─────────────────────
 RECENTLY_LAUNCHED_FILENAME = "recently_launched.json"  # Persisted launch timestamps

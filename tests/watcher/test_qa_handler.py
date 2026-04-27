@@ -123,7 +123,8 @@ class TestCheckForAnswers:
 
     def test_telegram_reply_writes_answer_and_unpauses(self, tmp_path):
         w = _make_watcher(tmp_path)
-        sd = _make_session(w.sessions_dir, "abc")
+        # State must be waiting:question to receive an answer
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:question")
         w.qa._paused["abc"] = {
             "container": "nightshift-abc",
             "dir": sd,
@@ -168,3 +169,72 @@ class TestCheckForAnswers:
         mock_unpause.assert_called_once_with("nightshift-abc")
         # answer.txt content unchanged (CLI wrote it)
         assert (sd / "answer.txt").read_text() == "CLI answer"
+
+
+# ---------------------------------------------------------------------------
+# SSM validation tests
+# ---------------------------------------------------------------------------
+
+class TestQAValidatesTransition:
+    """Test that QA handler validates SSM transitions."""
+
+    def test_qa_validates_transition(self, tmp_path):
+        """QA handler validates state is waiting:question before delivering answer."""
+        import json
+
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+
+        # Set up state.json with waiting:question status
+        state = {
+            "issue_id": "issue-abc",
+            "branch": "agent/abc",
+            "status": "waiting:question",
+        }
+        (sd / "state.json").write_text(json.dumps(state))
+
+        w.qa._paused["abc"] = {
+            "container": "nightshift-abc",
+            "dir": sd,
+            "paused_at": time.time(),
+        }
+
+        # Deliver answer via Telegram
+        with patch("host.watcher.docker_unpause") as mock_unpause:
+            w.qa.check_for_answers({"abc": "The answer"})
+
+        # Should unpause because state was valid
+        mock_unpause.assert_called_once_with("nightshift-abc")
+        assert (sd / "answer.txt").read_text() == "The answer"
+
+    def test_qa_skips_invalid_state(self, tmp_path):
+        """QA handler skips answer delivery if state is not waiting:question."""
+        import json
+
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc")
+
+        # Set up state.json with WRONG status (e.g., accepted = terminal)
+        state = {
+            "issue_id": "issue-abc",
+            "branch": "agent/abc",
+            "status": "accepted",
+        }
+        (sd / "state.json").write_text(json.dumps(state))
+
+        w.qa._paused["abc"] = {
+            "container": "nightshift-abc",
+            "dir": sd,
+            "paused_at": time.time(),
+        }
+
+        # Try to deliver answer via Telegram
+        with patch("host.watcher.docker_unpause") as mock_unpause:
+            w.qa.check_for_answers({"abc": "The answer"})
+
+        # Should NOT unpause because state was invalid
+        mock_unpause.assert_not_called()
+        # answer.txt should NOT be written
+        assert not (sd / "answer.txt").exists()
+        # Session should still be in paused dict (waiting for valid state)
+        assert "abc" in w.qa._paused

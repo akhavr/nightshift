@@ -1,6 +1,7 @@
 """Tests for host/launch.py and its extracted modules."""
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -48,12 +49,29 @@ def sample_issue():
     )
 
 
+def _mock_git_run(cmd, status_stdout="", diff_stdout="", fsck_stdout="", commit_returncode=0):
+    """Return a subprocess result tailored to the git command under test."""
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    if cmd[:3] == ["git", "status", "--porcelain"]:
+        result.stdout = status_stdout
+    elif len(cmd) >= 4 and cmd[:2] == ["git", "--git-dir"] and cmd[3] == "fsck":
+        result.stdout = fsck_stdout
+    elif cmd[:2] == ["git", "diff"]:
+        result.stdout = diff_stdout
+    elif cmd[:2] == ["git", "add"]:
+        result.stdout = ""
+    elif cmd[:2] == ["git", "commit"]:
+        result.returncode = commit_returncode
+    return result
+
+
 # ── create_worktree tests ───────────────────────────────
 
 class TestCreateWorktree:
 
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_creates_worktree_and_writes_state(self, mock_run, tmp_path):
+    def test_creates_worktree_and_writes_state(self, mock_run, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -93,33 +111,27 @@ class TestCreateWorktree:
         assert state["checkpoints"] == []
         assert state["human_answers"] == []
 
+        # WT-6: safe_prune is called instead of direct git worktree prune
+        mock_safe_prune.assert_called_once_with(repo)
+
         # Correct git commands were called
         assert mock_run.call_count == 3
-<<<<<<< HEAD
-        assert mock_run.call_args_list[0][0][0] == ["git", "worktree", "prune"]
-=======
         assert mock_run.call_args_list[0][0][0] == ["git", "cat-file", "-t", base_branch]
->>>>>>> master
         assert mock_run.call_args_list[1][0][0] == ["git", "branch", branch, base_branch]
         assert mock_run.call_args_list[2][0][0] == ["git", "worktree", "add", str(wt_path), branch]
 
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_exits_on_worktree_failure(self, mock_run, tmp_path):
+    def test_exits_on_worktree_failure(self, mock_run, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
         session_dir = tmp_path / "session"
 
         mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
-<<<<<<< HEAD
-        # Third call (worktree add) fails
-        mock_run.side_effect = [
-            MagicMock(returncode=0),  # prune
-=======
         # WT-6: safe_prune is mocked, so only 3 subprocess calls
         mock_run.side_effect = [
             MagicMock(returncode=0),  # cat-file -t (verify base exists)
->>>>>>> master
             MagicMock(returncode=0),  # branch
             MagicMock(returncode=1, stderr="fatal: already exists"),  # worktree add
         ]
@@ -128,8 +140,9 @@ class TestCreateWorktree:
             create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_exits_on_empty_worktree(self, mock_run, tmp_path):
+    def test_exits_on_empty_worktree(self, mock_run, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -149,9 +162,10 @@ class TestCreateWorktree:
             create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
+    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.force_remove_dir")
     @patch("host.workspace_setup.subprocess.run")
-    def test_removes_existing_worktree_dir(self, mock_run, mock_force_rm, tmp_path):
+    def test_removes_existing_worktree_dir(self, mock_run, mock_force_rm, mock_safe_prune, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -291,6 +305,7 @@ class TestBuildDockerCmd:
               issue_id="abc123def456", short_id="abc123def456",
               max_turns=30, step="coder", is_resume=False,
               workflow_path="/repo/WORKFLOW.md", image="nightshift:latest",
+              git_mount_path=None,
               **env_overrides):
         if repo is None:
             repo = Path("/fake/repo")
@@ -316,6 +331,7 @@ class TestBuildDockerCmd:
                 repo, workspace_mount, session_dir, container_name,
                 worktree_name, issue_id, short_id, max_turns,
                 step, is_resume, workflow_path, image,
+                git_mount_path=git_mount_path,
             )
         finally:
             # Restore env
@@ -351,6 +367,26 @@ class TestBuildDockerCmd:
         assert "/ws:/workspace:rw" in cmd_str
         assert f"{session_dir}:/session:rw" in cmd_str
         assert f"{repo / '.git'}:/repo-git:rw" in cmd_str
+
+    def test_git_mount_path_override(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        git_mount_path = tmp_path / "session" / "git-merged"
+        git_mount_path.mkdir(parents=True)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir(exist_ok=True)
+
+        cmd = self._call(
+            repo=repo,
+            workspace_mount="/ws",
+            session_dir=session_dir,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            git_mount_path=git_mount_path,
+        )
+
+        cmd_str = " ".join(cmd)
+        assert f"{git_mount_path}:/repo-git:rw" in cmd_str
+        assert f"{repo / '.git'}:/repo-git:rw" not in cmd_str
 
     def test_env_vars_set(self):
         cmd = self._call(issue_id="issue-42", short_id="issue-42",
@@ -580,12 +616,13 @@ class TestMain:
     @patch("host.launch.dump_issue_data")
     @patch("host.workspace_setup.create_worktree")
     @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
+    @patch("host.launch._setup_git_overlay")
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
     @patch("host.launch._post_container")
     def test_main_start_flow(self, mock_post, mock_repo_root, mock_dotenv,
-                             mock_load_wf, mock_build_cmd,
+                             mock_load_wf, mock_setup_overlay, mock_build_cmd,
                              mock_create_wt, mock_dump, mock_run,
                              mock_docker_rm, tmp_path):
         repo = tmp_path / "repo"
@@ -600,6 +637,7 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
+        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-copy"
 
         with patch("sys.argv", ["launch.py", "abc123def456ef"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -612,6 +650,48 @@ class TestMain:
         mock_build_cmd.assert_called_once()
         mock_run.assert_called_once_with(["docker", "run", "test"])
         mock_docker_rm.assert_called_once()
+
+    @patch("host.launch.run_container", side_effect=RuntimeError("launch failed"))
+    @patch("host.launch._setup_git_overlay")
+    @patch("host.launch._teardown_git_overlay")
+    @patch("host.launch._post_container")
+    @patch("host.launch.setup_workspace")
+    @patch("host.launch.dump_issue_data")
+    @patch("host.launch.load_workflow")
+    @patch("host.launch.load_all_dotenv")
+    @patch("host.launch.get_repo_root")
+    def test_main_cleans_up_overlay_when_launch_fails(self, mock_repo_root,
+                                                      mock_dotenv, mock_load_wf,
+                                                      mock_dump_issue_data,
+                                                      mock_setup_workspace, mock_post,
+                                                      mock_teardown,
+                                                      mock_setup_overlay,
+                                                      mock_run_container, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / ".worktrees").mkdir()
+        (repo / "WORKFLOW.md").write_text("---\n---\n")
+        mock_repo_root.return_value = repo
+
+        mock_load_wf.return_value = WorkflowConfig(
+            workspace=WorkspaceConfig(base_branch="master", root=".worktrees"),
+            agent=AgentConfig(max_turns=50),
+        )
+        mock_dump_issue_data.return_value = None
+        mock_setup_workspace.return_value = repo / ".worktrees" / "agent-abc123def456"
+        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged"
+
+        with patch("sys.argv", ["launch.py", "abc123def456ef"]):
+            with pytest.raises(RuntimeError, match="launch failed"):
+                from host.launch import main
+                main()
+
+        mock_post.assert_not_called()
+        mock_teardown.assert_called_once_with(
+            repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged",
+            repo / ".nightshift" / "sessions" / "abc123def456",
+        )
 
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
@@ -645,12 +725,13 @@ class TestMain:
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
     @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
+    @patch("host.launch._setup_git_overlay")
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
     @patch("host.launch._post_container")
     def test_main_resume_with_state(self, mock_post, mock_repo_root, mock_dotenv,
-                                    mock_load_wf, mock_build_cmd,
+                                    mock_load_wf, mock_setup_overlay, mock_build_cmd,
                                     mock_dump, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -669,6 +750,7 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
+        mock_setup_overlay.return_value = session_dir / "git-copy"
 
         with patch("sys.argv", ["launch.py", "abc123def456ef", "--resume"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -716,7 +798,11 @@ class TestPostContainer:
             "human_answers": [{"q": "why?", "a": "because"}],
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+            diff_stdout="1 file changed",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -743,7 +829,10 @@ class TestPostContainer:
             "human_answers": [],
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_create_tracker.side_effect = Exception("tracker down")
 
         # Should not raise
@@ -773,7 +862,11 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+            diff_stdout="1 file changed",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -812,7 +905,10 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -851,7 +947,10 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -867,8 +966,6 @@ class TestPostContainer:
         entry = json.loads(usage_file.read_text().strip())
         assert entry["input_tokens"] == 10000
 
-<<<<<<< HEAD
-=======
     @patch("host.launch._copy_git_changes")
     def test_overlay_extraction_runs_after_container(self, mock_copy,
                                                      tmp_path, config):
@@ -1036,7 +1133,6 @@ class TestGitOverlayWiring:
         assert not upper.exists()
         assert not work.exists()
 
->>>>>>> master
 
 # ── prepare_review_session tests ────────────────────────
 

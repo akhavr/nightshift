@@ -79,6 +79,15 @@ class TestWorkflowTemplateLint:
         assert found == [], (
             f"Blocklist terms found in WORKFLOW.md: {found}")
 
+    def test_workflow_has_feedback_logging_section(self):
+        """REQ-035: WORKFLOW.md must have a Feedback Logging section."""
+        text = _load_template(CANONICAL_TEMPLATE)
+        prompt = get_prompt_section(text)
+        assert "## Feedback Logging" in prompt, (
+            "WORKFLOW.md must have a '## Feedback Logging' section for REQ-035")
+        assert "reviewer-issues.yaml" in prompt, (
+            "WORKFLOW.md Feedback Logging must reference reviewer-issues.yaml")
+
 
 class TestReviewTemplateLint:
     """Lint checks for the canonical REVIEW.md template."""
@@ -118,3 +127,12 @@ class TestReviewTemplateLint:
         found = validate_no_blocklist_terms(text, blocklist)
         assert found == [], (
             f"Blocklist terms found in REVIEW.md: {found}")
+
+    def test_review_has_feedback_logging_section(self):
+        """REQ-035: REVIEW.md must have a Feedback Logging section."""
+        text = _load_template(CANONICAL_REVIEW_TEMPLATE)
+        prompt = get_prompt_section(text)
+        assert "## Feedback Logging" in prompt, (
+            "REVIEW.md must have a '## Feedback Logging' section for REQ-035")
+        assert "coder-issues.yaml" in prompt, (
+            "REVIEW.md Feedback Logging must reference coder-issues.yaml")

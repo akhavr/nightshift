@@ -214,6 +214,23 @@ class TestNotifyDone:
         assert st.completed_at != ""
         assert st.status == "waiting:review"
 
+    def test_uses_atomic_mark_done(self, tmp_path, monkeypatch):
+        """notify_done must use mark_done for atomic status+completed_at update."""
+        _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        st = sm.load_state()
+        calls = []
+        original_mark_done = sm.mark_done
+        def tracking_mark_done(status):
+            calls.append(("mark_done", status))
+            return original_mark_done(status)
+        monkeypatch.setattr(sm, "mark_done", tracking_mark_done)
+        monkeypatch.setattr(sm, "update_status", lambda s: calls.append(("update_status", s)))
+        monkeypatch.setattr(sm, "mark_completed", lambda: calls.append(("mark_completed",)))
+        notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
+        assert ("mark_done", "waiting:review") in calls
+        assert ("update_status", "waiting:review") not in calls
+        assert ("mark_completed",) not in calls
+
 
 class TestUsageInNotifyDone:
     def test_cost_line_in_proof_comment(self, tmp_path):

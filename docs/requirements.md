@@ -162,8 +162,9 @@ All git-bug CLI operations route through `GitBugTracker._run()` which retries on
 
 ### REQ-026: Single-writer git-bug access
 All git-bug operations are serialized through a single writer thread in the watcher process, eliminating lock contention. The writer thread processes a queue of tracker operations one at a time. A Unix domain socket server accepts JSON-lines requests from CLI processes and routes them through the same queue. The watcher's own internal tracker calls use a queue proxy (no socket overhead). CLI and launch scripts connect via `get_tracker_with_fallback()`: when the watcher socket is available, a `SocketTrackerClient` is used; when unavailable, falls back to direct `GitBugTracker` with the existing lock retry mechanism (REQ-025).
+The git-bug GraphQL watcher also includes stale-cache recovery for `.git/git-bug/cache/bugs`: on `list_issues()` errors containing "bug doesn't exist" it clears the cache, restarts `git-bug webui`, retries once, and periodically health-checks refs vs cached issue count to rebuild mismatches. SIGHUP-triggered config reloads clear the cache before recreating the tracker.
 
-- **Tests:** test_tracker_ipc.py, test_socket_tracker_client.py, test_tracker_fallback.py, watcher/test_tracker_writer.py
+- **Tests:** test_tracker_ipc.py, test_socket_tracker_client.py, test_tracker_fallback.py, watcher/test_tracker_writer.py, test_gitbug_graphql.py, watcher/test_host_watcher.py, watcher/test_config_reload.py
 - **Status:** covered
 
 ### REQ-027: Upstream template proposals
@@ -214,13 +215,20 @@ Session files (conversation.jsonl, state.json, raw-output.log) are archived to `
 - **Tests:** test_session_utils_host.py (TestArchiveSession: test_cleanup_archives_conversation, test_cleanup_archives_state, test_accept_archives_before_cleanup, test_archives_raw_output_log, test_returns_none_for_missing_session, test_skips_missing_files_gracefully, test_archive_path_uses_session_id, test_does_not_archive_non_listed_files, test_idempotent_overwrites_existing_archive)
 - **Status:** covered
 
+### REQ-036: Host-container interface hardening
+The host-container interface is hardened against compromised or misbehaving agents. Guardrails include: (1) Git object validation via `git fsck` before copy-back to host repo, with ref whitelist to only allow `agent-*` branches; (2) Schema validation for tracker outbox entries (valid ops, hex issue_id format); (3) Schema validation for state.json on host reads (type checking, bounds validation with graceful degradation); (4) Session directory size monitoring with alerts; (5) Symlink audit before accept to detect escapes outside worktree.
+
+- **Tests:** test_launch.py (test_copy_git_changes_*), watcher/test_issue_sync.py (test_process_outbox_validates_*), test_session_utils_host.py (test_read_state_validates_*), watcher/test_session_monitor.py (test_check_session_size_*), test_accept_reject.py (test_accept_rejects_external_symlinks), test_git_utils.py (test_audit_symlinks_*)
+- **Status:** planned
+- **Reference:** docs/host-container-interface.md
+
 ---
 
 ## Traceability Matrix
 
 | Test File | Requirements |
 |---|---|
-| test_accept_reject.py | REQ-006, REQ-007, REQ-012 |
+| test_accept_reject.py | REQ-006, REQ-007, REQ-012, REQ-036 |
 | test_assistant_text_logging.py | REQ-008, REQ-009 |
 | test_auto_start.py | REQ-011, REQ-017 |
 | test_cli_commands.py | REQ-002, REQ-012, REQ-032 |
@@ -232,8 +240,8 @@ Session files (conversation.jsonl, state.json, raw-output.log) are archived to `
 | test_docker_utils.py | REQ-019 |
 | test_dotenv.py | REQ-013 |
 | test_git_bug_lock_retry.py | REQ-025 |
-| test_git_utils.py | REQ-001, REQ-006 |
-| test_launch.py | REQ-001, REQ-018, REQ-032, REQ-033 |
+| test_git_utils.py | REQ-001, REQ-006, REQ-036 |
+| test_launch.py | REQ-001, REQ-018, REQ-032, REQ-033, REQ-036 |
 | test_marker_reliability.py | REQ-002, REQ-003, REQ-004, REQ-005, REQ-015 |
 | test_notification_level.py | REQ-010 |
 | test_notifier_prefix.py | REQ-010 |
@@ -245,10 +253,10 @@ Session files (conversation.jsonl, state.json, raw-output.log) are archived to `
 | test_review_step.py | REQ-005, REQ-008, REQ-009, REQ-011 |
 | test_search.py | REQ-011 |
 | test_session_runner.py | REQ-002, REQ-003, REQ-004, REQ-015, REQ-016b, REQ-021, REQ-032 |
-| test_session_utils_host.py | REQ-001, REQ-002, REQ-007, REQ-012, REQ-034 |
+| test_session_utils_host.py | REQ-001, REQ-002, REQ-007, REQ-012, REQ-034, REQ-036 |
 | test_static_tracker.py | REQ-016, REQ-016b |
 | test_issue_redump.py | REQ-016b |
-| watcher/test_issue_sync.py | REQ-016b |
+| watcher/test_issue_sync.py | REQ-016b, REQ-036 |
 | test_stream_parser.py | REQ-004, REQ-014, REQ-032 |
 | test_codex_agent.py | REQ-033 |
 | test_overflow.py | REQ-028, REQ-033 |
@@ -261,11 +269,14 @@ Session files (conversation.jsonl, state.json, raw-output.log) are archived to `
 | watcher/test_graceful_shutdown.py | REQ-002 |
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
 | watcher/test_config_reload.py | REQ-023 |
-| watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-009, REQ-011, REQ-017 |
+| watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-009, REQ-011, REQ-017, REQ-036 |
 | watcher/test_host_watcher.py | REQ-009 |
+| test_gitbug_graphql.py | REQ-026 |
 | test_tracker_ipc.py | REQ-026 |
 | test_socket_tracker_client.py | REQ-026 |
 | test_tracker_fallback.py | REQ-026 |
+| watcher/test_config_reload.py | REQ-026 |
+| watcher/test_host_watcher.py | REQ-026 |
 | watcher/test_tracker_writer.py | REQ-026 |
 | test_openhands_agent.py | REQ-030 |
 | test_overflow.py | REQ-028 |

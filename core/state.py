@@ -1,13 +1,37 @@
-"""Atomic session state."""
+"""Atomic session state with file locking."""
 
+import fcntl
 import json
+import logging
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Generator
 
 from core.protocols import UsageData
 from core.state_machine import SessionStateMachine, STATES
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def state_lock(session_dir: Path) -> Generator[None, None, None]:
+    """Acquire exclusive lock on state.json for the duration of the context.
+
+    Uses a separate .lock file to avoid issues with atomic rename.
+    The lock is advisory (processes must cooperate by using this function).
+    """
+    lock_file = session_dir / "state.json.lock"
+    # Ensure lock file exists
+    lock_file.touch(exist_ok=True)
+    fd = lock_file.open("r")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
 
 RECENT_CONVERSATION_DEFAULT = 50
 CONVERSATION_PREVIEW_LEN = 500
@@ -61,6 +85,10 @@ class StateManager:
         self.waiting_signal = self.session_dir / "waiting.json"
         self.answer_file = self.session_dir / "answer.txt"
         self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.conversation_log.touch(exist_ok=True)
+        # Create the file if needed, but do not refresh mtime on existing logs.
+        if not self.raw_output_log.exists():
+            self.raw_output_log.touch()
         self._ssm: SessionStateMachine | None = None
 
     def load_state(self) -> SessionState:
@@ -68,7 +96,19 @@ class StateManager:
             st = SessionState(**json.load(f))
         if self._ssm is None:
             self._ssm = SessionStateMachine(initial_state=st.status)
+            self._register_logging_hooks()
         return st
+
+    def _register_logging_hooks(self) -> None:
+        """Register hooks to log all state transitions."""
+        for state in STATES:
+            self._ssm.register_hook(state, "enter", self._log_transition)
+
+    def _log_transition(self, ctx: dict) -> None:
+        """Log a state transition."""
+        logger.info(
+            "session state: %s -> %s", ctx["from_state"], ctx["to_state"]
+        )
 
     @property
     def status(self) -> str:
@@ -77,18 +117,20 @@ class StateManager:
         return self._ssm.state
 
     def update_status(self, s: str):
-        if self._ssm is None:
-            self.load_state()  # initializes _ssm
-        self._ssm.transition(s)  # validates transition
-        st = self.load_state()
-        st.status = self._ssm.state
-        self._write(st)
+        with state_lock(self.session_dir):
+            if self._ssm is None:
+                self.load_state()  # initializes _ssm
+            self._ssm.transition(s)  # validates transition
+            st = self.load_state()
+            st.status = self._ssm.state
+            self._write(st)
 
     def mark_completed(self):
         """Set completed_at timestamp to indicate a normal session completion."""
-        st = self.load_state()
-        st.completed_at = datetime.now(timezone.utc).isoformat()
-        self._write(st)
+        with state_lock(self.session_dir):
+            st = self.load_state()
+            st.completed_at = datetime.now(timezone.utc).isoformat()
+            self._write(st)
 
     def mark_done(self, status: str):
         """Atomically set status and completed_at in a single load-modify-write cycle.
@@ -96,43 +138,63 @@ class StateManager:
         This prevents race conditions where a concurrent reader (e.g., the watcher)
         could read state between separate update_status() and mark_completed() calls
         and overwrite one of the changes.
+
+        Status transition is validated through the SSM before writing.
         """
-        st = self.load_state()
-        st.status = status
-        st.completed_at = datetime.now(timezone.utc).isoformat()
-        self._write(st)
+        with state_lock(self.session_dir):
+            if self._ssm is None:
+                self.load_state()  # initializes _ssm
+            self._ssm.transition(status)  # validates transition
+            st = self.load_state()
+            st.status = self._ssm.state
+            st.completed_at = datetime.now(timezone.utc).isoformat()
+            self._write(st)
 
     def increment_step(self) -> int:
-        st = self.load_state(); st.step += 1; self._write(st); return st.step
+        with state_lock(self.session_dir):
+            st = self.load_state()
+            st.step += 1
+            self._write(st)
+            return st.step
 
     def increment_overload_resumes(self) -> int:
-        st = self.load_state(); st.overload_resumes += 1; self._write(st); return st.overload_resumes
+        with state_lock(self.session_dir):
+            st = self.load_state()
+            st.overload_resumes += 1
+            self._write(st)
+            return st.overload_resumes
 
     def reset_overload_resumes(self):
-        st = self.load_state(); st.overload_resumes = 0; self._write(st)
+        with state_lock(self.session_dir):
+            st = self.load_state()
+            st.overload_resumes = 0
+            self._write(st)
 
     def add_checkpoint(self, desc: str, step: int, commit: str = "none"):
-        st = self.load_state()
-        st.checkpoints.append(Checkpoint(
-            step=step, description=desc,
-            timestamp=datetime.now(timezone.utc).isoformat(), commit=commit))
-        self._write(st)
+        with state_lock(self.session_dir):
+            st = self.load_state()
+            st.checkpoints.append(Checkpoint(
+                step=step, description=desc,
+                timestamp=datetime.now(timezone.utc).isoformat(), commit=commit))
+            self._write(st)
 
     def update_usage(self, input_tokens: int, output_tokens: int,
                      cost_usd: float, model: str = ""):
         """Accumulate token usage from an agent result event."""
-        st = self.load_state()
-        st.usage.input_tokens += input_tokens
-        st.usage.output_tokens += output_tokens
-        st.usage.cost_usd += cost_usd
-        if model:
-            st.usage.model = model
-        self._write(st)
+        with state_lock(self.session_dir):
+            st = self.load_state()
+            st.usage.input_tokens += input_tokens
+            st.usage.output_tokens += output_tokens
+            st.usage.cost_usd += cost_usd
+            if model:
+                st.usage.model = model
+            self._write(st)
 
     def add_qa(self, q: str, a: str):
-        st = self.load_state()
-        st.human_answers.append(QAExchange(question=q, answer=a))
-        self._write(st)
+        with state_lock(self.session_dir):
+            st = self.load_state()
+            st.human_answers.append(QAExchange(question=q, answer=a))
+            self._write(st)
 
     def append_conversation(self, role: str, content: str):
         with open(self.conversation_log, "a") as f:

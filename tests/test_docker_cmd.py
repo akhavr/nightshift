@@ -1,5 +1,6 @@
 """Tests for host/docker_cmd.py."""
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -141,3 +142,198 @@ def test_overflow_no_profile_name_no_env_var(tmp_path, monkeypatch):
     assert "OVERFLOW_PROFILE=" not in cmd_str
     # OVERFLOW_ACTIVE should still be set
     assert "OVERFLOW_ACTIVE=1" in cmd_str
+
+
+def test_git_mount_uses_session_overlay_only(tmp_path, monkeypatch):
+    """The session git overlay should be mounted directly without an extra config bind."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Create fake .git directory with config file
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\n")
+
+    from host.docker_cmd import build_docker_cmd
+
+    cmd = build_docker_cmd(
+        repo=tmp_path,
+        workspace_mount=str(tmp_path / "ws"),
+        session_dir=tmp_path / "session",
+        container_name="test",
+        worktree_name="test-worktree",
+        issue_id="test-123",
+        short_id="t123",
+        max_turns=10,
+        step="coder",
+        is_resume=False,
+        workflow_path=str(tmp_path / "WORKFLOW.md"),
+        image="nightshift:latest",
+    )
+
+    cmd_str = " ".join(cmd)
+    # Main .git mount should be read-write
+    assert f"{tmp_path / '.git'}:/repo-git:rw" in cmd_str
+    assert f"{tmp_path / 'ws' / '.git'}:/workspace/.git:rw" in cmd_str
+    assert f"{tmp_path / '.git' / 'config'}:/repo-git/config:ro" not in cmd_str
+
+
+def test_codex_oauth_excludes_api_keys(tmp_path, monkeypatch):
+    """When Codex OAuth is present, CODEX_API_KEY and OPENAI_API_KEY are excluded."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Set API keys in environment
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    monkeypatch.setenv("CODEX_MODEL", "gpt-4")  # This should still pass
+
+    # Create fake home with OAuth tokens
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    codex_dir = fake_home / ".codex"
+    codex_dir.mkdir()
+    auth_file = codex_dir / "auth.json"
+    auth_file.write_text(json.dumps({"tokens": {"access_token": "oauth-token"}}))
+
+    from host.docker_cmd import build_docker_cmd
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount=str(tmp_path / "ws"),
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-123",
+            short_id="t123",
+            max_turns=10,
+            step="coder",
+            is_resume=False,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            image="nightshift:latest",
+            agent_kind="codex",
+        )
+
+    cmd_str = " ".join(cmd)
+    # API keys should NOT be passed
+    assert "CODEX_API_KEY=" not in cmd_str
+    assert "OPENAI_API_KEY=" not in cmd_str
+    # But other Codex vars should still be passed
+    assert "CODEX_MODEL=gpt-4" in cmd_str
+
+
+def test_codex_no_oauth_includes_api_keys(tmp_path, monkeypatch):
+    """When Codex OAuth is absent, API keys are passed through."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Set API keys in environment
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+
+    # Create fake home WITHOUT OAuth
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    # No .codex directory
+
+    from host.docker_cmd import build_docker_cmd
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount=str(tmp_path / "ws"),
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-123",
+            short_id="t123",
+            max_turns=10,
+            step="coder",
+            is_resume=False,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            image="nightshift:latest",
+            agent_kind="codex",
+        )
+
+    cmd_str = " ".join(cmd)
+    # API keys SHOULD be passed when no OAuth
+    assert "CODEX_API_KEY=sk-codex-key" in cmd_str
+    assert "OPENAI_API_KEY=sk-openai-key" in cmd_str
+
+
+def test_codex_oauth_empty_tokens_includes_api_keys(tmp_path, monkeypatch):
+    """When auth.json exists but tokens is empty, API keys are passed."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-key")
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    codex_dir = fake_home / ".codex"
+    codex_dir.mkdir()
+    auth_file = codex_dir / "auth.json"
+    auth_file.write_text(json.dumps({"tokens": {}}))  # Empty tokens
+
+    from host.docker_cmd import build_docker_cmd
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount=str(tmp_path / "ws"),
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-123",
+            short_id="t123",
+            max_turns=10,
+            step="coder",
+            is_resume=False,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            image="nightshift:latest",
+            agent_kind="codex",
+        )
+
+    cmd_str = " ".join(cmd)
+    # API keys should be passed when tokens is empty
+    assert "CODEX_API_KEY=sk-codex-key" in cmd_str
+
+
+def test_non_codex_agent_includes_api_keys_even_with_oauth(tmp_path, monkeypatch):
+    """Non-codex agents pass API keys even if OAuth exists."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    codex_dir = fake_home / ".codex"
+    codex_dir.mkdir()
+    auth_file = codex_dir / "auth.json"
+    auth_file.write_text(json.dumps({"tokens": {"access_token": "oauth-token"}}))
+
+    from host.docker_cmd import build_docker_cmd
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount=str(tmp_path / "ws"),
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-123",
+            short_id="t123",
+            max_turns=10,
+            step="coder",
+            is_resume=False,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            image="nightshift:latest",
+            agent_kind="claude-code",  # Not codex
+        )
+
+    cmd_str = " ".join(cmd)
+    # API keys should be passed for non-codex agents
+    assert "CODEX_API_KEY=sk-codex-key" in cmd_str
+    assert "OPENAI_API_KEY=sk-openai-key" in cmd_str

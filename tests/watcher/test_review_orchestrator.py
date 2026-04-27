@@ -12,8 +12,66 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from host.watcher import HostWatcher
 from core.protocols import TrackerIssue, TrackerComment
+from core.state_machine import InvalidTransition
 
 from tests.watcher.conftest import _make_watcher, _make_session, _make_issue, _make_comment
+
+
+# ---------------------------------------------------------------------------
+# SSM-7: Review flow SSM transition tests
+# ---------------------------------------------------------------------------
+
+class TestSSMTransitions:
+    """Verify review flow uses SSM-validated state transitions."""
+
+    def test_launch_transitions_to_reviewing(self, tmp_path):
+        """launch_review() must use SSM transition to 'reviewing'.
+
+        SSM-7: Review launch should validate transition via SSM.
+        Valid: waiting:review -> reviewing
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        w.reviews._launch_background = lambda cmd, sid: True
+
+        w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "reviewing"
+
+    def test_launch_from_invalid_state_raises(self, tmp_path):
+        """Launching review from invalid state should raise InvalidTransition.
+
+        SSM-7: Only waiting:review -> reviewing is valid (plus working->reviewing
+        for revert, and reviewing->reviewing for re-launch).
+        """
+        from host.session_utils import update_status
+
+        w = _make_watcher(tmp_path)
+        # Use 'starting' which cannot transition to 'reviewing'
+        sd = _make_session(w.sessions_dir, "abc", status="starting", issue_id="issue-abc")
+
+        with pytest.raises(InvalidTransition):
+            update_status(sd, "reviewing")
+
+    def test_done_transitions_to_human_review(self, tmp_path):
+        """Review done (escalate) must use SSM transition to 'waiting:human-review'.
+
+        SSM-7: Escalation should validate transition via SSM.
+        Valid: waiting:review -> waiting:human-review
+        """
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 1\n---\n")
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        w.reviews._rounds["abc"] = 1  # Already at max rounds
+        w.reviews._launch_background = lambda cmd, sid: True
+        w.telegram.notify = MagicMock()
+
+        w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
 
 
 # ---------------------------------------------------------------------------
@@ -949,237 +1007,69 @@ class TestStaleReviewCleanupBeforeLaunch:
 
 
 # ---------------------------------------------------------------------------
-# Host-side pre-review rebase tests
+# Review launch without pre-review rebase tests
 # ---------------------------------------------------------------------------
 
-class TestHostSideRebase:
-    """Pre-review rebase runs on host, not in container, to avoid bind-mount issues."""
-
-    def test_rebase_runs_on_host_not_container(self, tmp_path):
-        """Rebase is called from review_orchestrator before launching review.
-
-        This is the key test for the bind-mount fix: git cannot unlink mounted
-        files like WORKFLOW.md inside the container, so rebase must run on host.
-        """
+class TestReviewLaunchWithoutPreReviewRebase:
+    def test_no_prereview_rebase(self, tmp_path):
+        """maybe_launch_review() must not call host-side pre-review rebase."""
         w = _make_watcher(tmp_path)
         (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
-        (w.repo_dir / "WORKFLOW.md").write_text(
-            "---\n"
-            "workspace:\n"
-            "  root: .worktrees\n"
-            "  base_branch: master\n"
-            "---\n"
-        )
-
         coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
                                  issue_id="issue-abc")
-
-        # Create worktree directory
-        worktree = w.repo_dir / ".worktrees" / "agent-abc"
-        worktree.mkdir(parents=True)
 
         launched = []
         w.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid)) or True
 
-        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
-             patch("core.config.load_workflow") as mock_lw:
-            mock_rebase.return_value = None  # Rebase succeeds
-            cfg = MagicMock()
-            cfg.review.max_rounds = 3
-            cfg.workspace.root = ".worktrees"
-            cfg.workspace.base_branch = "master"
-            cfg.workspace.test_command = None
-            cfg.workspace.test_timeout_s = 120
-            mock_lw.return_value = cfg
-
+        with patch("host.rebase.attempt_pre_review_rebase",
+                   side_effect=AssertionError("pre-review rebase should not run")) as mock_rebase:
             w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
                                           w.repo_dir / "REVIEW.md")
 
-        # Rebase should have been called
-        mock_rebase.assert_called_once()
-        # Review should be launched after successful rebase
-        assert any("review-abc" in str(sid) for _, sid in launched)
-
-    def test_rebase_failure_does_not_loop_session(self, tmp_path):
-        """Rebase failure resumes coder, doesn't loop with endless review launches.
-
-        This is the key test: before the fix, rebase failures would cause
-        the session to be resumed, complete again, and loop indefinitely.
-        Now the host handles rebase before launching review.
-        """
-        w = _make_watcher(tmp_path)
-        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
-        (w.repo_dir / "WORKFLOW.md").write_text(
-            "---\n"
-            "workspace:\n"
-            "  root: .worktrees\n"
-            "  base_branch: master\n"
-            "---\n"
-        )
-
-        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
-                                 issue_id="issue-abc")
-
-        # Create worktree directory
-        worktree = w.repo_dir / ".worktrees" / "agent-abc"
-        worktree.mkdir(parents=True)
-
-        launched = []
-        w.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid)) or True
-        w.telegram.notify = MagicMock()
-
-        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
-             patch("core.config.load_workflow") as mock_lw:
-            mock_rebase.return_value = "REBASE CONFLICT: fix conflicts"  # Rebase fails
-            cfg = MagicMock()
-            cfg.review.max_rounds = 3
-            cfg.workspace.root = ".worktrees"
-            cfg.workspace.base_branch = "master"
-            cfg.workspace.test_command = None
-            cfg.workspace.test_timeout_s = 120
-            mock_lw.return_value = cfg
-
-            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
-                                          w.repo_dir / "REVIEW.md")
-
-        # Coder should be resumed (not review launched)
-        assert any("abc" == sid and "--resume" in str(cmd) for cmd, sid in launched)
-        # Review should NOT be launched
-        assert not any("review-abc" in str(sid) for _, sid in launched)
-        # Status should be 'working' (not 'reviewing')
-        state = json.loads((coder_sd / "state.json").read_text())
-        assert state["status"] == "working"
-        # Resume prompt should be written
-        assert (coder_sd / "resume-prompt.md").exists()
-        assert "REBASE CONFLICT" in (coder_sd / "resume-prompt.md").read_text()
-
-    def test_rebase_posts_tracker_comment(self, tmp_path):
-        """Rebase failure posts a tracker comment about resuming."""
-        w = _make_watcher(tmp_path)
-        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
-        (w.repo_dir / "WORKFLOW.md").write_text(
-            "---\nworkspace:\n  root: .worktrees\n  base_branch: master\n---\n")
-
-        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
-                                 issue_id="issue-abc")
-        (w.repo_dir / ".worktrees" / "agent-abc").mkdir(parents=True)
-
-        w.reviews._launch_background = lambda cmd, sid: True
-        w.telegram.notify = MagicMock()
-        tracker = MagicMock()
-        w._tracker = tracker
-
-        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase",
-                   return_value="REBASE CONFLICT"), \
-             patch("core.config.load_workflow") as mock_lw:
-            cfg = MagicMock()
-            cfg.review.max_rounds = 3
-            cfg.workspace.root = ".worktrees"
-            cfg.workspace.base_branch = "master"
-            cfg.workspace.test_command = None
-            cfg.workspace.test_timeout_s = 120
-            mock_lw.return_value = cfg
-
-            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
-                                          w.repo_dir / "REVIEW.md")
-
-        # Should have posted a comment about rebase
-        tracker.add_comment.assert_called_once()
-        comment_body = tracker.add_comment.call_args[0][1]
-        assert "Rebase" in comment_body
-
-    def test_successful_rebase_launches_review(self, tmp_path):
-        """When rebase succeeds, review is launched normally."""
-        w = _make_watcher(tmp_path)
-        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
-        (w.repo_dir / "WORKFLOW.md").write_text(
-            "---\nworkspace:\n  root: .worktrees\n  base_branch: master\n---\n")
-
-        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
-                                 issue_id="issue-abc")
-        (w.repo_dir / ".worktrees" / "agent-abc").mkdir(parents=True)
-
-        launched = []
-        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
-
-        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase",
-                   return_value=None), \
-             patch("core.config.load_workflow") as mock_lw:
-            cfg = MagicMock()
-            cfg.review.max_rounds = 3
-            cfg.workspace.root = ".worktrees"
-            cfg.workspace.base_branch = "master"
-            cfg.workspace.test_command = None
-            cfg.workspace.test_timeout_s = 120
-            mock_lw.return_value = cfg
-
-            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
-                                          w.repo_dir / "REVIEW.md")
-
-        # Review should be launched
-        assert "review-abc" in launched
-        # Status should be 'reviewing'
-        state = json.loads((coder_sd / "state.json").read_text())
-        assert state["status"] == "reviewing"
-
-    def test_missing_worktree_skips_rebase(self, tmp_path):
-        """If worktree doesn't exist, rebase is skipped and review proceeds."""
-        w = _make_watcher(tmp_path)
-        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
-        (w.repo_dir / "WORKFLOW.md").write_text(
-            "---\nworkspace:\n  root: .worktrees\n  base_branch: master\n---\n")
-
-        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
-                                 issue_id="issue-abc")
-        # Worktree NOT created
-
-        launched = []
-        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
-
-        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
-             patch("core.config.load_workflow") as mock_lw:
-            mock_rebase.return_value = None  # Would succeed
-            cfg = MagicMock()
-            cfg.review.max_rounds = 3
-            cfg.workspace.root = ".worktrees"
-            cfg.workspace.base_branch = "master"
-            cfg.workspace.test_command = None
-            cfg.workspace.test_timeout_s = 120
-            mock_lw.return_value = cfg
-
-            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
-                                          w.repo_dir / "REVIEW.md")
-
-        # Rebase called with non-existent path returns None, allowing review
-        assert "review-abc" in launched
-
-    def test_config_load_failure_skips_rebase(self, tmp_path):
-        """If WORKFLOW.md fails to load, rebase is skipped."""
-        w = _make_watcher(tmp_path)
-        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
-
-        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
-                                 issue_id="issue-abc")
-
-        launched = []
-        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
-
-        with patch("host.watcher.review_orchestrator.attempt_pre_review_rebase") as mock_rebase, \
-             patch("core.config.load_workflow") as mock_lw:
-            # First call (WORKFLOW.md) raises, second call (REVIEW.md) succeeds
-            cfg = MagicMock()
-            cfg.review.max_rounds = 3
-            cfg.workspace.root = ".worktrees"
-            cfg.workspace.base_branch = "master"
-            mock_lw.side_effect = [FileNotFoundError("no workflow"), cfg]
-
-            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
-                                          w.repo_dir / "REVIEW.md")
-
-        # Rebase should not have been called due to config failure
         mock_rebase.assert_not_called()
-        # Review should still launch
-        assert "review-abc" in launched
+
+    def test_review_launches_without_rebase(self, tmp_path):
+        """Review launches directly from waiting:review without a rebase step."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid)) or True
+
+        with patch("host.rebase.attempt_pre_review_rebase") as mock_rebase:
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        assert len(launched) == 1
+        cmd, sid = launched[0]
+        assert sid == "review-abc"
+        assert "--step" in cmd
+        assert cmd[cmd.index("--step") + 1] == "review"
+        assert json.loads((coder_sd / "state.json").read_text())["status"] == "reviewing"
+        mock_rebase.assert_not_called()
+
+    def test_rebase_conflict_handled_at_accept(self, tmp_path):
+        """Review launch ignores rebase conflicts; accept-time flow owns them."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append((cmd, sid)) or True
+        w.telegram.notify = MagicMock()
+
+        with patch("host.rebase.attempt_pre_review_rebase",
+                   return_value="REBASE CONFLICT: fix conflicts") as mock_rebase:
+            w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
+                                          w.repo_dir / "REVIEW.md")
+
+        mock_rebase.assert_not_called()
+        assert any(sid == "review-abc" for _, sid in launched)
+        assert not (coder_sd / "resume-prompt.md").exists()
+        assert json.loads((coder_sd / "state.json").read_text())["status"] == "reviewing"
 
 
 # ---------------------------------------------------------------------------
@@ -1338,27 +1228,52 @@ class TestStaleCleanupProcessesVerdictFirst:
 
 
 # ---------------------------------------------------------------------------
-# _resume_coder_for_rebase launch failure tests
+# Missing session directory handling tests
 # ---------------------------------------------------------------------------
 
-class TestResumeCorderForRebaseRevert:
-    def test_resume_coder_for_rebase_reverts_on_failure(self, tmp_path):
-        """When _launch_background fails, status should revert to waiting:review."""
+class TestMissingSessionDirHandled:
+    """Watcher should handle missing session directories gracefully.
+
+    Bug scenario:
+    1. Issue is accepted (code merged)
+    2. Tracker update fails (lock contention)
+    3. Session directory is cleaned up
+    4. Watcher sees open issue with nightshift label
+    5. Tries to resume → crash with FileNotFoundError
+    """
+
+    def test_maybe_launch_review_skips_missing_session_dir(self, tmp_path):
+        """maybe_launch_review should skip if session_dir doesn't exist."""
         w = _make_watcher(tmp_path)
-        (w.repo_dir / "WORKFLOW.md").write_text(
-            "---\nworkspace:\n  root: .worktrees\n  base_branch: main\n---\n"
-        )
-        coder_dir = _make_session(w.sessions_dir, "abc", status="waiting:review",
-                                  issue_id="issue-abc")
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
         w.telegram.notify = MagicMock()
-        w._tracker = MagicMock()
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        # Simulate launch failure
-        w.reviews._launch_background = lambda cmd, sid: False
+        # Session directory does NOT exist
+        missing_dir = w.sessions_dir / "abc"
+        assert not missing_dir.exists()
 
-        rebase_prompt = "Conflict detected. Please resolve."
-        w.reviews._resume_coder_for_rebase("abc", coder_dir, "issue-abc", rebase_prompt)
+        # Should not crash
+        w.reviews.maybe_launch_review("abc", missing_dir, "issue-abc",
+                                       w.repo_dir / "REVIEW.md")
 
-        state = json.loads((coder_dir / "state.json").read_text())
-        assert state["status"] == "waiting:review", \
-            f"Expected status to revert to waiting:review, got {state['status']}"
+        # Should not launch anything
+        assert launched == []
+
+    def test_escalate_to_human_skips_missing_dir(self, tmp_path):
+        """_escalate_to_human should skip if session_dir doesn't exist."""
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 1\n---\n")
+        w.telegram.notify = MagicMock()
+        w.reviews._rounds["abc"] = 1  # At max rounds
+
+        # Session directory does NOT exist
+        missing_dir = w.sessions_dir / "abc"
+        assert not missing_dir.exists()
+
+        # Should not crash
+        w.reviews._escalate_to_human("abc", missing_dir, "issue-abc", 1)
+
+        # Should still send notification (no session dir update needed)
+        w.telegram.notify.assert_called_once()

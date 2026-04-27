@@ -13,7 +13,7 @@ from core.hooks import run_hook, DEFAULT_HOOK_TIMEOUT_S
 from core.post_run import post_run_action
 from core.prompts import build_resume_prompt
 from core.protocols import (
-    CodingAgent, IssueTracker, Notifier, NotificationLevel, WorkspaceManager,
+    AgentEvent, CodingAgent, IssueTracker, Notifier, NotificationLevel, WorkspaceManager,
     AgentEventType, MarkerType, parse_marker, TrackerIssue, TrackerComment, Workspace,
 )
 from core.qa_flow import handle_question, handle_waiting
@@ -143,7 +143,7 @@ class SessionRunner:
             if self.signal_method in ("auto", "file"):
                 file_signal = self._check_file_signals()
                 if file_signal is not None:
-                    result = self._handle_file_signal(file_signal)
+                    result = self._dispatch_event(file_signal)
                     if result == "STOP":
                         break
                     if result == "QUESTION_ASKED":
@@ -175,6 +175,14 @@ class SessionRunner:
         self._maybe_record_usage(event)
         if event.type == AgentEventType.TEXT:
             return self._handle_text(event.content)
+        if event.type == AgentEventType.QUESTION:
+            self._on_question(event.content)
+            return "QUESTION_ASKED"
+        if event.type == AgentEventType.CHECKPOINT:
+            self._on_checkpoint(event.content)
+        if event.type == AgentEventType.DONE:
+            self._on_done()
+            return "STOP"
         if event.type == AgentEventType.TOOL_CALL:
             self.state_mgr.append_conversation("tool_call", event.content)
         elif event.type == AgentEventType.TOOL_RESULT:
@@ -263,16 +271,16 @@ class SessionRunner:
 
     # ── File-based signal fallback ─────────────────────────────
 
-    def _check_file_signals(self) -> str | tuple[str, str] | None:
+    def _check_file_signals(self) -> AgentEvent | None:
         """Poll /session/signal/ for file-based signals (fallback for non-MCP agents).
 
-        Returns "DONE", ("CHECKPOINT", desc), ("QUESTION", text), or None.
+        Returns an AgentEvent for DONE, CHECKPOINT, QUESTION, or None.
         Detected signal files are unlinked to prevent re-triggering.
         """
         done_file = self._signal_dir / "done"
         if done_file.exists():
             done_file.unlink()
-            return "DONE"
+            return AgentEvent(type=AgentEventType.DONE, raw="")
 
         question_file = self._signal_dir / "question.json"
         if question_file.exists():
@@ -282,7 +290,8 @@ class SessionRunner:
                 log.error(f"Failed to read question signal file: {e}")
                 data = {}
             question_file.unlink(missing_ok=True)
-            return ("QUESTION", data.get("question", ""))
+            question = data.get("question", "")
+            return AgentEvent(type=AgentEventType.QUESTION, content=question, raw=question)
 
         checkpoint_file = self._signal_dir / "checkpoint"
         if checkpoint_file.exists():
@@ -292,22 +301,8 @@ class SessionRunner:
                 log.error(f"Failed to read checkpoint signal file: {e}")
                 desc = ""
             checkpoint_file.unlink(missing_ok=True)
-            return ("CHECKPOINT", desc)
+            return AgentEvent(type=AgentEventType.CHECKPOINT, content=desc, raw=desc)
 
-        return None
-
-    def _handle_file_signal(self, signal) -> str | None:
-        """Process a file signal the same way as the corresponding @@MARKER@@."""
-        if signal == "DONE":
-            self._on_done()
-            return "STOP"
-        if isinstance(signal, tuple):
-            kind, content = signal
-            if kind == "CHECKPOINT":
-                self._on_checkpoint(content)
-            elif kind == "QUESTION":
-                self._on_question(content)
-                return "QUESTION_ASKED"
         return None
 
     # ── Text / marker handling ────────────────────────────────

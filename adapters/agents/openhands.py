@@ -110,9 +110,15 @@ class OpenHandsAgent(HeadlessAgentBase):
         metadata = self._metadata(ev)
 
         if kind == "ActionEvent":
+            action = ev.get("action")
+            if isinstance(action, dict):
+                return self._parse_unified_action(action, raw, metadata)
             return self._parse_action(ev, raw, metadata)
 
         if kind == "ObservationEvent":
+            observation = ev.get("observation")
+            if isinstance(observation, dict):
+                return self._parse_unified_observation(ev, observation, raw, metadata)
             return self._parse_observation(ev, raw, metadata)
 
         if kind == "MessageEvent":
@@ -146,10 +152,52 @@ class OpenHandsAgent(HeadlessAgentBase):
         return AgentEvent(
             type=AgentEventType.TEXT, content=raw, metadata=metadata, raw=raw)
 
+    def _parse_unified_action(
+        self, action: dict, raw: str, metadata: dict,
+    ) -> AgentEvent:
+        """Parse a unified ActionEvent payload into an AgentEvent."""
+        action_kind = str(action.get("kind", ""))
+
+        if action_kind == "FinishAction":
+            return AgentEvent(
+                type=AgentEventType.TEXT,
+                content="@@DONE@@",
+                metadata=metadata,
+                raw=raw,
+            )
+
+        content = self._action_preview(action_kind, action)
+        return AgentEvent(
+            type=AgentEventType.TOOL_CALL,
+            content=content,
+            metadata=metadata,
+            raw=raw,
+        )
+
     def _parse_observation(self, ev: dict, raw: str, metadata: dict) -> AgentEvent:
         """Parse an ObservationEvent into the appropriate AgentEvent."""
         content = str(ev.get("content", ""))[:TOOL_RESULT_PREVIEW_LEN]
         if ev.get("is_error") and self._is_auth_failure(content):
+            return AgentEvent(
+                type=AgentEventType.AUTH_FAILURE,
+                content=content,
+                metadata=metadata,
+                raw=raw,
+            )
+        return AgentEvent(
+            type=AgentEventType.TOOL_RESULT,
+            content=content,
+            metadata=metadata,
+            raw=raw,
+        )
+
+    def _parse_unified_observation(
+        self, ev: dict, observation: dict, raw: str, metadata: dict,
+    ) -> AgentEvent:
+        """Parse a unified ObservationEvent payload into an AgentEvent."""
+        content = self._observation_preview(observation)[:TOOL_RESULT_PREVIEW_LEN]
+        is_error = bool(ev.get("is_error") or observation.get("is_error"))
+        if is_error and self._is_auth_failure(content):
             return AgentEvent(
                 type=AgentEventType.AUTH_FAILURE,
                 content=content,
@@ -210,6 +258,33 @@ class OpenHandsAgent(HeadlessAgentBase):
             metadata=metadata,
             raw=raw,
         )
+
+    def _action_preview(self, action_type: str, action: dict) -> str:
+        """Build a readable preview for a unified action payload."""
+        if action_type == "TerminalAction":
+            command = action.get("command", "")
+            return f"TerminalAction: {command}"
+
+        if action_type == "FileEditorAction":
+            summary = action.get("summary") or action.get("path") or "file edit"
+            return f"FileEditorAction: {summary}"
+
+        if action_type:
+            details = json.dumps(action)[:200]
+            return f"{action_type}: {details}"
+
+        return json.dumps(action)[:200]
+
+    def _observation_preview(self, observation: dict) -> str:
+        """Build a readable preview for a unified observation payload."""
+        content = observation.get("content", "")
+        if isinstance(content, list):
+            pieces: list[str] = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    pieces.append(str(part.get("text", "")))
+            content = " ".join(piece for piece in pieces if piece)
+        return str(content)
 
     def _metadata(self, ev: dict) -> dict:
         usage = self._extract_usage(ev)

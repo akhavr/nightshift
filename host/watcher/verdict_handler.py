@@ -15,6 +15,7 @@ from core.review import (
     parse_nightshift_command, strip_nightshift_command,
     build_revise_prompt,
 )
+from host.watcher.session_monitor import cleanup_completed_review_session
 from host.watcher.lifecycle_comments import post_revise
 from host.watcher.telegram_relay import TelegramRelay
 
@@ -82,6 +83,9 @@ class VerdictHandler:
 
     def handle_reviewer_approve(self, coder_sid: str, coder_dir: Path, issue_id: str):
         """Reviewer approved -- transition coder to waiting:human-review."""
+        if not coder_dir.exists():
+            log.warning(f"[{coder_sid[:12]}] Coder session directory missing, skipping approve")
+            return
         try:
             _update_status(coder_dir, "waiting:human-review")
             log.info(f"[{coder_sid}] Reviewer approved -> waiting:human-review")
@@ -92,6 +96,8 @@ class VerdictHandler:
                 level=NotificationLevel.ACTIONS)
 
             self._post_approval_to_tracker(coder_sid, issue_id)
+            review_dir = coder_dir.parent / f"review-{coder_sid}"
+            cleanup_completed_review_session(review_dir, coder_dir, repo_dir=self.repo_dir)
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to handle reviewer approve: {e}")
 
@@ -153,11 +159,15 @@ class VerdictHandler:
     def handle_reviewer_revise(self, coder_sid: str, coder_dir: Path,
                                issue_id: str, review_dir: Path):
         """Reviewer requested revisions -- resume coder with feedback."""
+        if not coder_dir.exists():
+            log.warning(f"[{coder_sid[:12]}] Coder session directory missing, skipping revise")
+            return
         try:
             parts = self.collect_reviewer_feedback(coder_sid, issue_id, review_dir)
             feedback = build_revise_prompt([], inline_feedback="\n".join(parts))
             (coder_dir / "resume-prompt.md").write_text(feedback)
 
+            reason = "\n".join(parts)
             cmd = [
                 sys.executable,
                 str(_HOST_DIR / "launch.py"),
@@ -173,11 +183,10 @@ class VerdictHandler:
             _update_status(coder_dir, "working")
             self._recently_launched[coder_sid] = time.time()
             log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")
-
-            reason = "\n".join(parts)
             self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.",
                                 level=NotificationLevel.ALL)
             post_revise(self._get_tracker, issue_id, coder_sid, reason)
+            cleanup_completed_review_session(review_dir, coder_dir, repo_dir=self.repo_dir)
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e}")
 

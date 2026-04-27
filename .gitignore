@@ -2,6 +2,8 @@
 .env
 .worktrees/
 .nightshift/
+.nightshift/coder-issues.yaml
+.nightshift/reviewer-issues.yaml
 __pycache__/
 *.pyc
 .venv/

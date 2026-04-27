@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import load_workflow
+from core.state_machine import SessionStateMachine, TERMINAL_STATES
 from core.post_run import format_cost_line, format_token_count
 from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
@@ -23,6 +24,7 @@ from core.review import collect_review_feedback, build_revise_prompt
 from host.constants import (
     SHORT_ID_LEN, REVIEW_SESSION_PREFIX, LOG_PREVIEW_LEN,
     HISTORY_FOLLOW_POLL_S, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME,
+    BLOCKED_LABEL_PREFIX,
 )
 from core.upgrade import (
     read_template_version, get_canonical_version,
@@ -46,12 +48,37 @@ from host.merge import (
     merge_with_rebase_fallback, verify_no_conflict_markers,
     check_branch_not_behind_base,
 )
+from host.git_utils import audit_worktree_symlinks
+from host.rebase import sanitize_git_config
 from host.session_utils import (
     archive_session,
+    clear_completed_at,
     get_repo_root,
     read_state, write_state, update_status,
     force_remove_dir, remove_worktree,
 )
+
+
+def _validate_transition(sid: str, target_state: str) -> None:
+    """Validate that SSM allows transition to target_state. Exits on invalid."""
+    session_dir = repo_root() / ".nightshift" / "sessions" / sid
+    if not session_dir.exists():
+        return  # Let the command handle missing sessions
+    try:
+        state = read_state(session_dir)
+    except Exception as e:
+        logging.warning("Could not read state for session %s: %s", sid[:12], e)
+        return  # Let the command handle corrupt state
+    current = state.get("status", "starting")
+    ssm = SessionStateMachine(initial_state=current)
+    if not ssm.can_transition(target_state):
+        if current in TERMINAL_STATES:
+            print(f"Cannot {target_state} session '{sid[:12]}': already in terminal state '{current}'",
+                  file=sys.stderr)
+        else:
+            print(f"Cannot transition from '{current}' to '{target_state}' for session '{sid[:12]}'",
+                  file=sys.stderr)
+        sys.exit(1)
 
 
 def repo_root() -> Path:
@@ -287,6 +314,8 @@ def cmd_start(a):
 
 
 def cmd_resume(a):
+    sid = resolve_session(a.issue_id)
+    _validate_transition(sid, "working")
     subprocess.run(_build_resume_launch_cmd(a.issue_id, getattr(a, "workflow", None)))
 
 
@@ -409,6 +438,39 @@ def cmd_status(a):
         except Exception as e:
             logging.error("Failed reading session status from %s: %s", f, e)
             print(f"{sid:<14} {'<error>':<26}")
+
+
+def cmd_blocked(a):
+    """List issues blocked by dependencies."""
+    r = repo_root()
+    config = load_workflow(_resolve_workflow(a))
+    try:
+        tracker = get_tracker_with_fallback(config, r)
+        issues = tracker.list_issues(status="open")
+    except Exception as e:
+        print(f"Failed to fetch issues: {e}", file=sys.stderr)
+        return
+
+    # Collect issues with blocked labels
+    blocked_issues = []
+    for issue in issues:
+        blocked_by = [l[len(BLOCKED_LABEL_PREFIX):]
+                      for l in issue.labels if l.startswith(BLOCKED_LABEL_PREFIX)]
+        if blocked_by:
+            blocked_issues.append((issue, blocked_by))
+
+    if not blocked_issues:
+        print("No blocked issues.")
+        return
+
+    print(f"{'ISSUE':<14} {'BLOCKED BY':<14} TITLE")
+    for issue, blockers in blocked_issues:
+        title = issue.title[:50] if len(issue.title) > 50 else issue.title
+        for i, blocker in enumerate(blockers):
+            if i == 0:
+                print(f"{issue.identifier:<14} {blocker:<14} {title}")
+            else:
+                print(f"{'':<14} {blocker:<14}")
 
 
 def cmd_logs(a):
@@ -559,6 +621,24 @@ def _update_gitignore(root: Path):
         print(".gitignore already has nightshift entries")
 
 
+def _install_pre_commit_hook(root: Path, force: bool = False):
+    """Install pre-commit hook to reject conflict markers."""
+    hook_src = Path(__file__).resolve().parent.parent / "hooks" / "pre-commit"
+    if not hook_src.exists():
+        print(f"Warning: pre-commit hook source not found at {hook_src}", file=sys.stderr)
+        return
+
+    hook_dst = root / ".git" / "hooks" / "pre-commit"
+    if hook_dst.exists() and not force:
+        print(f"Pre-commit hook already exists at {hook_dst}. Use --force to overwrite.")
+        return
+
+    hook_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(hook_src, hook_dst)
+    hook_dst.chmod(0o755)
+    print(f"Installed pre-commit hook (rejects conflict markers)")
+
+
 def cmd_init(a):
     """Scaffold WORKFLOW.md and .env.example in the current repo."""
     try:
@@ -607,6 +687,7 @@ def cmd_init(a):
     print(f"Created {aw_dir.parent}")
 
     _update_gitignore(root)
+    _install_pre_commit_hook(root, a.force)
 
     print("\nNext steps:")
     print(f"  1. Review and customize {workflow_path.name} (notifications, auto_start, base_branch)")
@@ -876,16 +957,41 @@ def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
         print(f"Cleaned up review session for {coder_sid}")
 
 
+def _unblock_dependents(tracker, closed_issue_id: str) -> None:
+    """Remove blocked:<id> labels from issues that depended on the closed issue."""
+
+    try:
+        issues = tracker.list_issues(status="open")
+    except Exception as e:
+        print(f"Warning: failed to scan for blocked issues: {e}", file=sys.stderr)
+        return
+
+    for issue in issues:
+        for label in issue.labels:
+            if not label.startswith(BLOCKED_LABEL_PREFIX):
+                continue
+
+            blocker_prefix = label[len(BLOCKED_LABEL_PREFIX):]
+            if not closed_issue_id.startswith(blocker_prefix):
+                continue
+
+            try:
+                tracker.remove_label(issue.id, label)
+                print(f"Unblocked {issue.identifier} (dependency {blocker_prefix} closed)")
+            except Exception as e:
+                print(f"Warning: failed to remove {label} from "
+                      f"{issue.identifier}: {e}", file=sys.stderr)
+
+
 def cmd_accept(a):
     """Merge agent branch into base branch, then clean up."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
+    _validate_transition(sid, "accepted")
     config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
     base = config.workspace.base_branch
     wt = r / config.workspace.root / f"agent-{sid}"
-
-    merge_ref = resolve_merge_ref(r, branch, wt)
 
     # Verify agent branch is not behind base
     behind_msg = check_branch_not_behind_base(r, branch, base)
@@ -894,12 +1000,28 @@ def cmd_accept(a):
         _report_accept_failure(config, r, a.issue_id, behind_msg)
         sys.exit(1)
 
+    escaping_symlinks = audit_worktree_symlinks(wt)
+    if escaping_symlinks:
+        details = "\n".join(
+            f"- {symlink_path} -> {target_path}"
+            for symlink_path, target_path in escaping_symlinks
+        )
+        message = (
+            f"Refusing to accept because worktree symlinks resolve outside /workspace:\n"
+            f"{details}"
+        )
+        print(message, file=sys.stderr)
+        _report_accept_failure(config, r, a.issue_id, message)
+        sys.exit(1)
+
+    merge_ref = resolve_merge_ref(r, branch, wt)
+
     # Show what will be merged
     subprocess.run(["git", "log", "--oneline", f"{base}..{merge_ref}"], cwd=str(r))
     subprocess.run(["git", "diff", "--stat", f"{base}..{merge_ref}"], cwd=str(r))
 
     merge_with_rebase_fallback(r, merge_ref, branch, base, a.issue_id, config,
-                                _report_accept_failure)
+                                _report_accept_failure, worktree=wt)
     print(f"Merged into {base}")
 
     verify_no_conflict_markers(r, config, a.issue_id, sid,
@@ -923,6 +1045,7 @@ def cmd_accept(a):
         cost_line = ""
 
     archive_session(session_dir, r)
+    shutil.rmtree(session_dir, ignore_errors=True)
     remove_worktree(r, wt, branch)
     _cleanup_review_artifacts(r, sid, config)
 
@@ -930,6 +1053,7 @@ def cmd_accept(a):
         tracker = get_tracker_with_fallback(config, r)
         tracker.set_status(a.issue_id, "closed")
         tracker.add_comment(a.issue_id, f"✅ Accepted and merged into `{base}`.")
+        _unblock_dependents(tracker, a.issue_id)
         tracker.sync()
     except Exception as e:
         print(f"Warning: failed to close issue in tracker: {e}", file=sys.stderr)
@@ -943,8 +1067,12 @@ def cmd_reject(a):
     """Discard agent work: remove worktree, branch, and session."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
+    _validate_transition(sid, "rejected")
     config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
+
+    # Sanitize core.worktree if container set it to /workspace
+    sanitize_git_config(r)
 
     result = subprocess.run(
         ["git", "log", "--oneline", f"{config.workspace.base_branch}..{branch}"],
@@ -1003,9 +1131,8 @@ def _stop_and_build_mid_flight(sid: str, sd, message: str) -> str:
     return _build_mid_flight_prompt(message)
 
 
-def _collect_review_feedback(wf, repo, issue_id: str, inline) -> str:
+def _collect_review_feedback(config, repo, issue_id: str, inline) -> str:
     """Collect tracker comments and return a review revision prompt."""
-    config = load_workflow(wf)
     tracker = get_tracker_with_fallback(config, repo)
     review_comments = collect_review_feedback(tracker, issue_id)
     feedback = build_revise_prompt(review_comments, inline)
@@ -1043,11 +1170,16 @@ def cmd_revise(a):
         sys.exit(1)
 
     wf = _resolve_workflow(a)
+    config = load_workflow(wf)
 
     if status in WORKING_STATUSES:
         feedback = _stop_and_build_mid_flight(sid, sd, inline)
     else:
-        feedback = _collect_review_feedback(wf, r, a.issue_id, inline)
+        feedback = _collect_review_feedback(config, r, a.issue_id, inline)
+        # Clear completed_at when resuming from completion states (SSM-11)
+        clear_completed_at(sd)
+        # Clean up sibling review session if exists
+        _cleanup_review_artifacts(r, sid, config)
 
     (sd / "resume-prompt.md").write_text(feedback)
     update_status(sd, "working")
@@ -1383,6 +1515,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sp = s.add_parser("status")
     sp.set_defaults(func=cmd_status)
+
+    sp = s.add_parser("blocked", help="List issues blocked by dependencies")
+    sp.set_defaults(func=cmd_blocked)
 
     sp = s.add_parser("logs")
     sp.add_argument("issue_id")

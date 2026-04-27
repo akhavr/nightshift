@@ -10,7 +10,10 @@ from pathlib import Path
 from host.constants import (
     SHORT_ID_LEN, CONFLICT_FILE_PREVIEW_LEN,
 )
+from core.workspace_transaction import check_worktree_integrity
+from core.workspace_transaction import WorkspaceTransaction, RebaseConflictError
 from host.git_utils import fetch_and_resolve_ref
+from host.rebase import sanitize_git_config
 from host.session_utils import update_status
 
 BEHIND_BASE_COMMIT_PREVIEW = 10  # max commits to show in behind-base warning
@@ -22,6 +25,9 @@ def check_branch_not_behind_base(repo: Path, branch: str, base: str) -> str | No
     Returns None if the branch is up to date, or a message describing
     the divergence if the branch is behind.
     """
+    # Sanitize core.worktree if container set it to /workspace
+    sanitize_git_config(repo)
+
     base_ref = fetch_and_resolve_ref(repo, base)
 
     # Find commits in base that are not in the agent branch
@@ -75,8 +81,12 @@ def resolve_merge_ref(repo: Path, branch: str, worktree: Path) -> str:
 
 def merge_with_rebase_fallback(repo: Path, merge_ref: str, branch: str,
                                 base: str, issue_id: str, config,
-                                report_failure):
-    """Attempt merge; on conflict, rebase and retry. Exits on failure."""
+                                report_failure, worktree: Path | None = None):
+    """Attempt merge; on conflict, rebase in worktree and retry. Exits on failure.
+
+    Args:
+        worktree: If provided, rebase is done in the worktree to avoid polluting main repo.
+    """
     result = subprocess.run(
         ["git", "merge", "--no-ff", merge_ref,
          "-m", f"Merge {branch}: agent work on {issue_id}"],
@@ -93,45 +103,64 @@ def merge_with_rebase_fallback(repo: Path, merge_ref: str, branch: str,
                        f"Commit or stash them first.")
         sys.exit(1)
 
-    # Conflict — abort, rebase, retry
+    # Conflict — abort, rebase in worktree, retry
     subprocess.run(["git", "merge", "--abort"], capture_output=True, cwd=str(repo))
     print(f"Merge conflict — rebasing {branch} onto {base}...")
-    _rebase_and_retry_merge(repo, branch, base, issue_id, config, report_failure)
+    _rebase_and_retry_merge(repo, branch, base, issue_id, config, report_failure, worktree)
 
 
 def _rebase_and_retry_merge(repo: Path, branch: str, base: str,
-                             issue_id: str, config, report_failure):
-    """Rebase branch onto base, then retry the merge. Exits on failure."""
-    old_branch = subprocess.run(
-        ["git", "branch", "--show-current"],
-        capture_output=True, text=True, cwd=str(repo),
-    ).stdout.strip()
-    subprocess.run(["git", "checkout", branch], capture_output=True, cwd=str(repo))
-    rebase = subprocess.run(
-        ["git", "rebase", base],
-        capture_output=True, text=True, cwd=str(repo),
-    )
-    if rebase.returncode != 0:
-        _abort_rebase(repo, old_branch, branch, base, issue_id, config,
-                      rebase.stderr.strip(), report_failure)
+                             issue_id: str, config, report_failure,
+                             worktree: Path | None = None):
+    """Rebase branch onto base in worktree, then retry merge in main repo. Exits on failure.
 
-    subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(repo))
+    If worktree is provided and exists, the rebase is done there to avoid polluting
+    the main repo working tree with conflict markers.
+    """
+    rebase_dir = worktree if worktree and worktree.exists() else None
+    if not rebase_dir:
+        old_branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True, cwd=str(repo),
+        ).stdout.strip()
+        subprocess.run(["git", "checkout", branch], capture_output=True, cwd=str(repo))
+        rebase = subprocess.run(
+            ["git", "rebase", base],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        if rebase.returncode != 0:
+            subprocess.run(["git", "rebase", "--abort"], capture_output=True, cwd=str(repo))
+            subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(repo))
+            details = rebase.stderr.strip()
+            print(f"Rebase failed:\n{details}", file=sys.stderr)
+            report_failure(
+                config, repo, issue_id,
+                f"Merge conflicts with `{base}` that need manual resolution:\n"
+                f"```\n{details}\n```\n"
+                f"@nightshift revise")
+            sys.exit(1)
+
+        subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(repo))
+        print("Rebase successful, retrying merge...")
+        _retry_merge_after_rebase(repo, branch, issue_id, config, report_failure)
+        return
+
+    check_worktree_integrity(rebase_dir, auto_repair=True)
+    try:
+        with WorkspaceTransaction(rebase_dir) as txn:
+            txn.rebase(base)
+    except RebaseConflictError as exc:
+        details = exc.stderr.strip() or str(exc)
+        print(f"Rebase failed:\n{details}", file=sys.stderr)
+        report_failure(
+            config, rebase_dir, issue_id,
+            f"Merge conflicts with `{base}` that need manual resolution:\n"
+            f"```\n{details}\n```\n"
+            f"@nightshift revise")
+        sys.exit(1)
+
     print("Rebase successful, retrying merge...")
     _retry_merge_after_rebase(repo, branch, issue_id, config, report_failure)
-
-
-def _abort_rebase(repo: Path, old_branch: str, branch: str, base: str,
-                  issue_id: str, config, details: str, report_failure):
-    """Abort a failed rebase and report the error."""
-    subprocess.run(["git", "rebase", "--abort"], capture_output=True, cwd=str(repo))
-    subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(repo))
-    print(f"Rebase failed:\n{details}", file=sys.stderr)
-    report_failure(
-        config, repo, issue_id,
-        f"Merge conflicts with `{base}` that need manual resolution:\n"
-        f"```\n{details}\n```\n"
-        f"@nightshift revise")
-    sys.exit(1)
 
 
 def _retry_merge_after_rebase(repo: Path, branch: str, issue_id: str,
