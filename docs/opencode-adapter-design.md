@@ -1,4 +1,6 @@
-# OpenCode Adapter Design
+# OpenCode Adapter Design [DONE]
+
+**Status:** Implemented in `adapters/agents/opencode.py`, registered as `agent.kind: opencode`.
 
 Research notes for adding `opencode` as an `agent.kind` option.
 

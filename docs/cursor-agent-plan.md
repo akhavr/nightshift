@@ -1,4 +1,6 @@
-# Plan: Add Cursor AI CLI Agent Adapter (with OpenRouter/M2.7)
+# Plan: Add Cursor AI CLI Agent Adapter (with OpenRouter/M2.7) [NOT STARTED]
+
+**Status:** Planning only. No implementation yet. REQ-029 not formally added to requirements.md.
 
 ## Context
 
