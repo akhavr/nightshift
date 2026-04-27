@@ -10,7 +10,11 @@ import os
 import subprocess
 from pathlib import Path
 
-from core.workspace_transaction import check_worktree_integrity
+from core.workspace_transaction import (
+    WorkspaceTransaction,
+    RebaseConflictError,
+    check_worktree_integrity,
+)
 
 log = logging.getLogger("watcher")
 
@@ -125,8 +129,7 @@ def attempt_pre_review_rebase(
     _fix_container_gitdir(worktree_path, repo_root)
 
     # Repair or fail fast before any git command touches a real worktree.
-    if (worktree_path / ".git").exists():
-        check_worktree_integrity(worktree_path, auto_repair=True)
+    check_worktree_integrity(worktree_path, auto_repair=True)
 
     # Sanitize core.worktree if container set it to /workspace
     if repo_root:
@@ -134,25 +137,17 @@ def attempt_pre_review_rebase(
 
     log.info(f"Pre-review rebase onto {base_branch} in {worktree_path}...")
     result = _rebase(worktree_path, base_branch)
-    used_merge_fallback = False
-
     if not result.success:
-        log.warning(f"Rebase failed, falling back to merge: {result.conflict_details}")
-        merge_result = _merge(worktree_path, base_branch)
-        if not merge_result.success:
-            log.warning(f"Merge also failed: {merge_result.conflict_details}")
-            return _build_merge_conflict_prompt(base_branch, merge_result)
-        used_merge_fallback = True
+        log.warning(f"Rebase failed: {result.conflict_details}")
+        return _build_rebase_conflict_prompt(base_branch, result)
 
     if test_command:
         test_failure = _run_test_command(worktree_path, test_command, test_timeout_s)
         if test_failure:
-            op = "merge" if used_merge_fallback else "rebase"
-            log.warning(f"Post-{op} tests failed: {test_failure}")
-            return _build_test_failure_prompt(base_branch, test_failure, used_merge_fallback)
+            log.warning(f"Post-rebase tests failed: {test_failure}")
+            return _build_test_failure_prompt(base_branch, test_failure)
 
-    op = "merge fallback" if used_merge_fallback else "rebase"
-    log.info(f"Pre-review {op} succeeded")
+    log.info("Pre-review rebase succeeded")
     return None
 
 
@@ -215,28 +210,51 @@ def _collect_conflict_details(worktree_path: Path, operation: str, stderr: str) 
     return details
 
 
+def _format_conflict_details(operation: str, stderr: str, conflicting_files: list[str]) -> str:
+    """Build conflict details from a transaction result or exception."""
+    details = f"{operation} failed.\nstderr: {stderr.strip()}"
+    if conflicting_files:
+        details += f"\nConflicting files:\n" + "\n".join(conflicting_files)
+    return details
+
+
 def _rebase(worktree_path: Path, base_branch: str) -> RebaseResult:
     """Fetch latest base branch and rebase the worktree branch onto it."""
     had_stash = _stash_changes(worktree_path, "rebase")
     target = _fetch_and_get_target(worktree_path, base_branch)
 
-    result = subprocess.run(
-        ["git", "rebase", target],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
-        return RebaseResult(success=True)
+    if not (worktree_path / ".git").exists():
+        result = subprocess.run(
+            ["git", "rebase", target],
+            cwd=str(worktree_path), capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
+            return RebaseResult(success=True)
 
-    details = _collect_conflict_details(worktree_path, "Rebase", result.stderr)
+        details = _collect_conflict_details(worktree_path, "Rebase", result.stderr)
 
-    subprocess.run(
-        ["git", "rebase", "--abort"],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
+        subprocess.run(
+            ["git", "rebase", "--abort"],
+            cwd=str(worktree_path), capture_output=True, text=True,
+        )
 
-    _pop_stash_if_needed(worktree_path, had_stash, "after rebase abort")
-    return RebaseResult(success=False, conflict_details=details)
+        _pop_stash_if_needed(worktree_path, had_stash, "after rebase abort")
+        return RebaseResult(success=False, conflict_details=details)
+
+    try:
+        with WorkspaceTransaction(worktree_path) as txn:
+            txn.rebase(target)
+    except RebaseConflictError as exc:
+        details = _format_conflict_details("Rebase", exc.stderr, exc.conflicting_files)
+        _pop_stash_if_needed(worktree_path, had_stash, "after rebase abort")
+        return RebaseResult(success=False, conflict_details=details)
+    except RuntimeError as exc:
+        _pop_stash_if_needed(worktree_path, had_stash, "after rebase failure")
+        return RebaseResult(success=False, conflict_details=str(exc))
+
+    _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
+    return RebaseResult(success=True)
 
 
 def _merge(worktree_path: Path, base_branch: str) -> MergeResult:
@@ -244,21 +262,33 @@ def _merge(worktree_path: Path, base_branch: str) -> MergeResult:
     had_stash = _stash_changes(worktree_path, "merge")
     target = _fetch_and_get_target(worktree_path, base_branch)
 
-    result = subprocess.run(
-        ["git", "merge", target, "-m", f"Merge {target} into agent branch"],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-    if result.returncode == 0:
+    if not (worktree_path / ".git").exists():
+        result = subprocess.run(
+            ["git", "merge", target, "-m", f"Merge {target} into agent branch"],
+            cwd=str(worktree_path), capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
+            return MergeResult(success=True)
+
+        details = _collect_conflict_details(worktree_path, "Merge", result.stderr)
+
+        subprocess.run(
+            ["git", "merge", "--abort"],
+            cwd=str(worktree_path), capture_output=True, text=True,
+        )
+
+        _pop_stash_if_needed(worktree_path, had_stash, "after merge abort")
+        return MergeResult(success=False, conflict_details=details)
+
+    with WorkspaceTransaction(worktree_path) as txn:
+        result = txn.merge(target)
+
+    if result.success:
         _pop_stash_if_needed(worktree_path, had_stash, "(conflicts?)")
         return MergeResult(success=True)
 
-    details = _collect_conflict_details(worktree_path, "Merge", result.stderr)
-
-    subprocess.run(
-        ["git", "merge", "--abort"],
-        cwd=str(worktree_path), capture_output=True, text=True,
-    )
-
+    details = _format_conflict_details("Merge", result.stderr, result.conflicting_files)
     _pop_stash_if_needed(worktree_path, had_stash, "after merge abort")
     return MergeResult(success=False, conflict_details=details)
 
