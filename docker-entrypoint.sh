@@ -12,7 +12,26 @@ sanitize_core_worktree() {
         fi
     fi
 }
-trap 'sanitize_core_worktree exit' EXIT
+
+cleanup_workspace() {
+    cleanup_status=0
+    if python3 /opt/nightshift/entrypoint.py --cleanup 2>/dev/null; then
+        cleanup_status=0
+    else
+        cleanup_status=$?
+    fi
+
+    if [ "$cleanup_status" -ne 0 ]; then
+        WORKTREE_PATH="${WORKTREE_PATH:-/workspace}"
+        if [ -n "${ORIGINAL_GIT_CONTENT_FILE:-}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ]; then
+            mkdir -p "$WORKTREE_PATH" 2>/dev/null || true
+            cp "$ORIGINAL_GIT_CONTENT_FILE" "$WORKTREE_PATH/.git" 2>/dev/null || true
+            echo "Restored .git pointer from shell fallback"
+        fi
+    fi
+    sanitize_core_worktree exit
+}
+trap cleanup_workspace EXIT
 
 # Copy read-only credentials to writable HOME so Claude Code can function.
 # The host mounts ~/.claude at /claude-auth:ro for security.
@@ -46,6 +65,14 @@ fi
 if [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
     export GIT_DIR="/repo-git/worktrees/${WORKTREE_NAME}"
     export GIT_WORK_TREE="/workspace"
+    export WORKTREE_PATH="/workspace"
+fi
+
+# Save the original .git pointer for the exit cleanup helper.
+if [ -f /workspace/.git ]; then
+    ORIGINAL_GIT_CONTENT_FILE="/session/original-git-pointer"
+    cp /workspace/.git "$ORIGINAL_GIT_CONTENT_FILE" 2>/dev/null || true
+    export ORIGINAL_GIT_CONTENT_FILE
 fi
 
 # WT-1.6: Sanitize core.worktree at startup (defense-in-depth with exit trap).

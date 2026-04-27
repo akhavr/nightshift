@@ -131,12 +131,12 @@ This happens because:
 - Normal git operations (status, fetch, merge, rebase) in worktrees
 - Git commands with GIT_WORK_TREE env var set
 
-**The read-only mount DOES work** — tested in Docker with exact mount pattern:
+**The main repo config mount stays read-only**, while the worktree pointer mount must remain writable so transactional cleanup can restore it:
 ```
 -v /repo/.git:/repo-git:rw
 -v /repo/.git/config:/repo-git/config:ro
 ```
-Result: `error: could not write config file /repo-git/config: Resource busy`
+Result: direct config writes fail as expected, while the `.git` pointer can still be restored by the cleanup transaction.
 
 **Bug in sanitize function**: `docker-entrypoint.sh` prints "Sanitized" even when unset FAILS (due to `|| true`), giving false confidence that cleanup succeeded.
 
@@ -158,7 +158,7 @@ Config is modified multiple times before the pollution appears. Something betwee
 ### Current Mitigations
 
 1. **WT-1.6**: Container startup calls `sanitize_core_worktree()` in `docker-entrypoint.sh`
-2. **WT-1.7**: Container EXIT trap calls `sanitize_core_worktree()` 
+2. **WT-1.7**: Container EXIT trap restores the saved `.git` pointer and calls `sanitize_core_worktree()`
 3. **Host sanitization**: `sanitize_git_config()` in `host/rebase.py` called during rebase/merge/accept
 
 ### Gap

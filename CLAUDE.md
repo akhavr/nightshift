@@ -104,7 +104,7 @@ Key core modules:
 - `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.
 - `config_discovery.py` — Workflow file discovery: CLI flag > `.nightshift.yaml` pointer > `WORKFLOW.md` default. Also writes `.nightshift.yaml` for `init --workflow-path`.
 
-**`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, runs `SessionRunner`.
+**`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, wraps the run in `WorkspaceTransaction`, and exposes `--cleanup` for EXIT-trap pointer restoration plus `core.worktree` sanitization.
 
 **`hooks/`** — Git hooks installed by `nightshift init`:
 - `pre-commit` — Rejects commits containing conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`). Safety net to prevent accidental commits of unresolved conflicts.

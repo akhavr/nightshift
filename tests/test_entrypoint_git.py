@@ -7,6 +7,118 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def clean_git_environ(monkeypatch):
+    """Clear git worktree env so subprocess calls use the temp repo."""
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+
+
+def _init_repo_with_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Create a real git repo and worktree for cleanup tests."""
+    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, env=clean_env)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env=clean_env,
+    )
+
+    test_file = repo / "README.md"
+    test_file.write_text("# Test\n")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env=clean_env,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env=clean_env,
+    )
+
+    worktree = tmp_path / "workspace"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "agent-branch", str(worktree)],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+        env=clean_env,
+    )
+
+    git_dir = repo / ".git" / "worktrees" / worktree.name
+    return repo, worktree, git_dir
+
+
+def _write_cleanup_harness(
+    tmp_path: Path,
+    worktree: Path,
+    git_dir: Path,
+    exit_code: int,
+    remove_git_file: bool = False,
+) -> Path:
+    """Write a shell script that mutates git state and runs the cleanup helper on exit."""
+    original_git_file = tmp_path / "original.git"
+    original_git_file.write_text((worktree / ".git").read_text())
+
+    remove_git_line = ""
+    if remove_git_file:
+        remove_git_line = f'\nrm -f "{worktree / ".git"}"'
+
+    script = tmp_path / "entrypoint_harness.sh"
+    script.write_text(
+        f"""#!/bin/sh
+set -eu
+
+export GIT_DIR="{git_dir}"
+export GIT_WORK_TREE="{worktree}"
+export WORKTREE_PATH="{worktree}"
+export ORIGINAL_GIT_CONTENT_FILE="{original_git_file}"
+
+cleanup() {{
+    cleanup_status=0
+    if python3 /workspace/entrypoint.py --cleanup; then
+        cleanup_status=0
+    else
+        cleanup_status=$?
+    fi
+
+    if [ "$cleanup_status" -ne 0 ]; then
+        if [ -n "${{ORIGINAL_GIT_CONTENT_FILE:-}}" ] && [ -f "$ORIGINAL_GIT_CONTENT_FILE" ]; then
+            mkdir -p "$WORKTREE_PATH" 2>/dev/null || true
+            cp "$ORIGINAL_GIT_CONTENT_FILE" "$WORKTREE_PATH/.git" 2>/dev/null || true
+        fi
+    fi
+}}
+trap cleanup EXIT
+
+printf '%s\n' "gitdir: /repo-git/worktrees/{worktree.name}" > "{worktree / '.git'}"
+git config core.worktree /workspace
+{remove_git_line}
+
+exit {exit_code}
+"""
+    )
+    script.chmod(0o755)
+    return script
+
+
 # WT-1.6: Script to test core.worktree sanitization
 _SANITIZE_WORKTREE_SCRIPT = """\
 #!/bin/sh
@@ -70,42 +182,21 @@ exit 0
 
 class TestGitPointerRestoration:
 
-    def test_git_pointer_restored_on_exit(self, tmp_path):
-        """The .git pointer is restored to host path when the container exits."""
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        repo_git = tmp_path / "repo-git"
-        repo_git.mkdir()
-        worktrees_dir = repo_git / "worktrees" / "agent-abc123"
-        worktrees_dir.mkdir(parents=True)
+    def test_git_pointer_restored_on_exit(self, tmp_path, monkeypatch):
+        """entrypoint.run() restores .git content after a successful run."""
+        _, worktree, _ = _init_repo_with_worktree(tmp_path)
+        git_file = worktree / ".git"
+        original_content = git_file.read_text()
 
-        # Original host-style .git pointer
-        original_content = "gitdir: /home/user/repo/.git/worktrees/agent-abc123"
-        git_file = workspace / ".git"
-        git_file.write_text(original_content)
+        import entrypoint
 
-        # Rewrite script to use tmp_path paths
-        script_text = _GIT_POINTER_SCRIPT.replace("/workspace", str(workspace))
-        script_text = script_text.replace("/repo-git", str(repo_git))
-        script = tmp_path / "git_test.sh"
-        script.write_text(script_text)
-        script.chmod(0o755)
+        def fake_main():
+            git_file.write_text("gitdir: /tmp/container-pointer\n")
 
-        env = {
-            "HOME": str(tmp_path),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "WORKTREE_NAME": "agent-abc123",
-        }
-        result = subprocess.run(
-            ["/bin/sh", str(script)],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        monkeypatch.setattr(entrypoint, "main", fake_main)
 
-        assert result.returncode == 0
-        # After the script exits, .git should be restored to original content
+        entrypoint.run(worktree)
+
         assert git_file.read_text() == original_content
 
     def test_git_pointer_unchanged_if_no_git_file(self, tmp_path):
@@ -203,6 +294,105 @@ class TestGitPointerRestoration:
         assert result.returncode == 0
         # .git should remain unchanged
         assert git_file.read_text() == original_content
+
+    def test_git_pointer_restored_on_error(self, tmp_path):
+        """EXIT trap restores .git content even when the script exits nonzero."""
+        _, worktree, git_dir = _init_repo_with_worktree(tmp_path)
+        git_file = worktree / ".git"
+        original_content = git_file.read_text()
+        script = _write_cleanup_harness(tmp_path, worktree, git_dir, exit_code=1)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        assert result.returncode == 1
+        assert git_file.read_text() == original_content
+
+    def test_git_pointer_restored_when_cleanup_helper_fails(self, tmp_path):
+        """Shell fallback restores .git when the Python cleanup helper cannot run."""
+        _, worktree, git_dir = _init_repo_with_worktree(tmp_path)
+        git_file = worktree / ".git"
+        original_content = git_file.read_text()
+        script = _write_cleanup_harness(tmp_path, worktree, git_dir, exit_code=1)
+
+        fake_bin = tmp_path / "fake-bin"
+        fake_bin.mkdir()
+        fake_python = fake_bin / "python3"
+        fake_python.write_text("#!/bin/sh\nexit 1\n")
+        fake_python.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "WORKTREE_PATH": str(worktree),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        assert result.returncode == 1
+        assert git_file.read_text() == original_content
+
+    def test_git_pointer_restored_when_cleanup_helper_fails_and_git_file_missing(self, tmp_path):
+        """Shell fallback recreates .git even if the file was removed before exit."""
+        _, worktree, git_dir = _init_repo_with_worktree(tmp_path)
+        git_file = worktree / ".git"
+        original_content = git_file.read_text()
+        script = _write_cleanup_harness(
+            tmp_path,
+            worktree,
+            git_dir,
+            exit_code=1,
+            remove_git_file=True,
+        )
+
+        fake_bin = tmp_path / "fake-bin"
+        fake_bin.mkdir()
+        fake_python = fake_bin / "python3"
+        fake_python.write_text("#!/bin/sh\nexit 1\n")
+        fake_python.chmod(0o755)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "WORKTREE_PATH": str(worktree),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        assert result.returncode == 1
+        assert git_file.read_text() == original_content
+
+    def test_cleanup_helper_reports_missing_backup(self, tmp_path, monkeypatch):
+        """The Python cleanup helper should fail when the saved .git backup is missing."""
+        _, worktree, _ = _init_repo_with_worktree(tmp_path)
+        import entrypoint
+
+        monkeypatch.setenv("ORIGINAL_GIT_CONTENT_FILE", str(tmp_path / "missing.git"))
+        monkeypatch.setenv("WORKTREE_PATH", str(worktree))
+        monkeypatch.setenv("GIT_DIR", str(tmp_path / "repo" / ".git"))
+
+        exit_code = entrypoint.cleanup_workspace(worktree)
+
+        assert exit_code == 1
 
 
 class TestGitEnvVars:
@@ -673,6 +863,40 @@ class TestCoreWorktreeSanitization:
         assert result.returncode == 0
         assert "Sanitized" not in result.stdout
         assert "core.worktree=UNSET" in result.stdout
+
+
+    def test_no_config_pollution_on_exit(self, tmp_path):
+        """EXIT cleanup removes core.worktree=/workspace from the repo config."""
+        _, worktree, git_dir = _init_repo_with_worktree(tmp_path)
+        git_file = worktree / ".git"
+        original_content = git_file.read_text()
+        script = _write_cleanup_harness(tmp_path, worktree, git_dir, exit_code=0)
+
+        env = {
+            "HOME": str(tmp_path),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        }
+        result = subprocess.run(
+            ["/bin/sh", str(script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
+        assert result.returncode == 0
+        assert git_file.read_text() == original_content
+
+        config_result = subprocess.run(
+            ["git", "config", "--get", "core.worktree"],
+            cwd=worktree,
+            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert config_result.returncode != 0
+        assert config_result.stdout.strip() == ""
 
 
 # WT-1.7: Exit trap sanitization script
