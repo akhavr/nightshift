@@ -11,6 +11,8 @@ from host.constants import (
     MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
     PROVIDER_OUTAGE_RETRY_INTERVAL_S, MAX_PROVIDER_OUTAGE_RETRIES,
     REVIEW_SESSION_PREFIX, LAUNCH_GRACE_PERIOD_S,
+    ZOMBIE_CHECK_INTERVAL_S, ZOMBIE_TIMEOUT_MULTIPLIER, DEFAULT_STALL_TIMEOUT_S,
+    BLOCKED_LABEL_PREFIX, REVISE_PENDING_FILENAME,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -172,6 +174,11 @@ class SessionMonitor:
             if self._try_recover_review_verdict(sid, session_dir, review_sid):
                 return  # verdict recovered and applied
 
+            # Check for revise-pending marker (failed revise launch after review)
+            issue_id = state.get("issue_id", "")
+            if issue_id and self._retry_revise_if_pending(session_dir, sid, issue_id):
+                return
+
             log.warning(f"[{sid}] Stuck in 'reviewing' with no review container — "
                         f"reverting to 'waiting:review'")
             update_status(session_dir, "waiting:review")
@@ -192,6 +199,11 @@ class SessionMonitor:
 
         issue_id = state.get("issue_id", "")
         if not issue_id:
+            return
+
+        # Check for revise-pending marker (failed revise launch) — retry before
+        # checking done signals, otherwise the session gets stuck in done:pending-review
+        if self._retry_revise_if_pending(session_dir, sid, issue_id):
             return
 
         # Check if session actually completed (@@DONE@@ in conversation or
@@ -251,6 +263,45 @@ class SessionMonitor:
             return True
 
         return False
+
+    def _retry_revise_if_pending(self, session_dir: Path, sid: str, issue_id: str) -> bool:
+        """Check for revise-pending marker and retry the revise launch.
+
+        When a revise launch fails (e.g., due to cp -a failure under concurrent
+        git operations), a marker file is written so we can retry later. This
+        prevents the session from getting stuck in done:pending-review.
+
+        Returns True if a retry was attempted (regardless of success), False
+        if no marker exists.
+        """
+        marker = session_dir / REVISE_PENDING_FILENAME
+        if not marker.exists():
+            return False
+
+        try:
+            marker_data = json.loads(marker.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{sid}] Failed to read revise-pending marker: {e}")
+            marker.unlink(missing_ok=True)
+            return False
+
+        review_dir = Path(marker_data.get("review_dir", ""))
+        log.info(f"[{sid}] Found revise-pending marker (from review {review_dir.name}) — retrying launch")
+
+        cmd = [
+            sys.executable,
+            str(_HOST_DIR / "launch.py"),
+            issue_id, "--resume",
+        ]
+        if self._launch_background(cmd, sid):
+            log.info(f"[{sid}] Revise retry launch succeeded — removing marker")
+            marker.unlink(missing_ok=True)
+            self._recently_launched[sid] = time.time()
+            update_status(session_dir, "working")
+        else:
+            log.warning(f"[{sid}] Revise retry launch failed — keeping marker for next attempt")
+
+        return True
 
     def _try_recover_review_verdict(self, coder_sid: str, coder_dir: Path,
                                     review_sid: str) -> bool:

@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from host.constants import SHORT_ID_LEN
-from host.session_utils import update_status as _update_status
+from host.constants import SHORT_ID_LEN, REVISE_PENDING_FILENAME
+from host.session_utils import update_status as _update_status, clear_completed_at
 from core.config import load_workflow
 from core.protocols import NotificationLevel
 from core.review import (
@@ -158,23 +158,38 @@ class VerdictHandler:
             feedback = build_revise_prompt([], inline_feedback="\n".join(parts))
             (coder_dir / "resume-prompt.md").write_text(feedback)
 
-            _update_status(coder_dir, "working")
-            self._recently_launched[coder_sid] = time.time()
-            log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")
-            self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.",
-                                level=NotificationLevel.ALL)
-
-            reason = "\n".join(parts)
-            post_revise(self._get_tracker, issue_id, coder_sid, reason)
-
             cmd = [
                 sys.executable,
                 str(_HOST_DIR / "launch.py"),
                 issue_id, "--resume",
             ]
             if not self._launch_background(cmd, coder_sid):
-                log.warning(f"[{coder_sid}] Reviewer revise launch failed -- reverting to reviewing")
-                _update_status(coder_dir, "reviewing")
+                log.warning(f"[{coder_sid}] Reviewer revise launch failed -- writing marker for retry")
+                self._write_revise_pending_marker(coder_dir, issue_id, review_dir)
+                return
+
+            # Only update state after successful launch (SSM-7)
+            clear_completed_at(coder_dir)
+            _update_status(coder_dir, "working")
+            self._recently_launched[coder_sid] = time.time()
+            log.info(f"[{coder_sid}] Reviewer requested revisions -- resuming coder")
+
+            reason = "\n".join(parts)
+            self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.",
+                                level=NotificationLevel.ALL)
+            post_revise(self._get_tracker, issue_id, coder_sid, reason)
         except Exception as e:
-            log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e} -- reverting to reviewing")
-            _update_status(coder_dir, "reviewing")
+            log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e}")
+
+    def _write_revise_pending_marker(self, coder_dir: Path, issue_id: str, review_dir: Path):
+        """Write marker file for SessionMonitor to retry the revise launch."""
+        marker = coder_dir / REVISE_PENDING_FILENAME
+        try:
+            marker_data = {
+                "issue_id": issue_id,
+                "review_dir": str(review_dir),
+            }
+            marker.write_text(json.dumps(marker_data))
+            log.info(f"[{coder_dir.name}] Wrote revise-pending.json for retry")
+        except Exception as e:
+            log.error(f"[{coder_dir.name}] Failed to write revise-pending marker: {e}")

@@ -62,3 +62,17 @@ SOCKET_SERVER_MAX_RESTARTS = 10           # Stop restarting after this many fail
 
 # ── Recently launched persistence ─────────────────────
 RECENTLY_LAUNCHED_FILENAME = "recently_launched.json"  # Persisted launch timestamps
+
+# ── Zombie container detection ────────────────────────
+ZOMBIE_CHECK_INTERVAL_S = 60       # How often to check for zombie containers
+ZOMBIE_TIMEOUT_MULTIPLIER = 2     # Alert if no events for stall_timeout_s * this multiplier
+DEFAULT_STALL_TIMEOUT_S = 300     # Fallback stall timeout when config unavailable
+
+# ── Disk space guardrail ──────────────────────────────────
+MIN_FREE_GB = 1.0                 # Halt watcher if free disk space drops below this
+
+# ── Dependency blocking ────────────────────────────────────
+BLOCKED_LABEL_PREFIX = "blocked:"  # Label prefix for blocking dependencies
+
+# ── Revise retry ────────────────────────────────────────────
+REVISE_PENDING_FILENAME = "revise-pending.json"  # Marker for failed revise launches
