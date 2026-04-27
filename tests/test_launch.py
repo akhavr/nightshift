@@ -81,7 +81,7 @@ class TestCreateWorktree:
         issue_id = "abc123def456"
 
         # Simulate subprocess calls:
-        # 1. git cat-file -t     -> ok (base branch commit check)
+        # 1. git cat-file -t     -> ok (verify base commit exists)
         # 2. git branch          -> ok
         # 3. git worktree add    -> ok (creates the wt dir with a file)
         # (WT-6: safe_prune is mocked, not called via subprocess)
@@ -131,7 +131,7 @@ class TestCreateWorktree:
         mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
         # WT-6: safe_prune is mocked, so only 3 subprocess calls
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="commit"),  # cat-file check
+            MagicMock(returncode=0),  # cat-file -t (verify base exists)
             MagicMock(returncode=0),  # branch
             MagicMock(returncode=1, stderr="fatal: already exists"),  # worktree add
         ]
@@ -1056,6 +1056,7 @@ class TestCopyGitChanges:
         source.mkdir()
         (source / "objects").mkdir()
         (source / "refs" / "heads").mkdir(parents=True)
+        # Use agent/xxx format (slash, not hyphen) per current ref whitelist
         (source / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
         (source / "refs" / "heads" / "agent" / "good").write_text("0123456789abcdef0123456789abcdef01234567\n")
         (source / "refs" / "heads" / "agent" / "bad" / "evil").parent.mkdir(parents=True)

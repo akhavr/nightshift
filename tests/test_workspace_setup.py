@@ -402,6 +402,44 @@ class TestCreateWorktreeTransaction:
         assert session_dir.exists()
 
 
+class TestCreateWorktreeBaseCommitVerification:
+    """Tests for base commit verification before branch creation."""
+
+    def test_create_worktree_rejects_missing_base_commit(self, tmp_path):
+        """ValueError raised when base_branch points to non-existent commit."""
+        repo, run = _init_repo(tmp_path)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        wt_path = tmp_path / "worktree"
+
+        from host.workspace_setup import create_worktree
+
+        with pytest.raises(ValueError) as exc_info:
+            create_worktree(repo, wt_path, "agent/test-branch",
+                            "nonexistent-branch", session_dir, "test-issue-123")
+
+        assert "nonexistent-branch" in str(exc_info.value)
+        assert "missing commit" in str(exc_info.value)
+
+    def test_create_worktree_succeeds_with_valid_base(self, tmp_path):
+        """Branch created successfully when base commit exists."""
+        repo, run = _init_repo(tmp_path)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        wt_path = tmp_path / "worktree"
+
+        from host.workspace_setup import create_worktree
+
+        create_worktree(repo, wt_path, "agent/test-branch",
+                        "master", session_dir, "test-issue-123")
+
+        assert wt_path.exists()
+        assert (session_dir / "state.json").exists()
+        # Verify the branch points to a valid commit
+        result = run("git", "rev-parse", "agent/test-branch")
+        assert result.returncode == 0
+
+
 class TestSyncReviewWorktree:
     """Tests for syncing review worktree on resume after coder rebase."""
 
