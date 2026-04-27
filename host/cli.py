@@ -958,8 +958,6 @@ def _cleanup_review_artifacts(repo: Path, coder_sid: str, config):
 
 def _unblock_dependents(tracker, closed_issue_id: str) -> None:
     """Remove blocked:<id> labels from issues that depended on the closed issue."""
-    prefix = closed_issue_id[:SHORT_ID_LEN]
-    blocked_label = f"{BLOCKED_LABEL_PREFIX}{prefix}"
 
     try:
         issues = tracker.list_issues(status="open")
@@ -968,12 +966,19 @@ def _unblock_dependents(tracker, closed_issue_id: str) -> None:
         return
 
     for issue in issues:
-        if blocked_label in issue.labels:
+        for label in issue.labels:
+            if not label.startswith(BLOCKED_LABEL_PREFIX):
+                continue
+
+            blocker_prefix = label[len(BLOCKED_LABEL_PREFIX):]
+            if not closed_issue_id.startswith(blocker_prefix):
+                continue
+
             try:
-                tracker.remove_label(issue.id, blocked_label)
-                print(f"Unblocked {issue.identifier} (dependency {prefix} closed)")
+                tracker.remove_label(issue.id, label)
+                print(f"Unblocked {issue.identifier} (dependency {blocker_prefix} closed)")
             except Exception as e:
-                print(f"Warning: failed to remove {blocked_label} from "
+                print(f"Warning: failed to remove {label} from "
                       f"{issue.identifier}: {e}", file=sys.stderr)
 
 

@@ -1835,3 +1835,51 @@ def test_unblock_dependents_direct():
         "dependent1234", "blocked:closed123456"
     )
 
+
+def test_unblock_dependents_short_prefix():
+    """Short blocked prefixes should still be removed when the issue closes."""
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:abc1234"],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue]
+
+    _unblock_dependents(mock_tracker, "abc1234567890")
+
+    mock_tracker.remove_label.assert_called_once_with(
+        "dependent1234", "blocked:abc1234"
+    )
+
+
+def test_unblock_dependents_any_prefix_length():
+    """All matching blocked prefixes should be removed, regardless of length."""
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=[
+            "nightshift",
+            "blocked:abc12",
+            "blocked:abc1234",
+            "blocked:abc123456789",
+        ],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue]
+
+    _unblock_dependents(mock_tracker, "abc1234567890")
+
+    assert mock_tracker.remove_label.call_args_list == [
+        call("dependent1234", "blocked:abc12"),
+        call("dependent1234", "blocked:abc1234"),
+        call("dependent1234", "blocked:abc123456789"),
+    ]
