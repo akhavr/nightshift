@@ -1,5 +1,5 @@
 ---
-template_version: 2.1
+template_version: 3
 agent:
   kind: claude-code
   max_turns: 50
