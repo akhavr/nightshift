@@ -276,14 +276,14 @@ class TestParseErrorEvents:
         assert "turn.failed" in ev.content
 
     def test_turn_failed_usage_limit(self):
-        """Usage limit errors in turn.failed should be detected as AUTH_FAILURE."""
+        """Usage limit errors in turn.failed should be treated as transient."""
         agent = self._agent()
         raw = _ev("turn.failed", error={
             "message": "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
         })
         ev = agent._parse(raw)
-        assert ev.type == AgentEventType.AUTH_FAILURE
-        assert "usage limit" in ev.content
+        assert ev.type == AgentEventType.SYSTEM
+        assert "turn.failed" in ev.content
 
     def test_error_rate_limit_not_auth_failure(self):
         """Rate limit errors are handled as transient errors, not auth failures."""
@@ -350,15 +350,13 @@ class TestParseEdgeCases:
 
 
 class TestIsAuthFailure:
-    def test_usage_limit_detected_as_auth_failure(self):
-        """Usage limit errors from OpenAI should be detected as auth failures."""
-        # Exact message from OpenAI when hitting usage limits
-        assert CodexAgent._is_auth_failure(
+    def test_usage_limit_not_detected_as_auth_failure(self):
+        """Usage limit errors should not be detected as auth failures."""
+        assert not CodexAgent._is_auth_failure(
             "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
         )
-        # Also test partial patterns
-        assert CodexAgent._is_auth_failure("hit your usage limit")
-        assert CodexAgent._is_auth_failure("usage limit exceeded")
+        assert not CodexAgent._is_auth_failure("hit your usage limit")
+        assert not CodexAgent._is_auth_failure("usage limit exceeded")
 
     def test_detects_401(self):
         assert CodexAgent._is_auth_failure("unexpected status 401 Unauthorized")
