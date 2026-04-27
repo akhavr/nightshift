@@ -10,9 +10,7 @@ Three modules with clean interfaces hiding inside nightshift. This document defi
 
 **Solution:** Explicit FSM with atomic transitions.
 
-### SSM-1: SSM class with validation wired into StateManager [DONE]
-
-**Issue:** b5e7ac61001a (implemented via 0250e161a6d2)
+### SSM-1: SSM class with validation wired into StateManager
 
 **Tests (write first, must fail):**
 ```
@@ -35,9 +33,7 @@ tests/test_state.py::test_update_status_accepts_valid_transition
 
 ---
 
-### SSM-2: SSM owns status, JSON is persistence only [DONE]
-
-**Issue:** 0250e161a6d2
+### SSM-2: SSM owns status, JSON is persistence only
 
 **Tests:**
 ```
@@ -57,9 +53,7 @@ tests/test_state.py::test_transition_persists_to_json
 
 ---
 
-### SSM-3: Atomic mark_done via SSM (race condition eliminated) [DONE]
-
-**Issue:** 43e781891181 (commit 07d05553)
+### SSM-3: Atomic mark_done via SSM (race condition eliminated)
 
 **Tests:**
 ```
@@ -72,22 +66,16 @@ tests/test_post_run.py::test_notify_done_uses_transition
 **Files:** core/state_machine.py, core/state.py, core/post_run.py
 
 **Implementation:**
-1. SSM.TERMINAL_STATES = {'accepted', 'rejected', 'closed'}
-2. SSM.COMPLETION_STATES = {'waiting:review', 'waiting:human-review'} — completed_at set but resumable
-3. Transition to terminal state atomically sets completed_at
-4. Transition to completion state sets completed_at but allows resume (clears on resume)
-5. Remove mark_done(), mark_completed() - use transition()
-6. post_run.notify_done() calls state_mgr.transition('waiting:review')
+1. SSM.TERMINAL_STATES = {'waiting:review', 'accepted', 'rejected', 'closed'}
+2. Transition to terminal state atomically sets completed_at
+3. Remove mark_done(), mark_completed() - use transition()
+4. post_run.notify_done() calls state_mgr.transition('waiting:review')
 
 **Wired:** The race condition (status="working" + completed_at set) is impossible by construction.
 
-**Note:** `waiting:review` is NOT terminal — it can transition to `reviewing` or back to `working` (rebase conflict, revise verdict). Only `accepted`, `rejected`, `closed` are truly terminal.
-
 ---
 
-### SSM-4: Hooks for logging and notifications [DONE]
-
-**Issue:** d2000b5c84aa
+### SSM-4: Hooks for logging and notifications
 
 **Tests:**
 ```
@@ -108,9 +96,7 @@ tests/test_state.py::test_transition_logs_state_change
 
 ---
 
-### SSM-5: Watcher uses SSM-aware StateManager [DONE]
-
-**Issue:** 57561f29274b
+### SSM-5: Watcher uses SSM-aware StateManager
 
 **Tests:**
 ```
@@ -128,9 +114,7 @@ tests/watcher/test_session_monitor.py::test_consistent_status_read
 
 ---
 
-### SSM-6: Q&A flow uses SSM transitions [DONE]
-
-**Issue:** 954974afa32b
+### SSM-6: Q&A flow uses SSM transitions
 
 **Tests:**
 ```
@@ -149,9 +133,7 @@ tests/watcher/test_qa_handler.py::test_qa_validates_transition
 
 ---
 
-### SSM-7: Review flow uses SSM transitions [DONE]
-
-**Issue:** 9ed266080dbd
+### SSM-7: Review flow uses SSM transitions
 
 **Tests:**
 ```
@@ -172,9 +154,7 @@ tests/watcher/test_verdict_handler.py::test_reject_transitions_to_rejected
 
 ---
 
-### SSM-8: CLI commands use SSM transitions [DONE]
-
-**Issue:** ab92d978d314
+### SSM-8: CLI commands use SSM transitions
 
 **Tests:**
 ```
@@ -195,9 +175,7 @@ tests/test_cli_commands.py::test_resume_validates_state
 
 ---
 
-### SSM-9: Remove legacy status code [DONE]
-
-**Issue:** f90977b5544b
+### SSM-9: Remove legacy status code
 
 **Tests:**
 ```
@@ -215,77 +193,13 @@ tests/test_codebase_audit.py::test_no_direct_status_writes
 
 ---
 
-### SSM-10: Auto-cleanup stale review sessions [DONE]
-
-**Issue:** 83f750cd84e5
-
-**Problem:** Completed review sessions (review-<id>) linger in `waiting:review` status after verdict processed. Manual `nightshift cleanup` required. Discovered when multiple stale reviews cluttered status output.
-
-**Tests:**
-```
-tests/watcher/test_session_monitor.py::test_cleanup_completed_review_after_verdict
-tests/watcher/test_session_monitor.py::test_no_cleanup_active_review
-tests/watcher/test_session_monitor.py::test_cleanup_only_when_coder_transitioned
-```
-
-**Files:** host/watcher/session_monitor.py, host/watcher/verdict_handler.py
-
-**Implementation:**
-1. After processing approve/revise verdict, check if review session completed
-2. If review session has completed_at and coder session transitioned, auto-archive review
-3. Grace period (60s) to ensure verdict fully processed before cleanup
-
-**Wired:** Review sessions auto-cleanup after verdict applied. Status output stays clean.
-
-**Note:** This also fixes the "stale status after accept" UX issue - completed sessions won't linger in `nightshift status` output.
-
----
-
-### SSM-11: Resume from completion states (rebase/revise fix) [DONE]
-
-**Issue:** f2a6311 (commit 329f6522)
-
-**Problem:** When coder completes, `completed_at` is set and status becomes `waiting:review`. If pre-review rebase conflicts (or revise verdict issued), watcher tries to resume coder but resume logic rejects because `completed_at` is set. This creates a loop: rebase fails → resume blocked → revert to waiting:review → rebase fails → loop.
-
-**Root cause:** `waiting:review` was incorrectly treated as terminal. Resume logic checks `completed_at` to block resume of "completed" sessions, but completion states need to be resumable.
-
-**Tests:**
-```
-tests/test_state_machine.py::test_completion_state_allows_resume
-tests/test_state_machine.py::test_terminal_state_blocks_resume
-tests/test_state_machine.py::test_resume_clears_completed_at
-tests/watcher/test_review_orchestrator.py::test_rebase_conflict_resumes_coder
-tests/watcher/test_verdict_handler.py::test_revise_resumes_coder
-```
-
-**Files:** core/state_machine.py, core/state.py, host/watcher/review_orchestrator.py, host/watcher/verdict_handler.py
-
-**Implementation:**
-1. Distinguish TERMINAL_STATES (truly done) from COMPLETION_STATES (done but resumable)
-2. Resume logic checks TERMINAL_STATES, not completed_at
-3. On resume from completion state, clear completed_at
-4. review_orchestrator: on rebase conflict, transition to 'working' (clears completed_at)
-5. verdict_handler: on revise, transition to 'working' (clears completed_at)
-
-**Wired:** Rebase conflicts and revise verdicts properly resume coder. No more loops.
-
-**Related gaps this fixes:**
-- Rebase conflict after coder completion
-- Revise verdict resumes blocked coder
-- Auth-failure retry from suspended state
-- Orphan recovery from reviewing state
-
----
-
 ## Module 2: Agent Event Stream (AES)
 
 **Problem:** Three signal paths (markers, file signals, JSON) parsed separately per agent. SessionRunner has agent-specific code.
 
 **Solution:** Unified AgentEvent stream that all agents emit.
 
-### AES-1: AgentEvent dataclass and enum [DONE]
-
-**Issue:** 6c728b5705ff
+### AES-1: AgentEvent dataclass and enum
 
 **Tests:**
 ```
@@ -302,13 +216,11 @@ tests/test_agent_events.py::test_event_from_dict
 2. AgentEvent dataclass: type, timestamp, content, metadata
 3. Serialization to/from dict
 
-**Wired:** Foundation exists in `core/agent_events.py`.
+**Wired:** Foundation exists. No behavior change yet.
 
 ---
 
-### AES-2: ClaudeCodeAgent emits AgentEvent [DONE]
-
-**Issue:** b4b4727a0036
+### AES-2: ClaudeCodeAgent emits AgentEvent
 
 **Tests:**
 ```
@@ -325,13 +237,11 @@ tests/test_claude_code_agent.py::test_auth_failure_becomes_auth_event
 2. Marker parsing produces QUESTION/DONE/CHECKPOINT events
 3. stream() yields AgentEvent objects
 
-**Wired:** ClaudeCodeAgent emits AgentEvent via `_parse()` in `adapters/agents/claude_code.py`.
+**Wired:** ClaudeCodeAgent speaks unified events. SessionRunner still works (duck typing).
 
 ---
 
-### AES-3: OpenHandsAgent emits AgentEvent [DONE]
-
-**Issue:** f24ab295e335
+### AES-3: OpenHandsAgent emits AgentEvent
 
 **Tests:**
 ```
@@ -346,13 +256,11 @@ tests/test_openhands_agent.py::test_action_becomes_tool_call
 1. Parse JSON events into AgentEvent
 2. Map OpenHands event types to AgentEventType
 
-**Wired:** OpenHandsAgent emits AgentEvent in `adapters/agents/openhands.py`.
+**Wired:** OpenHands speaks unified events.
 
 ---
 
-### AES-4: CodexAgent emits AgentEvent [DONE]
-
-**Issue:** 80ed0c0df6ac
+### AES-4: CodexAgent emits AgentEvent
 
 **Tests:**
 ```
@@ -366,13 +274,11 @@ tests/test_codex_agent.py::test_jsonl_parsed_to_events
 1. Parse JSONL into AgentEvent
 2. Map Codex event types
 
-**Wired:** CodexAgent emits AgentEvent in `adapters/agents/codex.py`.
+**Wired:** All three agents speak unified events.
 
 ---
 
-### AES-5: SessionRunner consumes AgentEvent stream [DONE]
-
-**Issue:** de4037a7f524
+### AES-5: SessionRunner consumes AgentEvent stream
 
 **Tests:**
 ```
@@ -389,13 +295,11 @@ tests/test_session_runner.py::test_agent_agnostic_event_loop
 2. Remove agent-specific marker parsing
 3. match event.type: case DONE: ... case QUESTION: ...
 
-**Wired:** SessionRunner dispatches on `AgentEventType` in `_dispatch_event()`. Agent-agnostic.
+**Wired:** SessionRunner is agent-agnostic. Adding new agents trivial.
 
 ---
 
-### AES-6: File signals become events [DONE]
-
-**Issue:** 4fb20687652f
+### AES-6: File signals become events
 
 **Tests:**
 ```
@@ -420,29 +324,6 @@ tests/test_session_runner.py::test_file_signal_question_becomes_event
 
 **Solution:** Transactional context manager with auto-cleanup.
 
-### WT-0: Worktree integrity check before operations
-
-**Problem:** Worktree metadata (`.git/worktrees/<name>/`) goes missing or corrupts, causing "not a git repository" errors. Discovered when multiple sessions needed `git worktree repair`.
-
-**Tests:**
-```
-tests/test_workspace_transaction.py::test_check_worktree_integrity_valid
-tests/test_workspace_transaction.py::test_check_worktree_integrity_missing_metadata
-tests/test_workspace_transaction.py::test_check_worktree_integrity_auto_repair
-tests/test_host_rebase.py::test_rebase_repairs_broken_worktree
-```
-
-**Files:** core/workspace_transaction.py (create), host/rebase.py (modify)
-
-**Implementation:**
-1. check_worktree_integrity(worktree_path) verifies .git file and metadata dir exist
-2. repair_worktree() runs `git worktree repair` if metadata missing
-3. Called before git operations in host/rebase.py and host/merge.py
-
-**Wired:** Host operations self-heal broken worktree metadata.
-
----
-
 ### WT-1: WorkspaceTransaction with .git pointer
 
 **Tests:**
@@ -465,40 +346,12 @@ tests/test_workspace_transaction.py::test_nested_transactions_error
 
 ---
 
-### WT-1.5: Host-side gitdir sanitization (defense in depth) [DONE]
-
-**Issue:** abdbb1e
-
-**Problem:** Container may crash before cleanup. Host operations fail with "not a git repository" or `core.worktree` pollution breaks all git commands.
-
-**Tests:**
-```
-tests/test_host_rebase.py::test_rebase_fixes_container_gitdir (EXISTS - 88acf5d)
-tests/test_host_rebase.py::test_rebase_preserves_valid_gitdir (EXISTS - 88acf5d)
-tests/test_host_rebase.py::test_sanitize_removes_core_worktree
-tests/test_host_rebase.py::test_sanitize_preserves_valid_config
-```
-
-**Files:** host/rebase.py, host/git_utils.py
-
-**Implementation:**
-1. _fix_container_gitdir() detects /repo-git/ paths, rewrites to host paths (DONE: 88acf5d)
-2. _sanitize_git_config() removes core.worktree if set to container path (/workspace)
-3. Called before any host-side git operation (rebase, merge, accept)
-
-**Wired:** Host operations self-heal corrupt git state. Container cleanup (WT-2) is defense-in-depth, not primary protection.
-
----
-
-### WT-2: docker-entrypoint.sh uses WorkspaceTransaction (defense in depth) [DONE]
-
-**Issue:** 97d9d9aeb833
+### WT-2: docker-entrypoint.sh uses WorkspaceTransaction
 
 **Tests:**
 ```
 tests/test_entrypoint_git.py::test_git_pointer_restored_on_exit
 tests/test_entrypoint_git.py::test_git_pointer_restored_on_error
-tests/test_entrypoint_git.py::test_no_config_pollution_on_exit
 ```
 
 **Files:** docker-entrypoint.sh, entrypoint.py
@@ -506,12 +359,9 @@ tests/test_entrypoint_git.py::test_no_config_pollution_on_exit
 **Implementation:**
 1. Python wrapper calls WorkspaceTransaction
 2. Shell script delegates to Python for .git handling
-3. EXIT trap restores .git pointer AND removes any core.worktree pollution
-4. On crash: host-side WT-0 and WT-1.5 provide backup protection
+3. EXIT trap removed (handled by Python)
 
-**Wired:** Container cleanup is defense-in-depth. Host-side sanitization (WT-1.5) is primary protection since containers can crash/be killed.
-
-**Note:** This is secondary to WT-1.5. Even if container cleanup fails, host operations self-heal.
+**Wired:** Container .git pointer handling uses WT. Bug impossible.
 
 ---
 
@@ -554,9 +404,7 @@ tests/test_workspace_setup.py::test_setup_failure_cleans_up
 
 ---
 
-### WT-5: Merge and rebase in WorkspaceTransaction [DONE]
-
-**Issue:** 0e4290356c53
+### WT-5: Merge and rebase in WorkspaceTransaction
 
 **Tests:**
 ```
@@ -576,89 +424,22 @@ tests/test_workspace_transaction.py::test_rebase_with_conflict_aborts
 
 ---
 
-### WT-6: Safe worktree prune (no collateral damage) [DONE]
-
-**Issue:** 89f882f
-
-**Problem:** `git worktree prune` is called in `session_utils.remove_worktree()` and `workspace_setup.create_worktree()`. It's a **global** operation that prunes ALL orphaned worktrees, not just the one being removed/created.
-
-If any worktree has a corrupted `.git` file (pointing to `/repo-git/...` container path), prune sees it as orphaned and deletes its metadata — even if it's actively in use by a running container.
-
-**Observed failure:** Session A cleanup runs prune → deletes metadata for corrupted session B → session B's commits become unreachable.
-
-**Tests:**
-```
-tests/test_session_utils_host.py::test_remove_worktree_no_global_prune
-tests/test_session_utils_host.py::test_prune_skips_active_sessions
-tests/test_session_utils_host.py::test_prune_fixes_corrupted_gitdir_first
-tests/test_workspace_setup.py::test_create_worktree_no_collateral_prune
-```
-
-**Files:** host/session_utils.py, host/workspace_setup.py, host/rebase.py
-
-**Implementation (defense in depth - all 3):**
-1. **Don't call global prune** — use `git worktree remove <path>` for specific worktree only, not global prune
-2. **Fix corrupted .git files first** — before any prune, scan all worktrees and fix `/repo-git/...` paths to host paths (reuse `_fix_container_gitdir()` from rebase.py)
-3. **Check session status before prune** — skip prune if any session is `working`, `starting`, `reviewing` (active states)
-
-**Wired:** Cleanup of one session never damages another. Corrupted worktrees are healed, not pruned.
-
----
-
-## SSM Dependency Chain
-
-**IMPORTANT:** SSM issues must be completed in order. Each issue depends on the previous one.
-
-```
-SSM-4 → SSM-5 → SSM-6 → SSM-7 → SSM-8 → SSM-9 → SSM-10
-```
-
-| Issue | Depends On | Description |
-|-------|------------|-------------|
-| SSM-4 | SSM-3 (done) | Hooks for logging and notifications |
-| SSM-5 | SSM-4 | Watcher uses SSM-aware StateManager |
-| SSM-6 | SSM-5 | Q&A flow uses SSM transitions |
-| SSM-7 | SSM-6 | Review flow uses SSM transitions |
-| SSM-8 | SSM-7 | CLI commands use SSM transitions |
-| SSM-9 | SSM-8 | Remove legacy status code |
-| SSM-10 | SSM-9 | Auto-cleanup stale review sessions |
-
-**When labeling for nightshift:** Only label the next issue in the chain once the previous one is accepted. Do not label multiple SSM issues at once.
-
----
-
 ## Execution Order
 
 Priority based on impact and dependencies:
 
-| Phase | Issues | Key Outcome | Status |
-|-------|--------|-------------|--------|
-| 1 | SSM-1 to SSM-3 | Race condition eliminated | **DONE** |
-| 2 | SSM-4 to SSM-9 | Full SSM integration | **DONE** |
-| 2.5 | SSM-10, SSM-11 | Cleanup + resume-from-completion fix | **DONE** |
-| 3 | AES-1 to AES-5 | Event foundation + all agents | **DONE** |
-| 4 | AES-6 | File signals unified | **DONE** |
-| 5 | WT-0, WT-1, WT-1.5, WT-1.6, WT-1.7, WT-6 | Git state self-healing + safe prune | **DONE** |
-| 6 | WT-2 to WT-5 | Full transactional git | **DONE** |
+| Phase | Issues | Key Outcome |
+|-------|--------|-------------|
+| 1 | SSM-1 to SSM-3 | Race condition eliminated |
+| 2 | SSM-4 to SSM-9 | Full SSM integration |
+| 3 | AES-1 to AES-2 | Event foundation + ClaudeCode |
+| 4 | AES-3 to AES-6 | All agents unified |
+| 5 | WT-1 to WT-2 | .git pointer bulletproof |
+| 6 | WT-3 to WT-5 | Full transactional git |
 
-**Total: 27 issues, each TDD, each wired to real flow.**
+**Total: 20 issues, each TDD, each wired to real flow.**
 
-**Completed:** All 27 issues.
-
-After Phase 1 (3 issues): Race condition fixed structurally. **DONE**
-After Phase 2 (6 more): SSM complete, lifecycle explicit. **DONE**
-After Phase 2.5 (2 more): Rebase/revise loops fixed, stale sessions auto-cleanup. **DONE**
-After Phase 3 (5 more): All agents emit unified AgentEvent stream. **DONE**
-After Phase 4 (1 more): File signals unified into AgentEvent stream. **DONE**
-After Phase 5 (6 issues): Git state self-heals from container corruption, safe prune prevents collateral damage. **DONE**
-After Phase 6 (3 more): Git operations are bulletproof. **DONE**
-
----
-
-## Architecture Complete
-
-All three hidden modules are now fully extracted and wired:
-
-1. **Session State Machine (SSM)** — Explicit FSM with atomic transitions. Race conditions eliminated.
-2. **Agent Event Stream (AES)** — Unified event stream from all agents. SessionRunner is agent-agnostic.
-3. **Workspace Transaction (WT)** — Transactional git operations with auto-cleanup. Git state self-heals.
+After Phase 1 (3 issues): Race condition fixed structurally.
+After Phase 2 (6 more): SSM complete, lifecycle explicit.
+After Phase 4 (6 more): Adding new agents is trivial.
+After Phase 6 (5 more): Git operations are bulletproof.

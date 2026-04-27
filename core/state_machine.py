@@ -1,31 +1,8 @@
 """Session state machine with validated transitions."""
 
-from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Callable, Literal
-
-HookType = Literal["enter", "exit"]
-HookCallback = Callable[[dict], None]
-
 
 class InvalidTransition(Exception):
     """Raised when a state transition is not allowed."""
-
-
-# Terminal states: session is fully done, no further transitions allowed
-TERMINAL_STATES: frozenset[str] = frozenset({
-    "accepted",
-    "rejected",
-    "closed",
-})
-
-# Completion states: coder finished work, but session can still resume
-# (e.g., rebase conflict, revise verdict). These have completed_at set
-# but can transition back to working.
-COMPLETION_STATES: frozenset[str] = frozenset({
-    "waiting:review",
-    "waiting:human-review",
-})
 
 
 STATES: frozenset[str] = frozenset({
@@ -45,9 +22,6 @@ STATES: frozenset[str] = frozenset({
     "suspended:unexpected",
     "suspended:answer-ready",
     "suspended:review-no-verdict",
-    "suspended:branch-missing",
-    "suspended:too-complex",
-    "suspended:review-failed",
     "done:pending-review",
     "cancelled:external",
     "reviewing",
@@ -60,7 +34,6 @@ STATES: frozenset[str] = frozenset({
 TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     # self-transitions (no-op resets/confirmations)
     ("working", "working"),
-    ("working", "reviewing"),  # revert on failed revise launch
     # starting -> working (normal startup)
     ("starting", "working"),
     # starting -> suspended states (early failures)
@@ -84,33 +57,26 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("working", "suspended:unexpected"),
     ("working", "suspended:answer-ready"),
     ("working", "suspended:review-no-verdict"),
-    ("working", "suspended:review-failed"),  # review session hits orphan limit
     ("working", "cancelled:external"),
-    ("working", "error:merge-conflict"),
     # waiting:question -> working (answer received)
     ("waiting:question", "working"),
     ("waiting:question", "suspended:answer-ready"),
     # waiting:review -> reviewing (review started)
     ("waiting:review", "reviewing"),
-    ("waiting:review", "waiting:review"),  # self-transition for error recovery
     # waiting:review -> working (resumed for revision)
     ("waiting:review", "working"),
     # waiting:review -> accepted/rejected (human decision)
     ("waiting:review", "accepted"),
     ("waiting:review", "rejected"),
-    ("waiting:review", "error:merge-conflict"),  # conflict markers during accept
     # waiting:review -> human-review (escalation)
     ("waiting:review", "waiting:human-review"),
     # waiting:human-review -> accepted/rejected
     ("waiting:human-review", "accepted"),
     ("waiting:human-review", "rejected"),
     ("waiting:human-review", "working"),
-    ("waiting:human-review", "error:merge-conflict"),  # conflict markers during accept
     # reviewing -> waiting:review (review done)
-    ("reviewing", "reviewing"),  # self-transition for re-launch
     ("reviewing", "waiting:review"),
     ("reviewing", "waiting:human-review"),
-    ("reviewing", "working"),  # revise verdict -> resume coder
     # reviewing -> suspended (review failures)
     ("reviewing", "suspended:auth-failure"),
     ("reviewing", "suspended:context-limit"),
@@ -130,24 +96,10 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("suspended:answer-ready", "working"),
     ("suspended:review-no-verdict", "waiting:human-review"),
     ("suspended:review-no-verdict", "working"),
-    # suspended:branch-missing -> working (manual resume after branch recreated)
-    ("suspended:branch-missing", "working"),
-    # suspended:too-complex -> working (manual resume after task split)
-    ("suspended:too-complex", "working"),
-    # suspended:review-failed -> working (manual resume)
-    ("suspended:review-failed", "working"),
-    # working -> new suspended states
-    ("working", "suspended:branch-missing"),
-    ("working", "suspended:too-complex"),
-    # reviewing -> suspended:review-failed
-    ("reviewing", "suspended:review-failed"),
     # fallback to suspended:unexpected (safety net for unhandled states)
     ("suspended:hook-failure", "suspended:unexpected"),
     ("suspended:max-resumes", "suspended:unexpected"),
     ("suspended:review-no-verdict", "suspended:unexpected"),
-    ("suspended:branch-missing", "suspended:unexpected"),
-    ("suspended:too-complex", "suspended:unexpected"),
-    ("suspended:review-failed", "suspended:unexpected"),
     ("waiting:question", "suspended:unexpected"),
     ("waiting:review", "suspended:unexpected"),
     ("waiting:human-review", "suspended:unexpected"),
@@ -177,25 +129,10 @@ class SessionStateMachine:
         if initial_state not in STATES:
             raise ValueError(f"unknown state: {initial_state}")
         self._state = initial_state
-        self._hooks: dict[str, dict[HookType, list[HookCallback]]] = defaultdict(
-            lambda: {"enter": [], "exit": []}
-        )
 
     @property
     def state(self) -> str:
         return self._state
-
-    def register_hook(
-        self, state: str, event: HookType, callback: HookCallback
-    ) -> None:
-        """Register a callback to be invoked on state enter or exit.
-
-        Args:
-            state: The state to attach the hook to
-            event: 'enter' (called when entering state) or 'exit' (called when leaving)
-            callback: Function receiving context dict with from_state, to_state, timestamp
-        """
-        self._hooks[state][event].append(callback)
 
     def can_transition(self, to_state: str) -> bool:
         """Check if transition to to_state is valid without changing state."""
@@ -216,14 +153,4 @@ class SessionStateMachine:
             raise InvalidTransition(
                 f"invalid transition: {self._state} -> {to_state}"
             )
-        from_state = self._state
-        ctx = {
-            "from_state": from_state,
-            "to_state": to_state,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        for hook in self._hooks[from_state]["exit"]:
-            hook(ctx)
         self._state = to_state
-        for hook in self._hooks[to_state]["enter"]:
-            hook(ctx)

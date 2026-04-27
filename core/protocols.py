@@ -72,14 +72,9 @@ class IssueTracker(Protocol):
 # ── Coding Agent ──────────────────────────────────────────
 
 class AgentEventType(Enum):
-    STARTED = auto()
     TEXT = auto()
     TOOL_CALL = auto()
     TOOL_RESULT = auto()
-    QUESTION = auto()
-    CHECKPOINT = auto()
-    DONE = auto()
-    ERROR = auto()
     SYSTEM = auto()
     PROCESS_EXIT = auto()
     STALL = auto()

@@ -11,13 +11,11 @@ from pathlib import Path
 from host.constants import (
     REVIEW_POLL_INTERVAL_S, MAIN_LOOP_SLEEP_S, TRACKER_SOCKET_FILENAME,
     BACKGROUND_LAUNCH_CHECK_S, REVIEW_SESSION_PREFIX, RECENTLY_LAUNCHED_FILENAME,
-    ORPHAN_GRACE_PERIOD_S, LOCK_TIMEOUT_S, MIN_FREE_GB,
+    ORPHAN_GRACE_PERIOD_S,
     SOCKET_SERVER_RESTART_BACKOFF_BASE_S, SOCKET_SERVER_RESTART_BACKOFF_CAP_S,
     SOCKET_SERVER_MAX_RESTARTS,
-    TRACKER_RELOAD_MAX_ATTEMPTS, TRACKER_RELOAD_BACKOFF_BASE_S,
-    TRACKER_TERMINATION_WAIT_S, GITBUG_CACHE_HEALTHCHECK_INTERVAL_S,
 )
-from host.session_utils import read_state, update_status, get_active_session_ids
+from host.session_utils import read_state, update_status
 from core.config import load_workflow, create_tracker, WorkflowConfig
 from host.watcher.tracker_writer import TrackerWriter, TrackerSocketServer, QueueTrackerProxy
 from host.watcher.telegram_relay import TelegramRelay
@@ -25,7 +23,6 @@ from host.watcher.qa_handler import QAHandler
 from host.watcher.review_orchestrator import ReviewOrchestrator
 from host.watcher.session_monitor import SessionMonitor
 from host.watcher.issue_sync import sync_sessions
-from host.watcher.config_watchdog import ConfigWatchdog
 from adapters.trackers.git_bug import repair_lamport_clocks
 
 log = logging.getLogger("watcher")
@@ -141,7 +138,6 @@ class HostWatcher:
         self._proxy: QueueTrackerProxy | None = None
         self._socket_restart_count = 0
         self._socket_last_restart: float = 0.0
-        self._last_gitbug_cache_health_check: float = 0.0
 
         tg_level = self._telegram_level_from_config()
         self.telegram = TelegramRelay(
@@ -164,10 +160,6 @@ class HostWatcher:
             workflow_path=self.workflow_path,
             review_orchestrator=self.reviews,
         )
-
-        # Start config watchdog (monitors .git/config for pollution)
-        self._config_watchdog = ConfigWatchdog(repo_dir / ".git" / "config")
-        self._config_watchdog.start()
 
     @staticmethod
     def _telegram_level(config: WorkflowConfig | None) -> str:
@@ -211,71 +203,6 @@ class HostWatcher:
             self._auto_start_config = self._config.auto_start
         return self._auto_start_config
 
-    def _gitbug_tracker(self):
-        """Return the direct git-bug tracker instance, if one is active."""
-        if self._writer is not None:
-            return self._writer.tracker
-        return self._tracker
-
-    def _clear_gitbug_cache(self) -> bool:
-        """Clear the persisted git-bug cache if the tracker supports it."""
-        tracker = self._gitbug_tracker()
-        if tracker is None or not hasattr(tracker, "clear_cache"):
-            return False
-        tracker.clear_cache()
-        return True
-
-    def _count_gitbug_refs(self) -> int | None:
-        """Count refs/bugs entries in the repo for git-bug health checks."""
-        result = subprocess.run(
-            ["git", "show-ref", "refs/bugs"],
-            cwd=str(self.repo_dir),
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode not in (0, 1):
-            log.warning("git-bug cache health check failed to count refs: %s",
-                        result.stderr.strip() or result.stdout.strip())
-            return None
-        return len([line for line in result.stdout.splitlines() if line.strip()])
-
-    def _check_gitbug_cache_health(self):
-        """Compare git-bug refs to cached GraphQL issues and rebuild on mismatch."""
-        now = time.time()
-        if now - self._last_gitbug_cache_health_check < GITBUG_CACHE_HEALTHCHECK_INTERVAL_S:
-            return
-        self._last_gitbug_cache_health_check = now
-
-        tracker = self._gitbug_tracker()
-        if tracker is None or not hasattr(tracker, "list_issues"):
-            return
-
-        refs_count = self._count_gitbug_refs()
-        if refs_count is None:
-            return
-
-        try:
-            cache_count = len(tracker.list_issues())
-        except Exception as e:
-            log.warning("git-bug cache health check failed: %s", e)
-            return
-
-        log.info("git-bug cache health: refs=%d cache=%d", refs_count, cache_count)
-        if refs_count == cache_count:
-            return
-
-        log.warning("git-bug cache mismatch detected (refs=%d, cache=%d); rebuilding cache",
-                    refs_count, cache_count)
-        try:
-            if hasattr(tracker, "rebuild_cache"):
-                tracker.rebuild_cache()
-            else:
-                self._clear_gitbug_cache()
-                if hasattr(tracker, "restart_webui"):
-                    tracker.restart_webui()
-        except Exception as e:
-            log.error("Failed to rebuild git-bug cache after mismatch: %s", e)
-
     def reload_config(self):
         """Re-read workflow file and update in-memory config and adapters.
 
@@ -306,34 +233,12 @@ class HostWatcher:
 
         # Recreate tracker (kind or extra settings may have changed)
         old_tracker = self._tracker
-
-        # Terminate old tracker BEFORE creating new one to release locks
-        if old_tracker and hasattr(old_tracker, 'terminate_current'):
-            old_tracker.terminate_current()
-            # Wait for webui/subprocess to fully exit
-            time.sleep(TRACKER_TERMINATION_WAIT_S)
-
         self._tracker = None  # force re-creation on next _get_tracker()
         # Temporarily disable proxy so _get_tracker creates a direct tracker
         saved_proxy = self._proxy
         self._proxy = None
-
-        # Retry tracker creation with exponential backoff
-        new_tracker = None
-        last_error = None
-        for attempt in range(TRACKER_RELOAD_MAX_ATTEMPTS):
-            try:
-                new_tracker = self._get_tracker()
-                break
-            except Exception as e:
-                last_error = e
-                if attempt < TRACKER_RELOAD_MAX_ATTEMPTS - 1:
-                    backoff = TRACKER_RELOAD_BACKOFF_BASE_S * (2 ** attempt)
-                    log.warning(f"Tracker creation attempt {attempt + 1} failed: {e}, "
-                                f"retrying in {backoff}s")
-                    time.sleep(backoff)
-
-        if new_tracker is not None:
+        try:
+            new_tracker = self._get_tracker()
             self._proxy = saved_proxy
             # Propagate shutdown event to new tracker
             if hasattr(new_tracker, '_shutdown') and hasattr(self, '_shutdown'):
@@ -341,9 +246,11 @@ class HostWatcher:
             # Swap the writer's underlying tracker instance
             if self._writer:
                 self._writer.tracker = new_tracker
-        else:
-            log.error(f"Tracker creation failed after {TRACKER_RELOAD_MAX_ATTEMPTS} "
-                      f"attempts: {last_error}")
+            # Terminate old tracker's in-flight subprocess now that swap succeeded
+            if old_tracker and hasattr(old_tracker, 'terminate_current'):
+                old_tracker.terminate_current()
+        except Exception as e:
+            log.error(f"Tracker creation failed, restoring previous tracker: {e}")
             self._tracker = old_tracker
             self._proxy = saved_proxy
 
@@ -353,8 +260,7 @@ class HostWatcher:
             log.info("Reloaded config -- no changes detected")
 
     def run(self, shutdown_event: threading.Event | None = None,
-            reload_event: threading.Event | None = None,
-            cache_clear_event: threading.Event | None = None):
+            reload_event: threading.Event | None = None):
         """Main watcher loop -- delegates to helper classes.
 
         Args:
@@ -362,12 +268,9 @@ class HostWatcher:
                 to exit cleanly. Used by signal handlers for graceful shutdown.
             reload_event: Optional event that, when set, triggers a config
                 reload from the workflow file. Used by SIGHUP handler.
-            cache_clear_event: Optional event that, when set, clears the
-                persisted git-bug cache before reloading tracker config.
         """
         self._shutdown = shutdown_event or threading.Event()
         self._reload = reload_event or threading.Event()
-        self._cache_clear = cache_clear_event or threading.Event()
 
         # Propagate shutdown event to QAHandler so pre-pause sleep
         # can be interrupted immediately on Ctrl-C
@@ -400,9 +303,6 @@ class HostWatcher:
         # (race condition: review container exits but watcher restarts before cleanup)
         self.monitor.cleanup_stale_review_sessions()
 
-        # Remove stale blocked:<id> labels where the blocking issue is already closed
-        self.monitor.cleanup_stale_blocked_labels()
-
         log.info(f"Watching {self.sessions_dir}")
         if self.telegram.enabled:
             log.info("Telegram polling enabled")
@@ -421,20 +321,10 @@ class HostWatcher:
             log.info("Auto-start disabled")
 
         while not self._shutdown.is_set():
-            if self._cache_clear.is_set():
-                self._cache_clear.clear()
-                if self._clear_gitbug_cache():
-                    log.info("Cleared git-bug cache before config reload")
             if self._reload.is_set():
                 self._reload.clear()
                 self.reload_config()
-            self._check_gitbug_cache_health()
-            if not self._check_worktree_integrity():
-                break
-            if not self._check_disk_space():
-                break
             self._check_socket_server_health()
-            self._check_tracker_lock()
             tg_answers, tg_reviews = (
                 self.telegram.poll_all(self.qa._paused) if self.telegram.enabled else ({}, {})
             )
@@ -449,7 +339,6 @@ class HostWatcher:
             self.monitor.check_orphaned_sessions()
             self.monitor.check_auth_failures()
             self.monitor.check_provider_outages()
-            self.monitor.check_zombie_containers()
             self.monitor.check_closed_issues()
             if self.auto_start:
                 self.monitor.check_new_issues()
@@ -463,10 +352,6 @@ class HostWatcher:
         if self._writer:
             self._writer.stop()
         self._proxy = None
-
-        # Stop config watchdog
-        if self._config_watchdog:
-            self._config_watchdog.stop()
 
         # Terminate any in-flight tracker subprocesses (e.g. git-bug sync)
         if self._tracker and hasattr(self._tracker, 'terminate_current'):
@@ -496,13 +381,11 @@ class HostWatcher:
         except Exception as e:
             log.warning(f"Tracker sync failed: {e}")
 
-    def _launch_background(self, cmd: list[str], sid: str) -> bool:
+    def _launch_background(self, cmd: list[str], sid: str):
         """Launch a subprocess in background, logging its output.
 
         Stores the Popen handle so check_background_launches() can detect
         early failures and revert session status.
-
-        Returns True on success, False on failure.
         """
         log_file = self.sessions_dir.parent / "watcher.log"
         f = None
@@ -510,12 +393,10 @@ class HostWatcher:
             f = open(log_file, "a")
             proc = subprocess.Popen(cmd, cwd=str(self.repo_dir), stdout=f, stderr=f)
             self._background_procs[sid] = (proc, f, time.time())
-            return True
         except Exception as e:
             log.error(f"[{sid}] Failed to launch {cmd}: {e}")
             if f is not None:
                 f.close()
-            return False
 
     def _check_socket_server_health(self):
         """Check if socket server is alive and restart if dead.
@@ -560,105 +441,6 @@ class HostWatcher:
             log.error(f"Failed to restart socket server: {e}")
             self._socket_restart_count += 1
             self._socket_last_restart = now
-
-    def _check_worktree_integrity(self) -> bool:
-        """Check if .git/worktrees/ exists when active sessions exist.
-
-        If worktrees directory is missing while sessions are active, logs a
-        CRITICAL error and triggers shutdown to prevent cascading failures.
-
-        Returns True if integrity check passes, False if watcher should halt.
-        """
-        worktrees_dir = self.repo_dir / ".git" / "worktrees"
-
-        active_sids = get_active_session_ids(self.repo_dir)
-        if not active_sids:
-            return True
-
-        if worktrees_dir.exists():
-            return True
-
-        log.critical(
-            "FATAL: .git/worktrees/ deleted while sessions active: %s. "
-            "Run git worktree repair. Halting watcher.",
-            active_sids
-        )
-        self._shutdown.set()
-        return False
-
-    def _check_disk_space(self) -> bool:
-        """Check if disk has enough free space.
-
-        If free space drops below MIN_FREE_GB, logs a CRITICAL error and
-        triggers shutdown to prevent silent failures from disk exhaustion.
-
-        Returns True if disk space is sufficient, False if watcher should halt.
-        """
-        stat = os.statvfs(self.repo_dir)
-        free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
-        if free_gb < MIN_FREE_GB:
-            log.critical("Disk space low: %.2fGB free. Halting.", free_gb)
-            self._shutdown.set()
-            return False
-        return True
-
-    def _check_tracker_lock(self):
-        """Check if git-bug lock file is held too long and warn if so.
-
-        Git-bug lock can get stuck if a process crashes holding it.
-        This monitors the lock file age and logs a warning if it's been
-        held longer than LOCK_TIMEOUT_S. Does not halt - just warns.
-
-        If the lock file contains a PID, logs the process command line
-        and parent process info to help identify what's holding the lock.
-        """
-        lock_file = self.repo_dir / ".git" / "git-bug" / "lock"
-        if lock_file.exists():
-            age = time.time() - lock_file.stat().st_mtime
-            if age > LOCK_TIMEOUT_S:
-                try:
-                    pid = int(lock_file.read_text().strip())
-                    # Get process command line
-                    ps_result = subprocess.run(
-                        ["ps", "-p", str(pid), "-o", "args=,ppid="],
-                        capture_output=True, text=True
-                    )
-                    ps_output = ps_result.stdout.strip()
-                    if ps_output:
-                        # Parse cmdline and ppid from output
-                        # Format is: "cmdline ppid" where ppid is the last field
-                        parts = ps_output.rsplit(None, 1)
-                        if len(parts) == 2:
-                            cmdline, ppid_str = parts
-                            try:
-                                if int(ppid_str) == os.getpid():
-                                    return
-                            except ValueError:
-                                pass
-                            # Get parent process command line
-                            parent_result = subprocess.run(
-                                ["ps", "-p", ppid_str, "-o", "args="],
-                                capture_output=True, text=True
-                            )
-                            parent_cmdline = parent_result.stdout.strip() or "unknown"
-                            log.warning(
-                                "git-bug lock held for %.0fs by pid %d (%s), "
-                                "parent pid %s (%s)",
-                                age, pid, cmdline, ppid_str, parent_cmdline
-                            )
-                        else:
-                            log.warning(
-                                "git-bug lock held for %.0fs by pid %d (%s)",
-                                age, pid, ps_output or "unknown"
-                            )
-                    else:
-                        # Process not found (dead)
-                        log.warning(
-                            "git-bug lock held for %.0fs by pid %d (process not found)",
-                            age, pid
-                        )
-                except (ValueError, OSError) as e:
-                    log.warning("git-bug lock held for %.0fs, may be stuck (%s)", age, e)
 
     def check_background_launches(self):
         """Poll recently launched background processes for early exit.

@@ -4,7 +4,6 @@ Builds the `docker run` command for launching the agent container.
 """
 
 import json
-import logging
 import os
 import subprocess
 from pathlib import Path
@@ -12,8 +11,6 @@ from pathlib import Path
 from core.config.models import OverflowConfig
 from core.constants import *
 from host.docker_utils import docker_remove
-
-logger = logging.getLogger(__name__)
 
 
 _PASSTHROUGH_ENV_VARS = (
@@ -31,25 +28,6 @@ _PASSTHROUGH_ENV_VARS = (
     # OpenCode with OpenRouter models
     "OPENROUTER_API_KEY",
 )
-
-# Keys to exclude when Codex OAuth is present (would override OAuth auth)
-_CODEX_OAUTH_EXCLUDES = {"CODEX_API_KEY", "OPENAI_API_KEY"}
-
-
-def _codex_oauth_present() -> bool:
-    """Check if Codex OAuth credentials are configured.
-
-    Returns True if ~/.codex/auth.json exists and contains tokens.
-    """
-    auth_file = Path.home() / ".codex" / "auth.json"
-    if not auth_file.exists():
-        return False
-    try:
-        data = json.loads(auth_file.read_text())
-        return bool(data.get("tokens"))
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to parse Codex auth.json: %s", e)
-        return False
 
 
 def _auth_mounts() -> list[str]:
@@ -70,7 +48,6 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
                      issue_id: str, short_id: str, max_turns: int,
                      step: str, is_resume: bool, workflow_path: str,
                      image: str,
-                     git_mount_path: Path | str | None = None,
                      overflow: OverflowConfig | None = None,
                      agent_kind: str = "claude-code") -> list[str]:
     """Build the docker run command with all mounts and env vars.
@@ -82,16 +59,8 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
             Passed as AGENT_KIND env var so docker-entrypoint.sh can
             configure agent-specific settings.
     """
-    # Determine which vars to exclude (Codex OAuth takes precedence over API keys)
-    exclude_vars: set[str] = set()
-    if agent_kind == "codex" and _codex_oauth_present():
-        exclude_vars = _CODEX_OAUTH_EXCLUDES
-        logger.info("Codex OAuth detected; excluding API keys from env passthrough")
-
     notify_env = []
     for var in _PASSTHROUGH_ENV_VARS:
-        if var in exclude_vars:
-            continue
         val = os.environ.get(var, "")
         if val:
             notify_env += ["-e", f"{var}={val}"]
@@ -115,9 +84,6 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
             overflow_env += ["-e", f"ANTHROPIC_BASE_URL={proxy_url}"]
 
     workflow_mount_path = str(Path(workflow_path).resolve())
-    git_mount_source = Path(git_mount_path) if git_mount_path is not None else repo / ".git"
-
-    git_mounts = ["-v", f"{git_mount_source}:/repo-git:rw"]
 
     cmd = [
         "docker", "run", "--rm",
@@ -125,9 +91,8 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "--memory=8g", "--memory-swap=24g",
         "--user", f"{os.getuid()}:{os.getgid()}",
         "-v", f"{workspace_mount}:/workspace:rw",
-        "-v", f"{workspace_mount}/.git:/workspace/.git:rw",  # WT-2: allow transactional restore inside the container
         "-v", f"{session_dir}:/session:rw",
-        *git_mounts,
+        "-v", f"{repo / '.git'}:/repo-git:rw",
         "-v", f"{workflow_mount_path}:/workspace/WORKFLOW.md:ro",
         *_auth_mounts(),
         "-e", f"ISSUE_ID={issue_id}",
@@ -163,15 +128,13 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
                   names: dict, issue_id: str, max_turns: int,
                   step: str, is_resume: bool, workflow_path: str,
                   image: str,
-                  git_mount_path: Path | str | None = None,
                   overflow: OverflowConfig | None = None,
                   agent_kind: str = "claude-code") -> int:
     """Build docker command, run the container, return its exit code."""
     docker_cmd = build_docker_cmd(
         repo, workspace_mount, session_dir, names["container_name"],
         names["worktree_name"], issue_id, names["short_id"], max_turns,
-        step, is_resume, workflow_path, image, git_mount_path=git_mount_path,
-        overflow=overflow,
+        step, is_resume, workflow_path, image, overflow=overflow,
         agent_kind=agent_kind,
     )
 
@@ -182,9 +145,8 @@ def run_container(repo: Path, workspace_mount: str, session_dir: Path,
     if not docker_remove(container_name):
         raise RuntimeError(f"Failed to remove stale container {container_name}")
 
-    # Defense-in-depth: save/restore the worktree .git file.
-    # The container uses GIT_DIR/GIT_WORK_TREE env vars now, so it shouldn't
-    # modify .git. But if anything corrupts it, we restore the original.
+    # Save the worktree .git file — the container rewrites it to /repo-git/...
+    # which is invalid on the host. Restore after container exits.
     worktree_git = Path(workspace_mount) / ".git"
     original_git_content = None
     if worktree_git.is_file():

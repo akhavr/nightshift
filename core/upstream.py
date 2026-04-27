@@ -33,8 +33,6 @@ KNOWN_JINJA2_VARS = frozenset({
     "base_branch",
     "agent_branch",
     "agent_kind",
-    "session_id",
-    "date",
 })
 
 # Regex to find Jinja2 variable references: {{ var }} and {% if var %}
