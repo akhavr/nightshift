@@ -6,6 +6,7 @@ import logging
 import socket
 import subprocess
 import time
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ _SHUTDOWN_TIMEOUT_S = 5
 _QUERY_PAGE_SIZE = 100
 _RAW_CMD_TIMEOUT_S = 30
 _LOCK_CONFLICT_TEXT = "already locked by the process pid"
+_GITBUG_CACHE_BUGS = Path(".git") / "git-bug" / "cache" / "bugs"
 
 # Commands with NO GraphQL equivalent - cannot run while webui is active
 _CLI_ONLY_COMMANDS = {"pull", "push", "user", "bridge", "webui", "termui"}
@@ -42,6 +44,13 @@ comments(first: 100) {
   }
 }
 """
+
+
+class GitBugGraphQLError(RuntimeError):
+    def __init__(self, errors: Any, data: dict[str, Any] | None = None):
+        super().__init__(f"git-bug GraphQL error: {errors}")
+        self.errors = errors
+        self.data = data or {}
 
 
 class GitBugGraphQLTracker:
@@ -102,7 +111,7 @@ class GitBugGraphQLTracker:
         response.raise_for_status()
         payload = response.json()
         if payload.get("errors"):
-            raise RuntimeError(f"git-bug GraphQL error: {payload['errors']}")
+            raise GitBugGraphQLError(payload["errors"], payload.get("data") or {})
         return payload.get("data", {})
 
     def get_issue(self, issue_id: str) -> TrackerIssue | None:
@@ -112,10 +121,76 @@ class GitBugGraphQLTracker:
 
     def list_issues(self, status: str | list[str] | None = None) -> list[TrackerIssue]:
         statuses = {status} if isinstance(status, str) else set(status or [])
-        issues = [_to_issue(bug) for bug in self._bug_nodes()]
+        try:
+            issues = [_to_issue(bug) for bug in self._bug_nodes()]
+        except Exception as exc:
+            if not self._recover_stale_cache(exc):
+                raise
+            issues = [_to_issue(bug) for bug in self._bug_nodes()]
         if not statuses:
             return issues
         return [issue for issue in issues if issue.status in statuses]
+
+    def _recover_stale_cache(self, exc: Exception) -> bool:
+        if not self._is_stale_cache_error(exc):
+            return False
+
+        context = self._stale_cache_context(exc)
+        if context:
+            log.warning("git-bug cache stale while listing issues (%s); rebuilding cache", context)
+        else:
+            log.warning("git-bug cache stale while listing issues; rebuilding cache")
+
+        try:
+            self.rebuild_cache()
+        except Exception as e:
+            log.error("Failed to rebuild git-bug cache: %s", e)
+            return False
+        return True
+
+    def rebuild_cache(self) -> None:
+        """Clear the persisted cache and restart the GraphQL webui."""
+        self.clear_cache()
+        self.restart_webui()
+
+    @staticmethod
+    def _is_stale_cache_error(exc: Exception) -> bool:
+        return "bug doesn't exist" in str(exc)
+
+    @staticmethod
+    def _stale_cache_context(exc: Exception) -> str | None:
+        details: list[str] = []
+
+        bug_id = GitBugGraphQLTracker._stale_cache_bug_id(exc)
+        if bug_id:
+            details.append(f"bug={bug_id}")
+
+        text = str(exc)
+        if "path:" in text:
+            details.append(f"path={text.split('path:', 1)[1].strip()}")
+
+        return ", ".join(details) or None
+
+    @staticmethod
+    def _stale_cache_bug_id(exc: Exception) -> str | None:
+        data = getattr(exc, "data", None)
+        if not isinstance(data, dict):
+            return None
+
+        nodes = (
+            data.get("repository", {})
+            .get("allBugs", {})
+            .get("nodes", [])
+        )
+        if not isinstance(nodes, list):
+            return None
+
+        for node in nodes:
+            if isinstance(node, dict):
+                bug_id = node.get("id")
+                if bug_id:
+                    return str(bug_id)
+        return None
 
     def _bug_nodes(self) -> list[dict[str, Any]]:
         after = None
@@ -301,6 +376,23 @@ class GitBugGraphQLTracker:
             else:
                 log.warning("git-bug raw command failed for %s: %s", args, stderr)
         return result.stdout.strip()
+
+    def clear_cache(self) -> None:
+        """Remove the persisted git-bug bug cache so it can be rebuilt."""
+        cache_path = Path(self.cwd) / _GITBUG_CACHE_BUGS
+        if not cache_path.exists():
+            return
+        if cache_path.is_dir():
+            shutil.rmtree(cache_path)
+        else:
+            cache_path.unlink()
+        log.info("Cleared git-bug cache at %s", cache_path)
+
+    def restart_webui(self) -> None:
+        """Restart the git-bug webui process in place."""
+        self.shutdown()
+        self._proc = self._start_webui()
+        self._wait_until_ready()
 
     def shutdown(self) -> None:
         if self._proc.poll() is not None:

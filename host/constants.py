@@ -27,6 +27,7 @@ COMMAND_BACKOFF_CAP_S = 1800          # Max backoff (30 min)
 COMMAND_BACKOFF_CAP_CYCLES = 30       # Max backoff cycles (used for log messages)
 DEFAULT_MAX_REVIEW_ROUNDS = 3         # Fallback max review rounds when config unavailable
 BACKGROUND_LAUNCH_CHECK_S = 10        # How long to wait before checking background launches for early exit
+GITBUG_CACHE_HEALTHCHECK_INTERVAL_S = 300  # How often to compare git-bug refs vs GraphQL cache
 
 # ── Telegram ─────────────────────────────────────────────
 TG_LONG_POLL_TIMEOUT_S = 1
