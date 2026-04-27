@@ -5,7 +5,6 @@ import logging
 import signal
 import sys
 import threading
-import time
 from pathlib import Path
 
 from host.watchdog.scanner import scan_registrations, cleanup_stale, WatcherStatus, PROJECTS_D
