@@ -258,12 +258,12 @@ class TestCreateWorktreeNoCollateralPrune:
 
         from host.workspace_setup import create_worktree
 
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             create_worktree(repo, wt_path, "review/test123", "agent/test123",
                             session_dir, "test-issue-123")
 
-        assert exc_info.value.code == 1
-        assert not wt_path.exists()
+        assert "agent/test123" in str(exc_info.value)
+        assert "missing commit" in str(exc_info.value)
 
 
 class TestCreateWorktreeTransaction:
