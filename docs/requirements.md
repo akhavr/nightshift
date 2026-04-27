@@ -268,13 +268,15 @@ The host-container interface is hardened against compromised or misbehaving agen
 | oq1_stdin_test.py | REQ-003 |
 | watcher/test_graceful_shutdown.py | REQ-002 |
 | watcher/test_lifecycle_comments.py | REQ-002, REQ-008 |
-| watcher/test_config_reload.py | REQ-023, REQ-026 |
+| watcher/test_config_reload.py | REQ-023 |
 | watcher/test_session_monitor.py | REQ-002, REQ-004, REQ-009, REQ-011, REQ-017, REQ-036 |
-| watcher/test_host_watcher.py | REQ-009, REQ-026 |
+| watcher/test_host_watcher.py | REQ-009 |
 | test_gitbug_graphql.py | REQ-026 |
 | test_tracker_ipc.py | REQ-026 |
 | test_socket_tracker_client.py | REQ-026 |
 | test_tracker_fallback.py | REQ-026 |
+| watcher/test_config_reload.py | REQ-026 |
+| watcher/test_host_watcher.py | REQ-026 |
 | watcher/test_tracker_writer.py | REQ-026 |
 | test_openhands_agent.py | REQ-030 |
 | test_overflow.py | REQ-028 |

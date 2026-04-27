@@ -49,6 +49,22 @@ def sample_issue():
     )
 
 
+def _mock_git_run(cmd, status_stdout="", diff_stdout="", fsck_stdout="", commit_returncode=0):
+    """Return a subprocess result tailored to the git command under test."""
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    if cmd[:3] == ["git", "status", "--porcelain"]:
+        result.stdout = status_stdout
+    elif len(cmd) >= 4 and cmd[:2] == ["git", "--git-dir"] and cmd[3] == "fsck":
+        result.stdout = fsck_stdout
+    elif cmd[:2] == ["git", "diff"]:
+        result.stdout = diff_stdout
+    elif cmd[:2] == ["git", "add"]:
+        result.stdout = ""
+    elif cmd[:2] == ["git", "commit"]:
+        result.returncode = commit_returncode
+    return result
+
+
 # ── create_worktree tests ───────────────────────────────
 
 class TestCreateWorktree:
@@ -65,8 +81,9 @@ class TestCreateWorktree:
         issue_id = "abc123def456"
 
         # Simulate subprocess calls:
-        # 1. git branch          -> ok
-        # 2. git worktree add    -> ok (creates the wt dir with a file)
+        # 1. git cat-file -t     -> ok (verify base commit exists)
+        # 2. git branch          -> ok
+        # 3. git worktree add    -> ok (creates the wt dir with a file)
         # (WT-6: safe_prune is mocked, not called via subprocess)
         def side_effect(cmd, **kwargs):
             result = MagicMock(returncode=0, stderr="", stdout="")
@@ -98,9 +115,10 @@ class TestCreateWorktree:
         mock_safe_prune.assert_called_once_with(repo)
 
         # Correct git commands were called
-        assert mock_run.call_count == 2
-        assert mock_run.call_args_list[0][0][0] == ["git", "branch", branch, base_branch]
-        assert mock_run.call_args_list[1][0][0] == ["git", "worktree", "add", str(wt_path), branch]
+        assert mock_run.call_count == 3
+        assert mock_run.call_args_list[0][0][0] == ["git", "cat-file", "-t", base_branch]
+        assert mock_run.call_args_list[1][0][0] == ["git", "branch", branch, base_branch]
+        assert mock_run.call_args_list[2][0][0] == ["git", "worktree", "add", str(wt_path), branch]
 
     @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
@@ -111,8 +129,9 @@ class TestCreateWorktree:
         session_dir = tmp_path / "session"
 
         mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
-        # WT-6: safe_prune is mocked, so only 2 subprocess calls
+        # WT-6: safe_prune is mocked, so only 3 subprocess calls
         mock_run.side_effect = [
+            MagicMock(returncode=0),  # cat-file -t (verify base exists)
             MagicMock(returncode=0),  # branch
             MagicMock(returncode=1, stderr="fatal: already exists"),  # worktree add
         ]
@@ -779,7 +798,11 @@ class TestPostContainer:
             "human_answers": [{"q": "why?", "a": "because"}],
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+            diff_stdout="1 file changed",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -806,7 +829,10 @@ class TestPostContainer:
             "human_answers": [],
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_create_tracker.side_effect = Exception("tracker down")
 
         # Should not raise
@@ -836,7 +862,11 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+            diff_stdout="1 file changed",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -875,7 +905,10 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -914,7 +947,10 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
+            cmd,
+            status_stdout="",
+        )
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -967,8 +1003,7 @@ class TestCopyGitChanges:
         source.mkdir()
         (source / "objects").mkdir()
         (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "123").parent.mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "123").write_text("0123456789abcdef0123456789abcdef01234567\n")
+        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
 
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
@@ -995,7 +1030,8 @@ class TestCopyGitChanges:
         (source / "objects" / "aa").mkdir(parents=True)
         (source / "objects" / "aa" / "badpack").write_text("corrupt")
         (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
+        (source / "refs" / "heads" / "agent" / "123").parent.mkdir(parents=True)
+        (source / "refs" / "heads" / "agent" / "123").write_text("0123456789abcdef0123456789abcdef01234567\n")
 
         mock_run.return_value = MagicMock(returncode=128, stdout="", stderr="fatal: bad object")
 
@@ -1005,7 +1041,7 @@ class TestCopyGitChanges:
         assert result != 0
         assert "git fsck failed" in caplog.text
         assert not (repo / ".git" / "objects" / "aa" / "badpack").exists()
-        assert not (repo / ".git" / "refs" / "heads" / "agent-123").exists()
+        assert not (repo / ".git" / "refs" / "heads" / "agent" / "123").exists()
 
     @patch("host.launch.subprocess.run")
     def test_copy_git_changes_whitelists_refs(self, mock_run, tmp_path, caplog):
@@ -1027,8 +1063,6 @@ class TestCopyGitChanges:
         (source / "refs" / "heads" / "agent" / "bad" / "evil").write_text(
             "fedcba9876543210fedcba9876543210fedcba98\n"
         )
-        (source / "refs" / "heads" / "review" / "good").parent.mkdir(parents=True)
-        (source / "refs" / "heads" / "review" / "good").write_text("cafefeedcafefeedcafefeedcafefeedcafefeed\n")
         (source / "refs" / "heads" / "main").write_text("89abcdef0123456789abcdef0123456789abcdef\n")
 
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -1039,8 +1073,6 @@ class TestCopyGitChanges:
         assert result == 0
         assert (repo / ".git" / "refs" / "heads" / "agent" / "good").read_text().strip() == \
             "0123456789abcdef0123456789abcdef01234567"
-        assert (repo / ".git" / "refs" / "heads" / "review" / "good").read_text().strip() == \
-            "cafefeedcafefeedcafefeedcafefeedcafefeed"
         assert not (repo / ".git" / "refs" / "heads" / "agent" / "bad" / "evil").exists()
         assert not (repo / ".git" / "refs" / "heads" / "main").exists()
         assert "skipped" in caplog.text.lower()

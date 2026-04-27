@@ -549,13 +549,13 @@ class TestUsageBuffering:
         raw = _item_ev(
             "item.completed",
             "agent_message",
-            text="All good.  @@DONE@@",
+            text="All good. @nightshift revise @@DONE@@",
         )
         ev = agent._parse(raw)
 
         assert ev is not None
         assert ev.type == AgentEventType.TEXT
-        assert ev.content == "All good."
+        assert ev.content == "All good. @nightshift revise"
         assert ev.raw == raw
         assert agent._pending_done_raw == raw
 

@@ -523,33 +523,6 @@ class TestAcceptConflictHandling:
         assert current_branch == "main"
 
 
-def _setup_symlink_accept_repo(tmp_path):
-    """Create a repo/worktree/session setup for symlink-audit accept tests."""
-    repo, run = _init_repo(tmp_path)
-
-    run("git", "checkout", "-b", "agent/sym123")
-    (repo / "agent.txt").write_text("agent work\n")
-    run("git", "add", ".")
-    run("git", "commit", "-m", "agent commit")
-    run("git", "checkout", "main")
-
-    wt_dir = repo / ".worktrees" / "agent-sym123"
-    wt_dir.parent.mkdir(parents=True, exist_ok=True)
-    run("git", "worktree", "add", str(wt_dir), "agent/sym123")
-
-    ns_dir = repo / ".nightshift" / "sessions" / "sym123"
-    ns_dir.mkdir(parents=True)
-    (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
-    (repo / "WORKFLOW.md").write_text(
-        "---\n"
-        "agent:\n  kind: claude-code\n"
-        "tracker:\n  kind: git-bug\n"
-        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
-        "---\nPrompt\n"
-    )
-    return repo, run, wt_dir, ns_dir
-
-
 class TestAcceptSymlinkAudit:
     """Tests that cmd_accept rejects symlink escapes before merge."""
 
