@@ -68,9 +68,9 @@ RULES:
    itself (code snippets, file paths, what you did, options you see) — the human
    reads ONLY the question text, they cannot see your other output.
 4. Commit frequently. Write tests where appropriate.
-5. Before signaling completion, always commit your changes:
+5. Before signaling completion (@@DONE@@), always commit your changes:
    `git add -A && git commit -m "descriptive message"`
-   Never signal completion with uncommitted work.
+   Never signal done with uncommitted work.
 
 For bug fixes, follow this protocol:
 1. Reproduce the bug — run the failing scenario and confirm the symptom.
