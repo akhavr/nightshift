@@ -10,6 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from core.workspace_transaction import check_worktree_integrity
+
 log = logging.getLogger("watcher")
 
 TEST_COMMAND_TIMEOUT_S = 120  # timeout for test command execution
@@ -121,6 +123,10 @@ def attempt_pre_review_rebase(
 
     # Fix gitdir if container corrupted it (points to /repo-git/)
     _fix_container_gitdir(worktree_path, repo_root)
+
+    # Repair or fail fast before any git command touches a real worktree.
+    if (worktree_path / ".git").exists():
+        check_worktree_integrity(worktree_path, auto_repair=True)
 
     # Sanitize core.worktree if container set it to /workspace
     if repo_root:

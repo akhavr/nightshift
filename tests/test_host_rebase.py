@@ -117,6 +117,31 @@ class TestAttemptPreReviewRebase:
             attempt_pre_review_rebase(tmp_path, "main")
         mock_rebase.assert_called_once_with(tmp_path, "main")
 
+    def test_rebase_repairs_broken_worktree(self, tmp_path):
+        """Integrity check runs before rebase and enables auto-repair."""
+        metadata_dir = tmp_path / "repo" / ".git" / "worktrees" / "agent-abc123"
+        metadata_dir.mkdir(parents=True)
+        (tmp_path / ".git").write_text(f"gitdir: {metadata_dir}\n")
+        calls = []
+
+        def _check_integrity(worktree_path, auto_repair=False):
+            calls.append(("check", worktree_path, auto_repair))
+            return True
+
+        def _run_rebase(worktree_path, base_branch):
+            calls.append(("rebase", worktree_path, base_branch))
+            assert calls[0][0] == "check"
+            return RebaseResult(success=True)
+
+        with patch("host.rebase.check_worktree_integrity", side_effect=_check_integrity) as mock_check, \
+             patch("host.rebase._rebase", side_effect=_run_rebase) as mock_rebase:
+            result = attempt_pre_review_rebase(tmp_path, "master")
+
+        assert result is None
+        mock_check.assert_called_once_with(tmp_path, auto_repair=True)
+        mock_rebase.assert_called_once_with(tmp_path, "master")
+        assert calls[0][0] == "check"
+        assert calls[1][0] == "rebase"
 
 class TestRebase:
     """Tests for the _rebase function."""
