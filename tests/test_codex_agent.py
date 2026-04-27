@@ -276,22 +276,23 @@ class TestParseErrorEvents:
         assert "turn.failed" in ev.content
 
     def test_turn_failed_usage_limit(self):
-        """Usage limit errors in turn.failed should be detected as AUTH_FAILURE."""
+        """Usage limit errors in turn.failed should emit AUTH_FAILURE for transient retry."""
         agent = self._agent()
         raw = _ev("turn.failed", error={
             "message": "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
         })
         ev = agent._parse(raw)
+        # AUTH_FAILURE is emitted so _maybe_retry_transient() can retry
         assert ev.type == AgentEventType.AUTH_FAILURE
         assert "usage limit" in ev.content
 
-    def test_error_rate_limit_not_auth_failure(self):
-        """Rate limit errors are handled as transient errors, not auth failures."""
+    def test_error_rate_limit_emits_auth_failure_for_retry(self):
+        """Rate limit errors emit AUTH_FAILURE to trigger transient retry logic."""
         agent = self._agent()
         raw = _ev("error", message="status 429 rate limit exceeded")
         ev = agent._parse(raw)
-        # Rate limit is now a transient error, not auth failure
-        assert ev.type == AgentEventType.SYSTEM
+        # AUTH_FAILURE is emitted so _maybe_retry_transient() can retry
+        assert ev.type == AgentEventType.AUTH_FAILURE
 
     def test_error_reconnecting_not_auth_failure(self):
         """Reconnecting messages are transient — not auth failures unless they match patterns."""
@@ -308,13 +309,13 @@ class TestParseErrorEvents:
         assert ev.type == AgentEventType.PROVIDER_OVERLOAD
         assert "high demand" in ev.content
 
-    def test_high_demand_early_retries_not_overload(self):
-        """High demand errors before retry limit should be SYSTEM (transient)."""
+    def test_high_demand_early_retries_emit_auth_failure_for_retry(self):
+        """High demand errors before retry limit emit AUTH_FAILURE for transient retry."""
         agent = self._agent()
         raw = _ev("error", message="Reconnecting... 3/5 (high demand)")
         ev = agent._parse(raw)
-        # Early retries are transient, not overload
-        assert ev.type == AgentEventType.SYSTEM
+        # AUTH_FAILURE is emitted so _maybe_retry_transient() can retry
+        assert ev.type == AgentEventType.AUTH_FAILURE
 
 
 # ── _parse() — edge cases ────────────────────────────────
@@ -350,15 +351,16 @@ class TestParseEdgeCases:
 
 
 class TestIsAuthFailure:
-    def test_usage_limit_detected_as_auth_failure(self):
-        """Usage limit errors from OpenAI should be detected as auth failures."""
+    def test_usage_limit_is_transient_not_auth(self):
+        """Usage limit errors should trigger _is_transient_error(), not _is_auth_failure()."""
+        from adapters.agents.base import HeadlessAgentBase
         # Exact message from OpenAI when hitting usage limits
-        assert CodexAgent._is_auth_failure(
-            "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
-        )
+        msg = "You've hit your usage limit. Upgrade to Pro or try again at 7:22 PM."
+        assert HeadlessAgentBase._is_transient_error(msg)
+        assert not CodexAgent._is_auth_failure(msg)
         # Also test partial patterns
-        assert CodexAgent._is_auth_failure("hit your usage limit")
-        assert CodexAgent._is_auth_failure("usage limit exceeded")
+        assert HeadlessAgentBase._is_transient_error("usage limit exceeded")
+        assert not CodexAgent._is_auth_failure("usage limit exceeded")
 
     def test_detects_401(self):
         assert CodexAgent._is_auth_failure("unexpected status 401 Unauthorized")
