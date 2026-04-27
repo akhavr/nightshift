@@ -266,6 +266,35 @@ class TestRebaseAndRetryMerge:
             repo, "agent/test1", "issue-1", config, _noop_report
         )
 
+    def test_falls_back_to_main_repo_without_worktree(self, tmp_path):
+        """When no worktree exists, the retry path rebases in the main repo."""
+        repo, _ = _init_repo(tmp_path)
+        config = _make_config()
+        current_branch = MagicMock(stdout="main\n", returncode=0)
+        checkout_branch = MagicMock(returncode=0)
+        rebase_ok = MagicMock(returncode=0)
+        restore_branch = MagicMock(returncode=0)
+
+        with patch("host.merge.subprocess.run") as mock_run, \
+             patch("host.merge.WorkspaceTransaction") as mock_txn, \
+             patch("host.merge.check_worktree_integrity") as mock_check, \
+             patch("host.merge._retry_merge_after_rebase") as mock_retry:
+            mock_run.side_effect = [
+                current_branch,
+                checkout_branch,
+                rebase_ok,
+                restore_branch,
+            ]
+            _rebase_and_retry_merge(
+                repo, "agent/test1", "main", "issue-1", config, _noop_report, None
+            )
+
+        mock_txn.assert_not_called()
+        mock_check.assert_not_called()
+        mock_retry.assert_called_once_with(
+            repo, "agent/test1", "issue-1", config, _noop_report
+        )
+
     def test_checks_integrity_without_git_file(self, tmp_path):
         """Integrity checking is not gated on a present .git file."""
         repo, _ = _init_repo(tmp_path)

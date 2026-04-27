@@ -119,11 +119,31 @@ def _rebase_and_retry_merge(repo: Path, branch: str, base: str,
     """
     rebase_dir = worktree if worktree and worktree.exists() else None
     if not rebase_dir:
-        report_failure(
-            config, repo, issue_id,
-            f"Cannot rebase `{branch}` against `{base}` without a workspace "
-            f"transaction worktree; manual conflict resolution is required.")
-        sys.exit(1)
+        old_branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True, cwd=str(repo),
+        ).stdout.strip()
+        subprocess.run(["git", "checkout", branch], capture_output=True, cwd=str(repo))
+        rebase = subprocess.run(
+            ["git", "rebase", base],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        if rebase.returncode != 0:
+            subprocess.run(["git", "rebase", "--abort"], capture_output=True, cwd=str(repo))
+            subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(repo))
+            details = rebase.stderr.strip()
+            print(f"Rebase failed:\n{details}", file=sys.stderr)
+            report_failure(
+                config, repo, issue_id,
+                f"Merge conflicts with `{base}` that need manual resolution:\n"
+                f"```\n{details}\n```\n"
+                f"@nightshift revise")
+            sys.exit(1)
+
+        subprocess.run(["git", "checkout", old_branch], capture_output=True, cwd=str(repo))
+        print("Rebase successful, retrying merge...")
+        _retry_merge_after_rebase(repo, branch, issue_id, config, report_failure)
+        return
 
     check_worktree_integrity(rebase_dir, auto_repair=True)
     try:
