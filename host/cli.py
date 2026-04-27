@@ -377,6 +377,12 @@ def cmd_watcher(a):
     ]
     if a.no_auto_start:
         cmd.append("--no-auto-start")
+    print(f"Logging to {log_file}")
+    # host.watcher uses absolute imports — ensure agent-worker root is on PYTHONPATH
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    # Use os.execvpe to replace this process with the watcher, so signals
+    # (SIGTERM/SIGINT) reach the watcher directly — no parent to orphan it.
+    os.execvpe(cmd[0], cmd, env)
 
 
 def cmd_watchdog(a):
@@ -394,12 +400,6 @@ def cmd_watchdog(a):
     if a.config:
         args.extend(["--config", str(a.config)])
     sys.exit(watchdog_main(args))
-    print(f"Logging to {log_file}")
-    # host.watcher uses absolute imports — ensure agent-worker root is on PYTHONPATH
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
-    # Use os.execvpe to replace this process with the watcher, so signals
-    # (SIGTERM/SIGINT) reach the watcher directly — no parent to orphan it.
-    os.execvpe(cmd[0], cmd, env)
 
 
 TITLE_MAX_LEN = 40
