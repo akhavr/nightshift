@@ -125,8 +125,7 @@ def _rebase_and_retry_merge(repo: Path, branch: str, base: str,
             f"transaction worktree; manual conflict resolution is required.")
         sys.exit(1)
 
-    if (rebase_dir / ".git").exists():
-        check_worktree_integrity(rebase_dir, auto_repair=True)
+    check_worktree_integrity(rebase_dir, auto_repair=True)
     try:
         with WorkspaceTransaction(rebase_dir) as txn:
             txn.rebase(base)

@@ -129,8 +129,7 @@ def attempt_pre_review_rebase(
     _fix_container_gitdir(worktree_path, repo_root)
 
     # Repair or fail fast before any git command touches a real worktree.
-    if (worktree_path / ".git").exists():
-        check_worktree_integrity(worktree_path, auto_repair=True)
+    check_worktree_integrity(worktree_path, auto_repair=True)
 
     # Sanitize core.worktree if container set it to /workspace
     if repo_root:

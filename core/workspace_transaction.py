@@ -108,15 +108,15 @@ class WorkspaceTransaction:
             ["git", "merge", "--no-commit", branch],
             check=False,
         )
+        conflicting_files = self._conflicting_files()
         if result.returncode == 0:
             return MergeResult(
                 success=True,
                 has_conflicts=False,
-                conflicting_files=[],
+                conflicting_files=conflicting_files,
                 stderr=result.stderr.strip(),
             )
 
-        conflicting_files = self._conflicting_files()
         if conflicting_files or "CONFLICT" in result.stderr.upper():
             self._run_git(["git", "merge", "--abort"], check=False)
             return MergeResult(
@@ -126,9 +126,11 @@ class WorkspaceTransaction:
                 stderr=result.stderr.strip(),
             )
 
-        raise RuntimeError(
-            f"{' '.join(['git', 'merge', '--no-commit', branch])} failed: "
-            f"{result.stderr.strip()}"
+        return MergeResult(
+            success=False,
+            has_conflicts=False,
+            conflicting_files=[],
+            stderr=result.stderr.strip(),
         )
 
     def rebase(self, onto: str) -> None:

@@ -310,6 +310,24 @@ def test_merge_conflict_detected(tmp_path):
     assert "file.txt" in result.conflicting_files
 
 
+def test_merge_non_conflict_failure_returns_result(tmp_path):
+    """merge() returns a failure result instead of raising on non-conflicts."""
+    _, worktree = _init_repo(tmp_path)
+
+    with patch("core.workspace_transaction.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stderr="fatal: unknown revision"),
+            MagicMock(returncode=0, stdout="", stderr=""),
+        ]
+        with WorkspaceTransaction(worktree) as txn:
+            result = txn.merge("missing-branch")
+
+    assert result.success is False
+    assert result.has_conflicts is False
+    assert result.conflicting_files == []
+    assert "unknown revision" in result.stderr
+
+
 def test_rebase_with_conflict_aborts(tmp_path):
     """rebase() aborts on conflict and restores the original worktree state."""
     repo, worktree = _init_repo(tmp_path)

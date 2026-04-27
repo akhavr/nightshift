@@ -21,34 +21,48 @@ from host.rebase import (
 )
 
 
+def _make_worktree(tmp_path: Path, name: str = "worktree") -> Path:
+    """Create a minimal valid worktree layout for host-side integrity checks."""
+    repo_root = tmp_path / "repo"
+    metadata_dir = repo_root / ".git" / "worktrees" / name
+    metadata_dir.mkdir(parents=True)
+    worktree = tmp_path / name
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {metadata_dir}\n")
+    return worktree
+
+
 class TestAttemptPreReviewRebase:
     """Tests for the main rebase entry point."""
 
     def test_success_no_tests(self, tmp_path):
         """Successful rebase with no test command returns None."""
+        worktree = _make_worktree(tmp_path)
         with patch("host.rebase._rebase") as mock_rebase:
             mock_rebase.return_value = RebaseResult(success=True)
-            result = attempt_pre_review_rebase(tmp_path, "master")
+            result = attempt_pre_review_rebase(worktree, "master")
         assert result is None
-        mock_rebase.assert_called_once_with(tmp_path, "master")
+        mock_rebase.assert_called_once_with(worktree, "master")
 
     def test_success_with_passing_tests(self, tmp_path):
         """Successful rebase + passing tests returns None."""
+        worktree = _make_worktree(tmp_path)
         with patch("host.rebase._rebase") as mock_rebase, \
              patch("host.rebase._run_test_command", return_value=None):
             mock_rebase.return_value = RebaseResult(success=True)
             result = attempt_pre_review_rebase(
-                tmp_path, "master", test_command="pytest")
+                worktree, "master", test_command="pytest")
         assert result is None
 
     def test_rebase_conflict_returns_prompt(self, tmp_path):
         """Rebase conflict returns a prompt and does not fall back to merge."""
+        worktree = _make_worktree(tmp_path)
         with patch("host.rebase._rebase") as mock_rebase, \
              patch("host.rebase._merge") as mock_merge:
             mock_rebase.return_value = RebaseResult(
                 success=False,
                 conflict_details="Conflicting files:\nsrc/main.py")
-            result = attempt_pre_review_rebase(tmp_path, "master")
+            result = attempt_pre_review_rebase(worktree, "master")
         assert result is not None
         assert "REBASE CONFLICT" in result
         assert "src/main.py" in result
@@ -56,12 +70,13 @@ class TestAttemptPreReviewRebase:
 
     def test_test_failure_returns_prompt(self, tmp_path):
         """Test failure after rebase returns a prompt."""
+        worktree = _make_worktree(tmp_path)
         with patch("host.rebase._rebase") as mock_rebase, \
              patch("host.rebase._run_test_command",
                    return_value="Exit code 1\nstdout:\nFAILED test_foo"):
             mock_rebase.return_value = RebaseResult(success=True)
             result = attempt_pre_review_rebase(
-                tmp_path, "master", test_command="pytest")
+                worktree, "master", test_command="pytest")
         assert result is not None
         assert "POST-REBASE TEST FAILURE" in result
         assert "FAILED test_foo" in result
@@ -74,18 +89,20 @@ class TestAttemptPreReviewRebase:
 
     def test_no_test_command_skips_tests(self, tmp_path):
         """When no test_command is provided, tests are skipped."""
+        worktree = _make_worktree(tmp_path)
         with patch("host.rebase._rebase") as mock_rebase, \
              patch("host.rebase._run_test_command") as mock_test:
             mock_rebase.return_value = RebaseResult(success=True)
-            attempt_pre_review_rebase(tmp_path, "master", test_command=None)
+            attempt_pre_review_rebase(worktree, "master", test_command=None)
         mock_test.assert_not_called()
 
     def test_custom_base_branch(self, tmp_path):
         """Rebase uses the provided base branch."""
+        worktree = _make_worktree(tmp_path)
         with patch("host.rebase._rebase") as mock_rebase:
             mock_rebase.return_value = RebaseResult(success=True)
-            attempt_pre_review_rebase(tmp_path, "main")
-        mock_rebase.assert_called_once_with(tmp_path, "main")
+            attempt_pre_review_rebase(worktree, "main")
+        mock_rebase.assert_called_once_with(worktree, "main")
 
     def test_rebase_repairs_broken_worktree(self, tmp_path):
         """Integrity check runs before rebase and enables auto-repair."""
@@ -112,6 +129,26 @@ class TestAttemptPreReviewRebase:
         mock_rebase.assert_called_once_with(tmp_path, "master")
         assert calls[0][0] == "check"
         assert calls[1][0] == "rebase"
+
+    def test_rebase_checks_integrity_without_git_file(self, tmp_path):
+        """Integrity check is not gated on a present .git file."""
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+
+        calls = []
+
+        def _check_integrity(worktree_path, auto_repair=False):
+            calls.append(("check", worktree_path, auto_repair))
+            return True
+
+        with patch("host.rebase.check_worktree_integrity", side_effect=_check_integrity) as mock_check, \
+             patch("host.rebase._rebase", return_value=RebaseResult(success=True)) as mock_rebase:
+            result = attempt_pre_review_rebase(worktree, "master")
+
+        assert result is None
+        mock_check.assert_called_once_with(worktree, auto_repair=True)
+        mock_rebase.assert_called_once_with(worktree, "master")
+        assert calls[0][0] == "check"
 
 class TestRebase:
     """Tests for the _rebase function."""
@@ -655,6 +692,9 @@ class TestSanitizeGitConfig:
 
         worktree = tmp_path / "worktrees" / "agent-test"
         worktree.mkdir(parents=True)
+        metadata_dir = repo / ".git" / "worktrees" / worktree.name
+        metadata_dir.mkdir(parents=True)
+        (worktree / ".git").write_text(f"gitdir: {metadata_dir}\n")
 
         with patch("host.rebase._rebase") as mock_rebase, \
              patch("host.rebase._fix_container_gitdir"):
