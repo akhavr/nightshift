@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from core.protocols import (
     AgentEvent, AgentEventType, RebaseResult, TrackerIssue, Workspace,
@@ -11,7 +12,7 @@ from core.constants import TITLE_TRUNCATE_LEN
 from core.post_run import (
     post_run_action, notify_done, resume_with_answer,
     prepare_resume, maybe_summarize_checkpoints,
-    scan_conversation_for_verdict,
+    scan_conversation_for_verdict, check_empty_session,
 )
 
 from tests.conftest import (
@@ -231,6 +232,16 @@ class TestNotifyDone:
         assert ("update_status", "waiting:review") not in calls
         assert ("mark_completed",) not in calls
 
+    def test_empty_session_flags_human_review(self, tmp_path):
+        _, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        st = sm.load_state()
+        with patch("core.post_run.check_empty_session", return_value=True):
+            notify_done(sm, ws_mgr, ws, tracker, notifier, issue, st)
+        assert sm.load_state().status == "waiting:human-review"
+        comments = tracker.get_comments(issue.id)
+        assert any("Empty session" in c.body for c in comments)
+        assert any("empty session" in n.lower() for n in notifier.notifications)
+
 
 class TestUsageInNotifyDone:
     def test_cost_line_in_proof_comment(self, tmp_path):
@@ -363,6 +374,25 @@ class TestScanConversationForVerdict:
         assert scan_conversation_for_verdict(sm) == "approve"
 
 
+class TestEmptySessionDetection:
+    def test_detects_empty_session(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        with patch("core.post_run.subprocess.run") as mock_run:
+            mock_run.return_value = type("R", (), {
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+            })()
+            assert check_empty_session(repo, "agent/test", "master") is True
+            mock_run.assert_called_once_with(
+                ["git", "log", "--oneline", "master..agent/test"],
+                capture_output=True,
+                text=True,
+                cwd=repo,
+            )
+
+
 class TestRebaseMovedToHost:
     """Rebase now runs on host side, not in container.
 
@@ -419,6 +449,20 @@ class TestReviewMaxTurns:
         assert result is None
         assert sm.load_state().status == "waiting:review"
         assert "max-turns" in commits
+
+    def test_review_max_turns_forwards_base_branch_to_done(self, tmp_path):
+        """Review completion must preserve the configured base branch."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("working")
+        sm.append_conversation("assistant", "All tests pass. @nightshift approve")
+        with patch("core.post_run.notify_done") as mock_notify_done:
+            result = post_run_action(
+                sm, ws_mgr, ws, tracker, notifier, issue, agent,
+                lambda **kw: None, lambda r: None,
+                base_branch="agent/base", is_review=True)
+        assert result is None
+        mock_notify_done.assert_called_once()
+        assert mock_notify_done.call_args.kwargs["base_branch"] == "agent/base"
 
     def test_review_max_turns_without_verdict_falls_back(self, tmp_path):
         """When review hits max-turns with no verdict, set suspended:review-no-verdict."""
