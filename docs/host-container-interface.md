@@ -175,7 +175,7 @@ Cheap stat() checks — no inotify dependency.
 **Mitigation:**
 ```python
 VALID_OPS = {"add_comment", "set_status", "add_label", "remove_label"}
-ISSUE_ID_PATTERN = re.compile(r'^[a-f0-9]{8,40}$')
+ISSUE_ID_PATTERN = re.compile(r'^[a-f0-9]{8,64}$')
 
 def validate_outbox_entry(entry):
     if entry.get("op") not in VALID_OPS:

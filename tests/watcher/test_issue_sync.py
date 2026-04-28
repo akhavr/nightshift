@@ -159,6 +159,26 @@ class TestProcessOutbox:
         with pytest.raises(ValueError, match="Invalid issue_id"):
             _validate_outbox_entry({"op": "comment", "issue_id": issue_id})
 
+    def test_process_outbox_accepts_full_issue_id(self, tmp_path, mock_tracker):
+        """Full 64-char hex IDs from StaticTracker are valid."""
+        full_id = "ca8e754a8413156025a4fa376edfe0d9aa78c58b43babf8acb0ac9ec36394419"
+        sd = _make_session(tmp_path, "abc")
+        (sd / TRACKER_OUTBOX_FILENAME).write_text(
+            json.dumps({"op": "comment", "issue_id": full_id, "text": "hello"}) + "\n"
+        )
+        assert process_outbox(sd, mock_tracker) == 1
+        mock_tracker.add_comment.assert_called_once_with(full_id, "hello")
+
+    def test_process_outbox_accepts_short_issue_id(self, tmp_path, mock_tracker):
+        """Short 12-char IDs (the display format) are valid."""
+        short_id = "ca8e754a8413"
+        sd = _make_session(tmp_path, "abc")
+        (sd / TRACKER_OUTBOX_FILENAME).write_text(
+            json.dumps({"op": "comment", "issue_id": short_id, "text": "hello"}) + "\n"
+        )
+        assert process_outbox(sd, mock_tracker) == 1
+        mock_tracker.add_comment.assert_called_once_with(short_id, "hello")
+
     @pytest.mark.parametrize("entry", [
         {"issue_id": VALID_ISSUE_ID},
         {"op": "comment"},
