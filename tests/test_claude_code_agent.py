@@ -1,5 +1,6 @@
 """Tests for ClaudeCodeAgent prompt file handling."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -155,6 +156,32 @@ class TestLargePromptHandling:
         """Can pass custom session_dir."""
         agent = ClaudeCodeAgent(session_dir=tmp_path)
         assert agent._session_dir == tmp_path
+
+
+class TestSignalMethodOutput:
+    def test_signal_method_file_writes_file_signal(self):
+        done_file = Path("/session/signal/done")
+        done_file.unlink(missing_ok=True)
+
+        agent = ClaudeCodeAgent(signal_method="file")
+        raw = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "mcp__nightshift-signals__nightshift_done",
+                        "input": {"summary": "Task complete"},
+                    }
+                ]
+            },
+        })
+
+        ev = agent._parse(raw)
+
+        assert ev is None
+        assert done_file.exists()
+        done_file.unlink(missing_ok=True)
 
 
 class TestPromptFileThreshold:

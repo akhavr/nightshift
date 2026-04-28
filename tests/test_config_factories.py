@@ -106,6 +106,28 @@ class TestCreateAgent:
             stall_timeout_s=120,
             extra_args=["--verbose"],
             model="opus",
+            signal_method="auto",
+        )
+        assert result == mock_cls.return_value
+
+    def test_creates_agent_with_signal_method(self):
+        cfg = WorkflowConfig(
+            agent=AgentConfig(
+                kind="claude-code",
+                stall_timeout_s=120,
+                extra_args=["--verbose"],
+                signal_method="file",
+            )
+        )
+        mod, mock_cls = _make_mock_module("ClaudeCodeAgent")
+
+        with patch("core.config.factories.importlib.import_module", return_value=mod):
+            result = create_agent(cfg, signal_method="file")
+
+        mock_cls.assert_called_once_with(
+            stall_timeout_s=120,
+            extra_args=["--verbose"],
+            signal_method="file",
         )
         assert result == mock_cls.return_value
 
@@ -125,6 +147,7 @@ class TestCreateAgent:
         mock_cls.assert_called_once_with(
             stall_timeout_s=60,
             extra_args=["--debug"],
+            signal_method="auto",
         )
         assert result == mock_cls.return_value
 

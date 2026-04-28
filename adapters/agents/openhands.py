@@ -49,8 +49,26 @@ class OpenHandsAgent(HeadlessAgentBase):
         command: str = "openhands",
         stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
+        signal_method: str = "auto",
     ):
-        super().__init__(command, stall_timeout_s, extra_args)
+        super().__init__(command, stall_timeout_s, extra_args, signal_method=signal_method)
+
+    def _done_signal_event(self, raw: str, metadata: dict | None = None) -> AgentEvent | None:
+        """Build the configured completion signal event."""
+        if self.signal_method in ("file", "auto"):
+            self._write_done_signal_file()
+        if self.signal_method == "file":
+            return None
+        if metadata is None:
+            metadata = {}
+        if self.signal_method == "mcp":
+            return AgentEvent(type=AgentEventType.DONE, metadata=metadata, raw=raw)
+        return AgentEvent(
+            type=AgentEventType.TEXT,
+            content="@@DONE@@",
+            metadata=metadata,
+            raw=raw,
+        )
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         self._store_start_params(prompt, workspace, max_turns)
@@ -159,12 +177,7 @@ class OpenHandsAgent(HeadlessAgentBase):
         action_kind = str(action.get("kind", ""))
 
         if action_kind == "FinishAction":
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content="@@DONE@@",
-                metadata=metadata,
-                raw=raw,
-            )
+            return self._done_signal_event(raw, metadata)
 
         content = self._action_preview(action_kind, action)
         return AgentEvent(
@@ -216,12 +229,7 @@ class OpenHandsAgent(HeadlessAgentBase):
         action_type = ev.get("action_type", "")
 
         if action_type == "FinishAction":
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content="@@DONE@@",
-                metadata=metadata,
-                raw=raw,
-            )
+            return self._done_signal_event(raw, metadata)
 
         if action_type == "FileEditorAction":
             summary = ev.get("summary", "file edit")

@@ -46,11 +46,29 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
         session_dir: Path | None = None,
+        signal_method: str = "auto",
     ):
-        super().__init__(command, stall_timeout_s, extra_args)
+        super().__init__(command, stall_timeout_s, extra_args, signal_method=signal_method)
         self._extra_events: list[AgentEvent] = []
         self._session_dir = session_dir or Path("/session")
         self._prompt_file: Path | None = None
+
+    def _done_signal_event(self, raw: str, metadata: dict | None = None) -> AgentEvent | None:
+        """Build the configured completion signal event."""
+        if self.signal_method in ("file", "auto"):
+            self._write_done_signal_file()
+        if self.signal_method == "file":
+            return None
+        if metadata is None:
+            metadata = {}
+        if self.signal_method == "mcp":
+            return AgentEvent(type=AgentEventType.DONE, metadata=metadata, raw=raw)
+        return AgentEvent(
+            type=AgentEventType.TEXT,
+            content="@@DONE@@",
+            metadata=metadata,
+            raw=raw,
+        )
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         self._store_start_params(prompt, workspace, max_turns)
@@ -164,8 +182,9 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                 return AgentEvent(type=AgentEventType.AUTH_FAILURE,
                                   content=result_text, raw=raw)
             if ev.get("subtype") == "success" and not ev.get("is_error"):
-                self._extra_events.append(AgentEvent(
-                    type=AgentEventType.TEXT, content="@@DONE@@", raw=raw))
+                done_event = self._done_signal_event(raw)
+                if done_event:
+                    self._extra_events.append(done_event)
             metadata = {}
             usage_obj = ev.get("usage", {})
             cost = ev.get("total_cost_usd", ev.get("cost_usd", 0.0))
@@ -233,9 +252,9 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                     signal = name[len(MCP_SIGNAL_SERVER_PREFIX):]
                     inp_data = part.get("input", {})
                     if signal == "nightshift_done":
-                        yield AgentEvent(
-                            type=AgentEventType.TEXT,
-                            content="@@DONE@@", raw=raw)
+                        done_event = self._done_signal_event(raw)
+                        if done_event:
+                            yield done_event
                     elif signal == "nightshift_checkpoint":
                         desc = inp_data.get("description", "") if isinstance(inp_data, dict) else ""
                         yield AgentEvent(

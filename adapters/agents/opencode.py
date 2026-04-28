@@ -42,8 +42,9 @@ class OpenCodeAgent(HeadlessAgentBase):
         command: str = "opencode",
         stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
+        signal_method: str = "auto",
     ):
-        super().__init__(command, stall_timeout_s, extra_args)
+        super().__init__(command, stall_timeout_s, extra_args, signal_method=signal_method)
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         self._store_start_params(prompt, workspace, max_turns)

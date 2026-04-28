@@ -59,10 +59,12 @@ class HeadlessAgentBase:
         command: str,
         stall_timeout_s: float = STALL_TIMEOUT_S,
         extra_args: list[str] | None = None,
+        signal_method: str = "auto",
     ):
         self.command = command
         self.stall_timeout_s = stall_timeout_s
         self.extra_args = extra_args or []
+        self.signal_method = signal_method
         self._pid: int | None = None
         self._process: subprocess.Popen | None = None
         self._last_event: float = 0
@@ -222,6 +224,15 @@ class HeadlessAgentBase:
         self._last_prompt = prompt
         self._last_workspace = workspace
         self._last_max_turns = max_turns
+
+    def _write_done_signal_file(self) -> None:
+        """Write the file-based completion signal expected by SessionRunner."""
+        done_path = Path("/session/signal/done")
+        try:
+            done_path.parent.mkdir(parents=True, exist_ok=True)
+            done_path.touch(exist_ok=True)
+        except OSError as e:
+            log.warning(f"Failed to write done signal file {done_path}: {e}")
 
     def _restart(self) -> None:
         """Terminate and restart the agent with previously stored parameters."""

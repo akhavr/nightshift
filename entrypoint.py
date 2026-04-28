@@ -227,7 +227,12 @@ def _create_adapters(config, overflow: OverflowConfig | None = None):
                   for the agent (for overflow mode).
     """
     tracker = StaticTracker(session_dir="/session")
-    agent = create_agent(config, overflow)
+    signal_method = (
+        overflow.signal_method
+        if overflow and overflow.signal_method
+        else config.agent.signal_method
+    )
+    agent = create_agent(config, overflow, signal_method=signal_method)
     workspace_mgr = create_workspace_mgr(config, repo_root=Path("/workspace"))
     workspace = Workspace(
         path=Path("/workspace"),
