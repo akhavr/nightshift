@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -246,6 +247,42 @@ class TestParseStepFinish:
         assert ev.metadata["usage"]["input_tokens"] == 500
         assert ev.metadata["usage"]["output_tokens"] == 100
         assert ev.metadata["usage"]["cost_usd"] == 0.02
+
+
+class TestSignalMethodOutput:
+    def _done_file(self) -> Path:
+        return Path("/session/signal/done")
+
+    @pytest.mark.parametrize(
+        ("signal_method", "expected_types", "expect_file"),
+        [
+            ("file", [AgentEventType.SYSTEM, AgentEventType.PROCESS_EXIT], True),
+            ("text", [AgentEventType.SYSTEM, AgentEventType.TEXT, AgentEventType.PROCESS_EXIT], False),
+            ("mcp", [AgentEventType.SYSTEM, AgentEventType.DONE, AgentEventType.PROCESS_EXIT], False),
+            ("auto", [AgentEventType.SYSTEM, AgentEventType.TEXT, AgentEventType.DONE, AgentEventType.PROCESS_EXIT], True),
+        ],
+    )
+    def test_signal_method_completion_outputs(self, signal_method, expected_types, expect_file):
+        done_file = self._done_file()
+        done_file.unlink(missing_ok=True)
+
+        agent = OpenCodeAgent(signal_method=signal_method)
+        lines = [_ev("step_finish", reason="stop") + "\n"]
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.stdout = iter(lines)
+        mock_proc.returncode = 0
+        agent._process = mock_proc
+        agent._last_event = time.monotonic()
+
+        events = list(agent.stream_events())
+
+        assert [event.type for event in events] == expected_types
+        assert events[0].content == "step_finish:stop"
+        assert events[-1].type == AgentEventType.PROCESS_EXIT
+        assert done_file.exists() is expect_file
+        done_file.unlink(missing_ok=True)
 
 
 # ── _parse() — error events ──────────────────────────────

@@ -45,6 +45,22 @@ class OpenCodeAgent(HeadlessAgentBase):
         signal_method: str = "auto",
     ):
         super().__init__(command, stall_timeout_s, extra_args, signal_method=signal_method)
+        self._saw_stop_step_finish = False
+        self._stop_step_finish_raw: str | None = None
+
+    def _before_stream(self) -> None:
+        self._saw_stop_step_finish = False
+        self._stop_step_finish_raw = None
+
+    def _on_process_exit(self) -> None:
+        if not self._saw_stop_step_finish:
+            return
+        if self._process and self._process.returncode not in (0, None):
+            return
+        done_events = self._build_done_signal_events(self._stop_step_finish_raw or "")
+        self._extra_events.extend(done_events)
+        self._saw_stop_step_finish = False
+        self._stop_step_finish_raw = None
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         self._store_start_params(prompt, workspace, max_turns)
@@ -136,6 +152,9 @@ class OpenCodeAgent(HeadlessAgentBase):
             # Note: reason='stop' just means current step finished without tool
             # calls, NOT that the agent completed its task. True completion is
             # signaled by process exit or file signals (/session/signal/done).
+            if reason == "stop":
+                self._saw_stop_step_finish = True
+                self._stop_step_finish_raw = raw
             return AgentEvent(
                 type=AgentEventType.SYSTEM,
                 content=f"step_finish:{reason}",

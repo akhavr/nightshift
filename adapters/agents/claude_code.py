@@ -53,23 +53,6 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         self._session_dir = session_dir or Path("/session")
         self._prompt_file: Path | None = None
 
-    def _done_signal_event(self, raw: str, metadata: dict | None = None) -> AgentEvent | None:
-        """Build the configured completion signal event."""
-        if self.signal_method in ("file", "auto"):
-            self._write_done_signal_file()
-        if self.signal_method == "file":
-            return None
-        if metadata is None:
-            metadata = {}
-        if self.signal_method == "mcp":
-            return AgentEvent(type=AgentEventType.DONE, metadata=metadata, raw=raw)
-        return AgentEvent(
-            type=AgentEventType.TEXT,
-            content="@@DONE@@",
-            metadata=metadata,
-            raw=raw,
-        )
-
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         self._store_start_params(prompt, workspace, max_turns)
         cmd = [
@@ -182,9 +165,9 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                 return AgentEvent(type=AgentEventType.AUTH_FAILURE,
                                   content=result_text, raw=raw)
             if ev.get("subtype") == "success" and not ev.get("is_error"):
-                done_event = self._done_signal_event(raw)
-                if done_event:
-                    self._extra_events.append(done_event)
+                done_events = self._build_done_signal_events(raw)
+                if done_events:
+                    self._extra_events.extend(done_events)
             metadata = {}
             usage_obj = ev.get("usage", {})
             cost = ev.get("total_cost_usd", ev.get("cost_usd", 0.0))
@@ -252,9 +235,10 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                     signal = name[len(MCP_SIGNAL_SERVER_PREFIX):]
                     inp_data = part.get("input", {})
                     if signal == "nightshift_done":
-                        done_event = self._done_signal_event(raw)
-                        if done_event:
-                            yield done_event
+                        done_events = self._build_done_signal_events(raw)
+                        if done_events:
+                            yield done_events[0]
+                            yield from done_events[1:]
                     elif signal == "nightshift_checkpoint":
                         desc = inp_data.get("description", "") if isinstance(inp_data, dict) else ""
                         yield AgentEvent(

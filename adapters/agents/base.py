@@ -102,6 +102,7 @@ class HeadlessAgentBase:
                     if restart_needed:
                         break
                     self._on_process_exit()
+                    yield from self._drain_extra()
                     yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
                     return
 
@@ -110,6 +111,7 @@ class HeadlessAgentBase:
                     line = stdout.readline()
                     if not line:
                         self._on_process_exit()
+                        yield from self._drain_extra()
                         yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
                         return
                     self._last_event = time.monotonic()
@@ -233,6 +235,38 @@ class HeadlessAgentBase:
             done_path.touch(exist_ok=True)
         except OSError as e:
             log.warning(f"Failed to write done signal file {done_path}: {e}")
+
+    def _build_done_signal_events(
+        self,
+        raw: str,
+        metadata: dict | None = None,
+    ) -> list[AgentEvent]:
+        """Build completion events for the configured signal method."""
+        if self.signal_method in ("file", "auto"):
+            self._write_done_signal_file()
+
+        if metadata is None:
+            metadata = {}
+
+        events: list[AgentEvent] = []
+        if self.signal_method in ("text", "auto"):
+            events.append(
+                AgentEvent(
+                    type=AgentEventType.TEXT,
+                    content="@@DONE@@",
+                    metadata=metadata,
+                    raw=raw,
+                )
+            )
+        if self.signal_method in ("mcp", "auto"):
+            events.append(
+                AgentEvent(
+                    type=AgentEventType.DONE,
+                    metadata=metadata,
+                    raw=raw,
+                )
+            )
+        return events
 
     def _restart(self) -> None:
         """Terminate and restart the agent with previously stored parameters."""
