@@ -27,7 +27,19 @@ overflow:
   agent_kind: codex
   extra_args: []
   env:
-    CODEX_MODEL: gpt-5.4-mini
+    CODEX_MODEL: gpt-5.4
+
+overflow_profiles:
+  opencode-gpt54mini:
+    agent_kind: opencode
+    extra_args: ["-m", "openai/gpt-5.4-mini"]
+    env:
+      OPENAI_API_KEY: $OPENAI_API_KEY
+  opencode-gpt54:
+    agent_kind: opencode
+    extra_args: ["-m", "openai/gpt-5.4"]
+    env:
+      OPENAI_API_KEY: $OPENAI_API_KEY
 ---
 
 You are a strict code reviewer for the nightshift project (autonomous coding agent runner).

@@ -61,9 +61,9 @@ overflow_profiles:
       LLM_BASE_URL: https://openrouter.ai/api/v1
   opencode-gpt54mini:
     agent_kind: opencode
-    extra_args: ["-m", "openrouter/openai/gpt-5.4-mini"]
+    extra_args: ["-m", "openai/gpt-5.4-mini"]
     env:
-      OPENROUTER_API_KEY: $OPENROUTER_API_KEY
+      OPENAI_API_KEY: $OPENAI_API_KEY
 
 auto_start:
   enabled: true
