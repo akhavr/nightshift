@@ -130,6 +130,12 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("suspended:answer-ready", "working"),
     ("suspended:review-no-verdict", "waiting:human-review"),
     ("suspended:review-no-verdict", "working"),
+    # suspended:* -> rejected (discard everything)
+    ("suspended:max-resumes", "rejected"),
+    ("suspended:auth-failure", "rejected"),
+    ("suspended:auth-failure-permanent", "rejected"),
+    ("suspended:too-complex", "rejected"),
+    ("suspended:review-no-verdict", "rejected"),
     # suspended:branch-missing -> working (manual resume after branch recreated)
     ("suspended:branch-missing", "working"),
     # suspended:too-complex -> working (manual resume after task split)

@@ -378,3 +378,62 @@ class TestTransitionLogging:
             "starting" in record.message and "working" in record.message
             for record in caplog.records
         ), f"Expected log with starting->working, got: {[r.message for r in caplog.records]}"
+
+
+class TestRejectFromSuspended:
+    """Tests for SSM transitions: suspended states -> rejected."""
+
+    def test_reject_from_suspended_max_resumes(self, tmp_path):
+        """suspended:max-resumes -> rejected should be allowed."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc123", status="suspended:max-resumes")
+        sm._write(state)
+
+        sm.update_status("rejected")
+
+        assert sm.load_state().status == "rejected"
+
+    def test_reject_from_suspended_auth_failure(self, tmp_path):
+        """suspended:auth-failure -> rejected should be allowed."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc123", status="suspended:auth-failure")
+        sm._write(state)
+
+        sm.update_status("rejected")
+
+        assert sm.load_state().status == "rejected"
+
+    def test_reject_from_suspended_auth_failure_permanent(self, tmp_path):
+        """suspended:auth-failure-permanent -> rejected should be allowed."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc123", status="suspended:auth-failure-permanent")
+        sm._write(state)
+
+        sm.update_status("rejected")
+
+        assert sm.load_state().status == "rejected"
+
+    def test_reject_from_suspended_too_complex(self, tmp_path):
+        """suspended:too-complex -> rejected should be allowed."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc123", status="suspended:too-complex")
+        sm._write(state)
+
+        sm.update_status("rejected")
+
+        assert sm.load_state().status == "rejected"
+
+    def test_reject_from_suspended_review_no_verdict(self, tmp_path):
+        """suspended:review-no-verdict -> rejected should be allowed."""
+        session_dir = tmp_path / "session"
+        sm = StateManager(session_dir)
+        state = SessionState(issue_id="abc123", branch="agent/abc123", status="suspended:review-no-verdict")
+        sm._write(state)
+
+        sm.update_status("rejected")
+
+        assert sm.load_state().status == "rejected"

@@ -1639,6 +1639,51 @@ def test_reject_validates_state(tmp_path, capsys):
     assert "rejected" in err.lower()
 
 
+def test_reject_suspended_session(tmp_path, capsys, monkeypatch):
+    """cmd_reject should succeed from suspended:max-resumes (and other suspended states)."""
+    repo, _ = _init_repo(tmp_path)
+    sid = "suspendedreject"
+    env = os.environ.copy()
+    env["GIT_AUTHOR_NAME"] = "Test"
+    env["GIT_AUTHOR_EMAIL"] = "test@test.com"
+    env["GIT_COMMITTER_NAME"] = "Test"
+    env["GIT_COMMITTER_EMAIL"] = "test@test.com"
+
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "suspended:max-resumes", "step": 10, "issue_id": sid,
+        "branch": f"agent/{sid}", "started_at": "2025-01-01T00:00:00Z",
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    worktree_dir = repo / ".worktrees" / f"agent-{sid}"
+    worktree_dir.mkdir(parents=True)
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree_dir), "-b", f"agent/{sid}"],
+        cwd=str(repo), env=env, check=True,
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.get_tracker_with_fallback") as mock_tracker,
+    ):
+        mock_tracker.return_value.set_status = lambda *a: None
+        mock_tracker.return_value.add_comment = lambda *a: None
+        cmd_reject(_make_args(issue_id=sid, workflow=None))
+
+    out = capsys.readouterr().out
+    assert "Discarding" in out or not out.strip()
+
+
 def test_resume_validates_state(tmp_path, capsys):
     """cmd_resume validates that session can transition to 'working'."""
     repo, run = _init_repo(tmp_path)
