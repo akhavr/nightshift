@@ -34,6 +34,7 @@ def test_overflow_config_defaults():
     oc = OverflowConfig()
     assert oc.extra_args == []
     assert oc.env == {}
+    assert oc.skip_oauth is False
     assert oc.litellm_config is None
     assert oc.pricing is None
 
@@ -46,6 +47,12 @@ def test_overflow_config_with_values():
     )
     assert oc.extra_args == ["--model", "m2.7"]
     assert oc.env["ANTHROPIC_BASE_URL"] == "https://example.com"
+
+
+def test_overflow_config_stores_skip_oauth():
+    """OverflowConfig stores the skip_oauth flag."""
+    oc = OverflowConfig(skip_oauth=True)
+    assert oc.skip_oauth is True
 
 
 def test_overflow_config_profiles():
@@ -137,6 +144,7 @@ def test_parse_overflow_profile_from_yaml(tmp_path, monkeypatch):
 overflow_profiles:
   openrouter-qwen:
     agent_kind: codex
+    skip_oauth: true
     env:
       CODEX_MODEL: qwen/qwen3.6-plus
       CODEX_BASE_URL: https://openrouter.ai/api/v1
@@ -148,6 +156,7 @@ Prompt.
     config = load_workflow(workflow)
     assert config.overflow.profile_name == "openrouter-qwen"
     assert config.overflow.agent_kind == "codex"
+    assert config.overflow.skip_oauth is True
     assert config.overflow.env["CODEX_MODEL"] == "qwen/qwen3.6-plus"
     assert config.overflow.env["CODEX_API_KEY"] == "sk-openrouter"
     assert "openrouter-qwen" in config.overflow.profiles
