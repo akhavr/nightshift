@@ -471,3 +471,62 @@ Prompt body
             load_workflow(workflow_md)
         assert "Invalid signal_method 'invalid'" in str(exc_info.value)
         assert "auto" in str(exc_info.value)
+
+
+class TestOverflowProfileSignalMethod:
+    """Tests for per-profile signal_method support (REQ-001)."""
+
+    def test_overflow_profile_signal_method(self, tmp_path):
+        """OverflowProfile with signal_method: file parses correctly."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+overflow_profiles:
+  openhands-file:
+    agent_kind: openhands
+    signal_method: file
+overflow: openhands-file
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.overflow.profile_name == "openhands-file"
+        assert config.overflow.signal_method == "file"
+        assert config.overflow.profiles["openhands-file"].signal_method == "file"
+
+    def test_overflow_profile_signal_method_overrides_agent(self, tmp_path):
+        """When overflow profile has signal_method, it overrides agent.signal_method."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+agent:
+  kind: claude-code
+  signal_method: text
+overflow_profiles:
+  openhands-file:
+    agent_kind: openhands
+    signal_method: file
+overflow: openhands-file
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.agent.signal_method == "text"
+        assert config.overflow.signal_method == "file"
+
+    def test_overflow_profile_signal_method_defaults_to_none(self, tmp_path):
+        """OverflowProfile without signal_method has None and inherits from agent."""
+        workflow_md = tmp_path / "WORKFLOW.md"
+        workflow_md.write_text("""---
+agent:
+  kind: claude-code
+  signal_method: text
+overflow_profiles:
+  openhands-default:
+    agent_kind: openhands
+overflow: openhands-default
+---
+Prompt body
+""")
+        config = load_workflow(workflow_md)
+        assert config.overflow.profile_name == "openhands-default"
+        assert config.overflow.signal_method is None
+        assert config.overflow.profiles["openhands-default"].signal_method is None
