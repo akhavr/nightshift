@@ -11,6 +11,7 @@ Writes (container -> host):
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -24,7 +25,39 @@ log = logging.getLogger("watcher")
 # Tracks last redump time per session ID to enforce the throttle.
 _last_redump: dict[str, float] = {}
 
+VALID_OPS = {"add_comment", "set_status", "add_label", "remove_label"}
+_LEGACY_OP_ALIASES = {
+    "comment": "add_comment",
+    "label_add": "add_label",
+    "label_rm": "remove_label",
+}
+ISSUE_ID_PATTERN = re.compile(r"^[a-f0-9]{8,40}$")
+
 _WORKING_STATUSES = ("working", "starting", "waiting:answer")
+
+
+def _validate_outbox_entry(entry: dict) -> None:
+    """Validate a single outbox entry before execution.
+
+    The host still accepts legacy op names emitted by the current StaticTracker
+    implementation, but it rejects malformed payloads before tracker calls.
+    """
+    if not isinstance(entry, dict):
+        raise ValueError("Outbox entry must be a JSON object")
+
+    missing = [field for field in ("op", "issue_id") if field not in entry]
+    if missing:
+        raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+    op = entry.get("op")
+    if not isinstance(op, str):
+        raise ValueError(f"Unknown op: {op}")
+    if op not in VALID_OPS and op not in _LEGACY_OP_ALIASES:
+        raise ValueError(f"Unknown op: {op}")
+
+    issue_id = entry.get("issue_id")
+    if not isinstance(issue_id, str) or not ISSUE_ID_PATTERN.fullmatch(issue_id):
+        raise ValueError(f"Invalid issue_id: {issue_id}")
 
 
 def process_outbox(session_dir: Path, tracker) -> int:
@@ -82,6 +115,11 @@ def _process_file(session_dir: Path, path: Path, tracker) -> int:
         except json.JSONDecodeError as e:
             log.warning(f"[{session_dir.name}] Bad outbox line {line_no}: {e}")
             continue
+        try:
+            _validate_outbox_entry(entry)
+        except ValueError as e:
+            log.warning(f"[{session_dir.name}] Invalid outbox entry on line {line_no}: {e}; entry={entry}")
+            continue
         if _apply_outbox_entry(session_dir.name, tracker, entry):
             processed += 1
 
@@ -101,13 +139,13 @@ def _apply_outbox_entry(sid: str, tracker, entry: dict) -> bool:
     op = entry.get("op")
     issue_id = entry.get("issue_id", "")
     try:
-        if op == "comment":
+        if op in {"comment", "add_comment"}:
             tracker.add_comment(issue_id, entry.get("text", ""))
         elif op == "set_status":
             tracker.set_status(issue_id, entry.get("status", ""))
-        elif op == "label_add":
+        elif op in {"label_add", "add_label"}:
             tracker.add_label(issue_id, entry.get("label", ""))
-        elif op == "label_rm":
+        elif op in {"label_rm", "remove_label"}:
             tracker.remove_label(issue_id, entry.get("label", ""))
         else:
             log.warning(f"[{sid}] Unknown outbox op: {op}")
