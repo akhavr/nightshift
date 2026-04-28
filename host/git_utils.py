@@ -1,8 +1,12 @@
 """Git command utilities shared across host modules."""
 
+import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_and_resolve_ref(repo: Path, branch: str) -> str:
@@ -111,3 +115,89 @@ def audit_worktree_symlinks(
                 escaping_symlinks.append((symlink_path, target_path))
 
     return escaping_symlinks
+
+
+_FSCK_NOISE_SUBSTRINGS = (
+    "Unknown object type",
+    "Could not read",
+    "fatal: not a git repository",
+    "git-bug",
+    "dangling ",
+)
+
+
+def validate_git_objects(git_dir: Path) -> tuple[bool, list[str]]:
+    """Run git fsck to validate git objects.
+
+    Args:
+        git_dir: Path to .git directory or worktree git dir
+
+    Returns:
+        (is_valid, real_errors) tuple. is_valid is True if no corruption found.
+        real_errors is a list of error lines that are not known noise.
+    """
+    if not git_dir.is_dir():
+        return True, []
+
+    result = subprocess.run(
+        ["git", "--git-dir", str(git_dir), "fsck", "--connectivity-only"],
+        capture_output=True, text=True,
+    )
+
+    if result.returncode == 0:
+        return True, []
+
+    details = result.stderr or result.stdout or ""
+    real_errors = [
+        line for line in details.splitlines()
+        if line.strip() and not any(skip in line for skip in _FSCK_NOISE_SUBSTRINGS)
+    ]
+
+    if real_errors:
+        return False, real_errors
+    return True, []
+
+
+def auto_commit_dirty_worktree(worktree: Path, message: str = "WIP: uncommitted agent changes") -> bool:
+    """Auto-commit any uncommitted changes in the worktree.
+
+    Args:
+        worktree: Path to the git worktree
+        message: Commit message to use
+
+    Returns:
+        True if a commit was made, False if nothing to commit or worktree doesn't exist
+    """
+    if not worktree.is_dir():
+        return False
+
+    # Check if there are uncommitted changes
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, cwd=str(worktree),
+    )
+    if status_result.returncode != 0:
+        return False
+
+    if not status_result.stdout.strip():
+        return False
+
+    # Stage all changes
+    add_result = subprocess.run(
+        ["git", "add", "-A"],
+        capture_output=True, text=True, cwd=str(worktree),
+    )
+    if add_result.returncode != 0:
+        logger.warning("git add failed: %s", add_result.stderr)
+        return False
+
+    # Commit
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", message],
+        capture_output=True, text=True, cwd=str(worktree),
+    )
+    if commit_result.returncode != 0:
+        logger.warning("git commit failed: %s", commit_result.stderr)
+        return False
+
+    return True

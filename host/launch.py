@@ -27,14 +27,9 @@ from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
 from host.session_utils import get_repo_root, find_existing_session_by_prefix
 from host.workspace_setup import setup_workspace
+from host.git_utils import validate_git_objects, auto_commit_dirty_worktree
 
 logger = logging.getLogger(__name__)
-
-_FSCK_NOISE_SUBSTRINGS = (
-    "Unknown object type",
-    "Could not read",
-    "fatal: not a git repository",
-)
 
 
 def _resolve_names(issue_id: str, step: str, config):
@@ -81,14 +76,6 @@ def _teardown_git_overlay(git_mount_path: Path, session_dir: Path) -> None:
         shutil.rmtree(git_mount_path)
 
 
-def _fsck_real_errors(details: str) -> list[str]:
-    """Return fsck lines that are not known git-bug/session-cleanup noise."""
-    return [
-        line for line in details.splitlines()
-        if not any(skip in line for skip in _FSCK_NOISE_SUBSTRINGS)
-    ]
-
-
 def _copy_git_changes(session_dir: Path, repo: Path) -> int:
     """Validate and copy back git objects and whitelisted refs."""
     source_git = None
@@ -99,21 +86,14 @@ def _copy_git_changes(session_dir: Path, repo: Path) -> int:
     if source_git is None:
         return 0
 
-    fsck_result = subprocess.run(
-        ["git", "--git-dir", str(source_git), "fsck", "--connectivity-only"],
-        capture_output=True,
-        text=True,
-    )
-    if fsck_result.returncode != 0:
-        details = fsck_result.stderr or fsck_result.stdout or ""
-        real_errors = _fsck_real_errors(details)
-        if real_errors:
-            logger.error(
-                "git fsck found issues for %s:\n%s",
-                source_git,
-                "\n".join(real_errors),
-            )
-            return fsck_result.returncode or 1
+    is_valid, real_errors = validate_git_objects(source_git)
+    if not is_valid:
+        logger.error(
+            "git fsck found issues for %s:\n%s",
+            source_git,
+            "\n".join(real_errors),
+        )
+        return 1
 
     repo_git = repo / ".git"
     skipped_refs = extract_commits(source_git, repo_git)
@@ -129,52 +109,13 @@ def _copy_git_changes(session_dir: Path, repo: Path) -> int:
 
 def _auto_commit_uncommitted_changes(repo: Path, session_id: str) -> bool:
     """Commit dirty worktree changes left behind after @@DONE@@."""
-    status_result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
+    committed = auto_commit_dirty_worktree(
+        repo,
+        message="WIP: auto-commit uncommitted changes on @@DONE@@",
     )
-    if status_result.returncode != 0:
-        details = (status_result.stderr or status_result.stdout or "").strip()
-        if not details:
-            details = "git status failed without output"
-        logger.warning("[%s] Could not inspect worktree status: %s",
-                       session_id, details)
-        return False
-
-    if not status_result.stdout.strip():
-        return False
-
-    logger.warning("[%s] Container exited with uncommitted changes", session_id)
-
-    add_result = subprocess.run(
-        ["git", "add", "-A"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-    )
-    if add_result.returncode != 0:
-        details = (add_result.stderr or add_result.stdout or "").strip()
-        if not details:
-            details = "git add failed without output"
-        logger.warning("[%s] Auto-commit staging failed: %s", session_id, details)
-        return False
-
-    commit_result = subprocess.run(
-        ["git", "commit", "-m", "WIP: auto-commit uncommitted changes on @@DONE@@"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-    )
-    if commit_result.returncode != 0:
-        details = (commit_result.stderr or commit_result.stdout or "").strip()
-        if not details:
-            details = "git commit failed without output"
-        logger.warning("[%s] Auto-commit failed: %s", session_id, details)
-        return False
-
-    return True
+    if committed:
+        logger.warning("[%s] Container exited with uncommitted changes - auto-committed", session_id)
+    return committed
 
 
 def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
