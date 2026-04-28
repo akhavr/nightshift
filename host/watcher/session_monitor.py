@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -14,7 +15,8 @@ from host.constants import (
     PROVIDER_OUTAGE_RETRY_INTERVAL_S, MAX_PROVIDER_OUTAGE_RETRIES,
     REVIEW_SESSION_PREFIX, LAUNCH_GRACE_PERIOD_S,
     ZOMBIE_CHECK_INTERVAL_S, ZOMBIE_TIMEOUT_MULTIPLIER, DEFAULT_STALL_TIMEOUT_S,
-    BLOCKED_LABEL_PREFIX, REVISE_PENDING_FILENAME,
+    SESSION_SIZE_CHECK_INTERVAL_S, SIZE_WARNING_THRESHOLD_MB,
+    SIZE_CRITICAL_THRESHOLD_MB, BLOCKED_LABEL_PREFIX, REVISE_PENDING_FILENAME,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -151,8 +153,10 @@ class SessionMonitor:
         self._last_auth_retry_check = 0.0
         self._last_provider_outage_check = 0.0
         self._last_zombie_check = 0.0
+        self._last_session_size_check = 0.0
         self._last_review_cleanup_check = 0.0
         self._alerted_zombies: set[str] = set()  # Avoid duplicate alerts
+        self._alerted_large_sessions: set[str] = set()  # Avoid duplicate alerts
 
     def cleanup_stale_review_sessions(self):
         """Clean up review sessions with completed_at set but not yet cleaned up.
@@ -795,6 +799,61 @@ class SessionMonitor:
         else:
             # Container is active — clear from alerted set if it was there
             self._alerted_zombies.discard(sid)
+
+    def check_session_sizes(self):
+        """Warn when session directories grow too large."""
+        now = time.time()
+        if now - self._last_session_size_check < SESSION_SIZE_CHECK_INTERVAL_S:
+            return
+        self._last_session_size_check = now
+
+        if not self.sessions_dir.exists():
+            return
+
+        warning_threshold_bytes = SIZE_WARNING_THRESHOLD_MB * 1024 * 1024
+        critical_threshold_bytes = SIZE_CRITICAL_THRESHOLD_MB * 1024 * 1024
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            sid = session_dir.name
+            if not (session_dir / "state.json").exists():
+                continue
+
+            total_bytes = 0
+            try:
+                for root, _, files in os.walk(session_dir):
+                    for filename in files:
+                        file_path = os.path.join(root, filename)
+                        try:
+                            total_bytes += os.path.getsize(file_path)
+                        except OSError as e:
+                            log.debug(f"[{sid}] Failed to stat {file_path}: {e}")
+            except OSError as e:
+                log.warning(f"[{sid}] Failed to scan session directory size: {e}")
+                continue
+
+            if total_bytes <= warning_threshold_bytes:
+                self._alerted_large_sessions.discard(sid)
+                continue
+
+            total_mb = total_bytes / (1024 * 1024)
+            if total_bytes > critical_threshold_bytes:
+                if sid in self._alerted_large_sessions:
+                    continue
+                self._alerted_large_sessions.add(sid)
+                log.warning(f"[{sid}] Session size is {total_mb:.1f} MB "
+                            f"(critical threshold: {SIZE_CRITICAL_THRESHOLD_MB} MB)")
+                self.telegram.notify(
+                    f"⚠️ `{sid}` session size is {total_mb:.1f} MB. "
+                    f"Critical threshold: {SIZE_CRITICAL_THRESHOLD_MB} MB. "
+                    f"Consider pruning logs or archived output.",
+                    level=NotificationLevel.ACTIONS)
+                continue
+
+            self._alerted_large_sessions.discard(sid)
+            log.warning(f"[{sid}] Session size is {total_mb:.1f} MB "
+                        f"(warning threshold: {SIZE_WARNING_THRESHOLD_MB} MB)")
 
     def _get_last_event_time(self, session_dir: Path) -> float | None:
         """Get the timestamp of the last event from raw-output.log mtime.

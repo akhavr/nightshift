@@ -75,6 +75,11 @@ ZOMBIE_CHECK_INTERVAL_S = 60       # How often to check for zombie containers
 ZOMBIE_TIMEOUT_MULTIPLIER = 2     # Alert if no events for stall_timeout_s * this multiplier
 DEFAULT_STALL_TIMEOUT_S = 300     # Fallback stall timeout when config unavailable
 
+# ── Session directory monitoring ───────────────────────
+SESSION_SIZE_CHECK_INTERVAL_S = 300  # How often to check session directory sizes
+SIZE_WARNING_THRESHOLD_MB = 100      # Warn when a session grows beyond this size
+SIZE_CRITICAL_THRESHOLD_MB = 500     # Alert when a session grows beyond this size
+
 # ── Disk space guardrail ──────────────────────────────────
 MIN_FREE_GB = 1.0                 # Halt watcher if free disk space drops below this
 

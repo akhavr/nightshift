@@ -1808,6 +1808,64 @@ class TestZombieContainerDetection:
 
 
 # ---------------------------------------------------------------------------
+# Session directory size monitoring tests
+# ---------------------------------------------------------------------------
+
+class TestSessionSizeMonitoring:
+    """Warn when session directories grow too large."""
+
+    def test_check_session_size_warns_on_threshold(self, tmp_path, caplog, monkeypatch):
+        """Sessions exceeding the warning threshold should log a warning."""
+        import logging
+        from host.constants import SIZE_WARNING_THRESHOLD_MB
+
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_session_size_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        def fake_walk(path):
+            assert path == sd
+            yield (str(path), [], ["raw-output.log"])
+
+        monkeypatch.setattr("host.watcher.session_monitor.os.walk", fake_walk)
+        monkeypatch.setattr(
+            "host.watcher.session_monitor.os.path.getsize",
+            lambda path: (SIZE_WARNING_THRESHOLD_MB + 1) * 1024 * 1024,
+        )
+
+        w.monitor.check_session_sizes()
+
+        assert any("session size" in record.message.lower() and "abc" in record.message
+                   for record in caplog.records)
+
+    def test_check_session_size_alerts_on_critical(self, tmp_path, monkeypatch):
+        """Sessions exceeding the critical threshold should send a Telegram alert."""
+        from host.constants import SIZE_CRITICAL_THRESHOLD_MB
+
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        w.monitor._last_session_size_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        def fake_walk(path):
+            assert path == sd
+            yield (str(path), [], ["raw-output.log"])
+
+        monkeypatch.setattr("host.watcher.session_monitor.os.walk", fake_walk)
+        monkeypatch.setattr(
+            "host.watcher.session_monitor.os.path.getsize",
+            lambda path: (SIZE_CRITICAL_THRESHOLD_MB + 1) * 1024 * 1024,
+        )
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        w.monitor.check_session_sizes()
+
+        assert any("session size" in msg.lower() and "abc" in msg for msg in notified)
+
+
+# ---------------------------------------------------------------------------
 # Missing session directory handling tests
 # ---------------------------------------------------------------------------
 
