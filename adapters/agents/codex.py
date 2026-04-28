@@ -41,6 +41,8 @@ class CodexAgent(HeadlessAgentBase):
         "authentication_error",
         "insufficient_quota",
         "missing authentication",
+        "usage limit",
+        "hit your usage limit",
     )
 
     def __init__(

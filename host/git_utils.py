@@ -1,8 +1,12 @@
 """Git command utilities shared across host modules."""
 
+import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_and_resolve_ref(repo: Path, branch: str) -> str:
@@ -113,40 +117,45 @@ def audit_worktree_symlinks(
     return escaping_symlinks
 
 
-def validate_git_objects(git_dir: Path) -> tuple[bool, str]:
+_FSCK_NOISE_SUBSTRINGS = (
+    "Unknown object type",
+    "Could not read",
+    "fatal: not a git repository",
+    "git-bug",
+    "dangling ",
+)
+
+
+def validate_git_objects(git_dir: Path) -> tuple[bool, list[str]]:
     """Run git fsck to validate git objects.
 
     Args:
         git_dir: Path to .git directory or worktree git dir
 
     Returns:
-        (is_valid, error_message) tuple. is_valid is True if no corruption found.
+        (is_valid, real_errors) tuple. is_valid is True if no corruption found.
+        real_errors is a list of error lines that are not known noise.
     """
     if not git_dir.is_dir():
-        return True, ""
+        return True, []
 
     result = subprocess.run(
-        ["git", "fsck", "--connectivity-only"],
-        capture_output=True, text=True, cwd=str(git_dir),
+        ["git", "--git-dir", str(git_dir), "fsck", "--connectivity-only"],
+        capture_output=True, text=True,
     )
 
-    # Filter out known noise (git-bug objects, unknown object types)
-    noise_patterns = [
-        "error: Unknown object type",
-        "error: invalid object",
-        "git-bug",
-        "dangling ",
+    if result.returncode == 0:
+        return True, []
+
+    details = result.stderr or result.stdout or ""
+    real_errors = [
+        line for line in details.splitlines()
+        if line.strip() and not any(skip in line for skip in _FSCK_NOISE_SUBSTRINGS)
     ]
 
-    errors = []
-    for line in result.stderr.splitlines():
-        is_noise = any(p in line for p in noise_patterns)
-        if not is_noise and line.strip():
-            errors.append(line)
-
-    if errors:
-        return False, "\n".join(errors)
-    return True, ""
+    if real_errors:
+        return False, real_errors
+    return True, []
 
 
 def auto_commit_dirty_worktree(worktree: Path, message: str = "WIP: uncommitted agent changes") -> bool:
@@ -179,8 +188,7 @@ def auto_commit_dirty_worktree(worktree: Path, message: str = "WIP: uncommitted 
         capture_output=True, text=True, cwd=str(worktree),
     )
     if add_result.returncode != 0:
-        import sys
-        print(f"Warning: git add failed: {add_result.stderr}", file=sys.stderr)
+        logger.warning("git add failed: %s", add_result.stderr)
         return False
 
     # Commit
@@ -189,8 +197,7 @@ def auto_commit_dirty_worktree(worktree: Path, message: str = "WIP: uncommitted 
         capture_output=True, text=True, cwd=str(worktree),
     )
     if commit_result.returncode != 0:
-        import sys
-        print(f"Warning: git commit failed: {commit_result.stderr}", file=sys.stderr)
+        logger.warning("git commit failed: %s", commit_result.stderr)
         return False
 
     return True

@@ -24,7 +24,7 @@ TOOL_RESULT_PREVIEW_LEN = 500
 TRANSIENT_RETRY_DELAYS = [30, 60, 120]
 TRANSIENT_ERROR_PATTERNS = (
     "500", "502", "503", "504", "429",
-    "rate limit", "usage limit", "overloaded", "service unavailable", "high demand",
+    "rate limit", "overloaded", "service unavailable", "high demand",
 )
 
 # Provider overload retry configuration (longer delays since provider is under load)

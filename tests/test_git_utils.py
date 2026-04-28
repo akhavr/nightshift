@@ -146,7 +146,7 @@ class TestValidateGitObjects:
             mock_run.return_value = _completed(returncode=0)
             is_valid, errors = validate_git_objects(git_dir)
             assert is_valid is True
-            assert errors == ""
+            assert errors == []
 
     def test_corruption_detected(self, tmp_path):
         """Real corruption errors are reported."""
@@ -158,7 +158,7 @@ class TestValidateGitObjects:
             )
             is_valid, errors = validate_git_objects(git_dir)
             assert is_valid is False
-            assert "corrupt loose object" in errors
+            assert any("corrupt loose object" in e for e in errors)
 
     def test_git_bug_noise_filtered(self, tmp_path):
         """Git-bug related warnings are ignored."""
@@ -166,10 +166,11 @@ class TestValidateGitObjects:
         git_dir.mkdir()
         with patch("host.git_utils.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                [], 0, stdout="", stderr="dangling blob abc123 (git-bug)\n"
+                [], 1, stdout="", stderr="dangling blob abc123 (git-bug)\n"
             )
             is_valid, errors = validate_git_objects(git_dir)
             assert is_valid is True
+            assert errors == []
 
     def test_unknown_object_type_filtered(self, tmp_path):
         """Unknown object type errors (git-bug) are ignored."""
@@ -177,16 +178,17 @@ class TestValidateGitObjects:
         git_dir.mkdir()
         with patch("host.git_utils.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
-                [], 0, stdout="", stderr="error: Unknown object type 14\n"
+                [], 1, stdout="", stderr="error: Unknown object type 14\n"
             )
             is_valid, errors = validate_git_objects(git_dir)
             assert is_valid is True
+            assert errors == []
 
     def test_nonexistent_dir_passes(self):
         """Non-existent directory returns True (no corruption)."""
         is_valid, errors = validate_git_objects(Path("/nonexistent/path"))
         assert is_valid is True
-        assert errors == ""
+        assert errors == []
 
 
 class TestAutoCommitDirtyWorktree:

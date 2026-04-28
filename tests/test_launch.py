@@ -1581,3 +1581,81 @@ class TestDuplicateSessionDetection:
                 from host.launch import main
                 main()
             assert exc_info.value.code == 1
+
+
+# ── GAP-001: Git validation tests ─────────────────────────────────────────────
+
+from host.launch import _copy_git_changes, _auto_commit_uncommitted_changes
+
+
+class TestCopyGitChangesValidatesFsck:
+    """Tests for git fsck validation in _copy_git_changes (GAP-001)."""
+
+    def test_copy_git_changes_validates_fsck(self, tmp_path):
+        """_copy_git_changes runs fsck and fails on real corruption."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        git_merged = session_dir / "git-merged"
+        git_merged.mkdir()
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        with patch("host.launch.validate_git_objects") as mock_validate, \
+             patch("host.launch.extract_commits"):
+            # Simulate corruption
+            mock_validate.return_value = (False, ["error: corrupt loose object abc123"])
+            result = _copy_git_changes(session_dir, repo)
+            assert result == 1
+            mock_validate.assert_called_once_with(git_merged)
+
+    def test_copy_git_changes_passes_clean_repo(self, tmp_path):
+        """_copy_git_changes passes when fsck finds no issues."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        git_merged = session_dir / "git-merged"
+        git_merged.mkdir()
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+        with patch("host.launch.validate_git_objects") as mock_validate, \
+             patch("host.launch.extract_commits") as mock_extract:
+            mock_validate.return_value = (True, [])
+            mock_extract.return_value = []
+            result = _copy_git_changes(session_dir, repo)
+            assert result == 0
+
+    def test_copy_git_changes_no_git_dir_returns_zero(self, tmp_path):
+        """_copy_git_changes returns 0 when no git dir exists."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        result = _copy_git_changes(session_dir, repo)
+        assert result == 0
+
+
+class TestAutoCommitUncommittedChanges:
+    """Tests for auto-commit fallback (GAP-001)."""
+
+    def test_auto_commit_uncommitted_changes(self, tmp_path):
+        """Auto-commit is called when worktree has changes."""
+        with patch("host.launch.auto_commit_dirty_worktree") as mock_auto:
+            mock_auto.return_value = True
+            result = _auto_commit_uncommitted_changes(tmp_path, "test-session")
+            assert result is True
+            mock_auto.assert_called_once_with(
+                tmp_path,
+                message="WIP: auto-commit uncommitted changes on @@DONE@@",
+            )
+
+    def test_auto_commit_clean_worktree_no_commit(self, tmp_path):
+        """No commit made when worktree is clean."""
+        with patch("host.launch.auto_commit_dirty_worktree") as mock_auto:
+            mock_auto.return_value = False
+            result = _auto_commit_uncommitted_changes(tmp_path, "test-session")
+            assert result is False
