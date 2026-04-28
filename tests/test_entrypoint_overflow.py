@@ -84,7 +84,9 @@ class TestOverflowProfileResolution:
                 main()
 
                 # Verify resolve_overflow_config was called with the profile name
-                mock_resolve.assert_called_once_with(config, "openhands-qwen")
+                mock_resolve.assert_called_once_with(
+                    config, "openhands-qwen", repo_root=Path("/workspace")
+                )
 
     @patch("entrypoint.load_workflow")
     @patch("entrypoint._create_adapters")
@@ -143,7 +145,9 @@ class TestOverflowProfileResolution:
                 main()
 
                 # Called with profile_name=None since env var not set
-                mock_resolve.assert_called_once_with(config, None)
+                mock_resolve.assert_called_once_with(
+                    config, None, repo_root=Path("/workspace")
+                )
 
     @patch("entrypoint.load_workflow")
     @patch("entrypoint._create_adapters")

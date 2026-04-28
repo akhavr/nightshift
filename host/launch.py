@@ -264,7 +264,7 @@ def main():
     load_all_dotenv(repo / ".env")
 
     workflow_path = discover_workflow(repo, args.workflow)
-    config = load_workflow(workflow_path)
+    config = load_workflow(workflow_path, repo_root=repo)
     max_turns = args.max_turns or config.agent.max_turns
     names = _resolve_names(args.issue_id, args.step, config)
     session_dir = repo / ".nightshift" / "sessions" / names["session_name"]
@@ -297,7 +297,7 @@ def main():
     )
     selected_overflow_profile = _read_overflow_profile_name(overflow_flag)
     if overflow_flag.exists() and (has_overflow_config or selected_overflow_profile):
-        overflow = resolve_overflow_config(config, selected_overflow_profile)
+        overflow = resolve_overflow_config(config, selected_overflow_profile, repo_root=repo)
         print(f"Overflow active: using alternate provider")
 
     # Use overflow.agent_kind when overflow is active, otherwise config.agent.kind

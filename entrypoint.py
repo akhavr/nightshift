@@ -237,7 +237,7 @@ def main():
     resume = os.environ.get("RESUME") == "--resume"
     step = os.environ.get("STEP", "")
 
-    config = load_workflow(Path("/workspace/WORKFLOW.md"))
+    config = load_workflow(Path("/workspace/WORKFLOW.md"), repo_root=Path("/workspace"))
 
     # Extend agent extra_args with overflow args injected by host
     overflow_args_raw = os.environ.get("OVERFLOW_EXTRA_ARGS", "")
@@ -253,7 +253,10 @@ def main():
     # Check if we're in overflow mode (OVERFLOW_ACTIVE set by host)
     overflow_active = os.environ.get("OVERFLOW_ACTIVE") == "1"
     overflow_profile = os.environ.get("OVERFLOW_PROFILE")
-    overflow_config = resolve_overflow_config(config, overflow_profile) if overflow_active else None
+    overflow_config = (
+        resolve_overflow_config(config, overflow_profile, repo_root=Path("/workspace"))
+        if overflow_active else None
+    )
     tracker, agent, workspace_mgr, workspace, state_mgr, notifier = _create_adapters(config, overflow_config)
     notifier.start()
 
