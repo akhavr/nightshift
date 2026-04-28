@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import requests
+import pytest
 
 
 def _write_registration(projects_d: Path, name: str, *, path: Path, log: Path, pid: int) -> Path:
@@ -270,3 +271,103 @@ notify:
     assert loaded.watch.watcher_stale_s == 120
     assert loaded.rules.error_threshold == 4
     assert loaded.notify.telegram.chat_id == "42"
+
+
+def test_config_rejects_non_mapping_root(tmp_path):
+    from host.watchdog import config
+
+    cfg_file = tmp_path / "watchdog.yaml"
+    cfg_file.write_text("- not a mapping\n")
+
+    with pytest.raises(ValueError, match="root must be a mapping"):
+        config.load_config(cfg_file)
+
+
+def test_run_once_continues_after_llm_failure(monkeypatch):
+    from host.watchdog import config as watchdog_config
+    from host.watchdog import main as watchdog_main
+    from host.watchdog.rules import Anomaly
+
+    statuses = [
+        SimpleNamespace(project="project-a", log_path=Path("/tmp/project-a.log")),
+        SimpleNamespace(project="project-b", log_path=Path("/tmp/project-b.log")),
+    ]
+    monkeypatch.setattr(watchdog_main, "discover_projects", lambda clean_stale=True: iter(statuses))
+    monkeypatch.setattr(watchdog_main, "read_log_tail", lambda path, lines: ["ERROR broken"])
+    monkeypatch.setattr(
+        watchdog_main.rules,
+        "check_stale",
+        lambda path, threshold_s: [Anomaly("stale_log", "stale", "")],
+    )
+    monkeypatch.setattr(watchdog_main.rules, "check_errors", lambda lines, threshold: [])
+    monkeypatch.setattr(watchdog_main.rules, "check_repeated", lambda lines, threshold: [])
+
+    analyze = MagicMock(side_effect=[RuntimeError("boom"), "summary-b"])
+    monkeypatch.setattr(watchdog_main.llm, "analyze", analyze)
+
+    alerts = []
+
+    def fake_send_alert(project, anomalies, llm_summary, config):
+        alerts.append((project, llm_summary))
+        return True
+
+    monkeypatch.setattr(watchdog_main.notify, "send_alert", fake_send_alert)
+
+    cfg = watchdog_config.WatchdogConfig(
+        llm=watchdog_config.LlmConfig(provider="ollama", model="phi3:mini"),
+    )
+
+    issues = watchdog_main.run_once(cfg)
+
+    assert issues == 2
+    assert alerts == [("project-a", ""), ("project-b", "summary-b")]
+    assert analyze.call_count == 2
+
+
+def test_run_once_continues_after_notify_failure(monkeypatch):
+    from host.watchdog import config as watchdog_config
+    from host.watchdog import main as watchdog_main
+    from host.watchdog.rules import Anomaly
+
+    statuses = [
+        SimpleNamespace(project="project-a", log_path=Path("/tmp/project-a.log")),
+        SimpleNamespace(project="project-b", log_path=Path("/tmp/project-b.log")),
+    ]
+    monkeypatch.setattr(watchdog_main, "discover_projects", lambda clean_stale=True: iter(statuses))
+    monkeypatch.setattr(watchdog_main, "read_log_tail", lambda path, lines: ["ERROR broken"])
+    monkeypatch.setattr(
+        watchdog_main.rules,
+        "check_stale",
+        lambda path, threshold_s: [Anomaly("stale_log", "stale", "")],
+    )
+    monkeypatch.setattr(watchdog_main.rules, "check_errors", lambda lines, threshold: [])
+    monkeypatch.setattr(watchdog_main.rules, "check_repeated", lambda lines, threshold: [])
+    monkeypatch.setattr(watchdog_main.llm, "analyze", lambda snippet, **kwargs: "summary")
+
+    alerts = []
+
+    def fake_send_alert(project, anomalies, llm_summary, config):
+        alerts.append(project)
+        if project == "project-a":
+            raise RuntimeError("telegram down")
+        return True
+
+    monkeypatch.setattr(watchdog_main.notify, "send_alert", fake_send_alert)
+
+    cfg = watchdog_config.WatchdogConfig(
+        llm=watchdog_config.LlmConfig(provider="ollama", model="phi3:mini"),
+    )
+
+    issues = watchdog_main.run_once(cfg)
+
+    assert issues == 2
+    assert alerts == ["project-a", "project-b"]
+
+
+def test_main_reports_config_error(tmp_path):
+    from host.watchdog import main as watchdog_main
+
+    cfg_file = tmp_path / "watchdog.yaml"
+    cfg_file.write_text("- not a mapping\n")
+
+    assert watchdog_main.main(["--check", "--config", str(cfg_file)]) == 2

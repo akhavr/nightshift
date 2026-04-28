@@ -100,28 +100,37 @@ def run_once(config: WatchdogConfig, *, send_notifications: bool = True) -> int:
     issues = 0
 
     for status in discover_projects(clean_stale=True):
-        log_lines = read_log_tail(status.log_path, config.watch.log_lines)
-        anomalies = []
-        anomalies.extend(rules.check_stale(status.log_path, config.watch.watcher_stale_s))
-        anomalies.extend(rules.check_errors(log_lines, config.rules.error_threshold))
-        anomalies.extend(rules.check_repeated(log_lines, config.rules.repeat_threshold))
+        try:
+            log_lines = read_log_tail(status.log_path, config.watch.log_lines)
+            anomalies = []
+            anomalies.extend(rules.check_stale(status.log_path, config.watch.watcher_stale_s))
+            anomalies.extend(rules.check_errors(log_lines, config.rules.error_threshold))
+            anomalies.extend(rules.check_repeated(log_lines, config.rules.repeat_threshold))
 
-        if not anomalies:
-            continue
+            if not anomalies:
+                continue
 
-        issues += len(anomalies)
-        snippet = "\n".join(log_lines[-config.watch.log_lines :])
-        llm_summary = ""
-        if config.llm.provider != "none":
-            llm_summary = llm.analyze(
-                snippet,
-                provider=config.llm.provider,
-                model=config.llm.model,
-                api_key=config.llm.api_key,
-                base_url=config.llm.base_url,
-            )
-        if send_notifications:
-            notify.send_alert(status.project, anomalies, llm_summary, config)
+            issues += len(anomalies)
+            snippet = "\n".join(log_lines[-config.watch.log_lines :])
+            llm_summary = ""
+            if config.llm.provider != "none":
+                try:
+                    llm_summary = llm.analyze(
+                        snippet,
+                        provider=config.llm.provider,
+                        model=config.llm.model,
+                        api_key=config.llm.api_key,
+                        base_url=config.llm.base_url,
+                    )
+                except Exception as exc:
+                    log.warning("LLM analysis failed for %s: %s", status.project, exc)
+            if send_notifications:
+                try:
+                    notify.send_alert(status.project, anomalies, llm_summary, config)
+                except Exception as exc:
+                    log.warning("Failed to send alert for %s: %s", status.project, exc)
+        except Exception as exc:
+            log.warning("Watchdog processing failed for %s: %s", status.project, exc)
 
     return issues
 
@@ -152,7 +161,11 @@ def main(args: list[str] | None = None) -> int:
     parsed = parser.parse_args(args)
 
     setup_logging(parsed.verbose)
-    config = load_config(parsed.config)
+    try:
+        config = load_config(parsed.config)
+    except ValueError as exc:
+        log.error("Failed to load watchdog config: %s", exc)
+        return 2
 
     if parsed.list:
         return list_watchers()

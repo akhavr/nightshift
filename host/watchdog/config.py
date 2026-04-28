@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -90,12 +91,24 @@ def load_config(path: Path | None = None) -> WatchdogConfig:
         return cfg
 
     data = yaml.safe_load(config_path.read_text()) or {}
+    if not isinstance(data, Mapping):
+        raise ValueError("watchdog config root must be a mapping")
 
     llm = data.get("llm", {}) or {}
     watch = data.get("watch", {}) or {}
     rules = data.get("rules", {}) or {}
     notify = data.get("notify", {}) or {}
     telegram = notify.get("telegram", {}) or {}
+
+    for section_name, section in (
+        ("llm", llm),
+        ("watch", watch),
+        ("rules", rules),
+        ("notify", notify),
+        ("notify.telegram", telegram),
+    ):
+        if section and not isinstance(section, Mapping):
+            raise ValueError(f"watchdog config section '{section_name}' must be a mapping")
 
     cfg.llm.provider = str(_expand_env(llm.get("provider", cfg.llm.provider)))
     cfg.llm.model = str(_expand_env(llm.get("model", cfg.llm.model)))
