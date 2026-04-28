@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "vastai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Vast.ai vLLM",
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1"
+      },
+      "models": {
+        "qwen36-27b-fp8": {
+          "name": "Qwen3.6 27B FP8",
+          "limit": { "context": 262144, "output": 4096 }
+        },
+        "qwen25-coder-32b": {
+          "name": "Qwen2.5 Coder 32B",
+          "limit": { "context": 32768, "output": 4096 }
+        }
+      }
+    }
+  }
+}
