@@ -91,7 +91,7 @@ class TestReadState:
         assert result == state
 
     @pytest.mark.parametrize("cost_usd", [-1, "not-a-number"])
-    def test_read_state_rejects_invalid_usage(self, tmp_path, cost_usd):
+    def test_read_state_defaults_invalid_usage(self, tmp_path, caplog, cost_usd):
         state = {
             "status": "working",
             "usage": {
@@ -102,8 +102,34 @@ class TestReadState:
         }
         (tmp_path / "state.json").write_text(json.dumps(state))
 
-        with pytest.raises(ValueError):
-            read_state(tmp_path)
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["usage"]["input_tokens"] == 10
+        assert result["usage"]["output_tokens"] == 20
+        assert result["usage"]["cost_usd"] == 0.0
+        assert "usage.cost_usd" in caplog.text
+
+    def test_read_state_defaults_invalid_checkpoints(self, tmp_path, caplog):
+        state = {
+            "status": "working",
+            "checkpoints": [
+                {
+                    "step": 1,
+                    "description": "Initial pass",
+                    "timestamp": "2026-04-28T00:00:00+00:00",
+                    "commit": "abc1234",
+                },
+                {"step": "bad", "description": "Broken", "timestamp": 123, "commit": 7},
+            ],
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["checkpoints"] == [state["checkpoints"][0]]
+        assert "checkpoints[1]" in caplog.text
 
     def test_read_state_rejects_invalid_orphan_resumes(self, tmp_path, caplog):
         state = {
@@ -754,7 +780,7 @@ class TestLockedStateOperations:
 
         state = read_state(tmp_path)
         assert state["status"] == "suspended:unexpected"
-        assert state["orphan_resumes"] == 5
+        assert state["orphan_resumes"] == MAX_ORPHAN_RESUMES
         assert state["other"] == "value"
 
     def test_update_state_fields_creates_lock_file(self, tmp_path):

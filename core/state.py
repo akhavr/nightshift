@@ -1,5 +1,6 @@
 """Atomic session state with file locking."""
 
+import copy
 import fcntl
 import json
 import logging
@@ -48,30 +49,59 @@ def _is_non_negative_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-def _validate_usage(usage: dict) -> dict:
+def _default_usage() -> dict:
+    return dict(STATE_DEFAULTS["usage"])
+
+
+def _validate_usage(usage: object) -> tuple[dict, list[str]]:
     """Validate usage fields and normalize numeric values."""
-    validated = dict(usage)
+    warnings: list[str] = []
+    if not isinstance(usage, dict):
+        warnings.append(
+            f"invalid usage {type(usage).__name__}; defaulting to {STATE_DEFAULTS['usage']!r}"
+        )
+        return _default_usage(), warnings
+
+    validated = _default_usage()
+    for key, value in usage.items():
+        if key not in validated:
+            validated[key] = value
 
     for field_name in ("input_tokens", "output_tokens"):
-        if field_name in validated and not _is_non_negative_int(validated[field_name]):
-            raise ValueError(
-                f"Invalid usage.{field_name}: {validated[field_name]!r}"
+        if field_name not in usage:
+            continue
+        value = usage[field_name]
+        if not _is_non_negative_int(value):
+            warnings.append(
+                f"invalid usage.{field_name} {value!r}; defaulting to {STATE_DEFAULTS['usage'][field_name]!r}"
             )
-        if field_name in validated:
-            validated[field_name] = int(validated[field_name])
+            validated[field_name] = STATE_DEFAULTS["usage"][field_name]
+            continue
+        validated[field_name] = int(value)
 
-    if "cost_usd" in validated:
-        cost_usd = validated["cost_usd"]
+    if "cost_usd" in usage:
+        cost_usd = usage["cost_usd"]
         if isinstance(cost_usd, bool) or not isinstance(cost_usd, (int, float)):
-            raise ValueError(f"Invalid usage.cost_usd: {cost_usd!r}")
-        if cost_usd < 0:
-            raise ValueError(f"Invalid usage.cost_usd: {cost_usd!r}")
-        validated["cost_usd"] = float(cost_usd)
+            warnings.append(
+                f"invalid usage.cost_usd {cost_usd!r}; defaulting to {STATE_DEFAULTS['usage']['cost_usd']!r}"
+            )
+            validated["cost_usd"] = STATE_DEFAULTS["usage"]["cost_usd"]
+        elif cost_usd < 0:
+            warnings.append(
+                f"invalid usage.cost_usd {cost_usd!r}; defaulting to {STATE_DEFAULTS['usage']['cost_usd']!r}"
+            )
+            validated["cost_usd"] = STATE_DEFAULTS["usage"]["cost_usd"]
+        else:
+            validated["cost_usd"] = float(cost_usd)
 
-    if "model" in validated and not isinstance(validated["model"], str):
-        validated["model"] = str(validated["model"])
+    if "model" in usage:
+        model = usage["model"]
+        if not isinstance(model, str):
+            validated["model"] = str(model)
+        else:
+            validated["model"] = model
 
-    return validated
+    return validated, warnings
 
 
 def _validate_checkpoint(entry: object) -> tuple[dict | None, str | None]:
@@ -96,7 +126,7 @@ def _validate_checkpoint(entry: object) -> tuple[dict | None, str | None]:
 
 
 def _validate_state(
-    data: dict,
+    data: object,
     *,
     max_orphan_resumes: int | None = None,
 ) -> tuple[dict, list[str]]:
@@ -104,14 +134,14 @@ def _validate_state(
 
     Unknown fields are preserved for forward compatibility.
     """
+    if not isinstance(data, dict):
+        warnings = [
+            f"invalid state type {type(data).__name__}; defaulting to {STATE_DEFAULTS!r}"
+        ]
+        return copy.deepcopy(STATE_DEFAULTS), warnings
+
     state = dict(data)
     warnings: list[str] = []
-
-    if "status" in state:
-        status = state["status"]
-        if not isinstance(status, str) or status not in STATES:
-            warnings.append(f"invalid status {status!r}; defaulting to {STATE_DEFAULTS['status']!r}")
-            state["status"] = STATE_DEFAULTS["status"]
 
     for field_name in ("step", "overload_resumes", "auth_retries"):
         if field_name in state:
@@ -165,10 +195,8 @@ def _validate_state(
         state["human_answers"] = []
 
     if "usage" in state:
-        usage = state["usage"]
-        if not isinstance(usage, dict):
-            raise ValueError(f"usage must be an object, got {type(usage).__name__}")
-        state["usage"] = _validate_usage(usage)
+        state["usage"], usage_warnings = _validate_usage(state["usage"])
+        warnings.extend(usage_warnings)
 
     return state, warnings
 
