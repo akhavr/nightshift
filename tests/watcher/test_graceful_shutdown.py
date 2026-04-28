@@ -53,6 +53,9 @@ class TestWatcherShutdown:
     def test_run_exits_when_shutdown_set_before_start(self, tmp_path):
         """run() exits immediately if shutdown_event is already set."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()  # pre-set
         w.run(shutdown_event=ev)
@@ -61,6 +64,9 @@ class TestWatcherShutdown:
     def test_run_exits_when_shutdown_set_during_loop(self, tmp_path):
         """run() exits after shutdown_event is set mid-loop."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
 
         # Set the event after a short delay
@@ -79,6 +85,9 @@ class TestWatcherShutdown:
     def test_run_uses_event_wait_not_sleep(self, tmp_path):
         """run() uses shutdown_event.wait() which is interruptible, not time.sleep()."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()
         w.run(shutdown_event=ev)
@@ -87,6 +96,9 @@ class TestWatcherShutdown:
     def test_run_default_shutdown_event(self, tmp_path):
         """run() creates a default shutdown event if none passed."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()
         # Even with no argument, run() should work — just pass our own
@@ -96,6 +108,9 @@ class TestWatcherShutdown:
     def test_run_propagates_shutdown_to_tracker(self, tmp_path):
         """run() propagates shutdown_event to the tracker's _shutdown."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls that hang when writer exits early
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()  # exit immediately
 
@@ -110,6 +125,9 @@ class TestWatcherShutdown:
     def test_run_calls_terminate_current_on_exit(self, tmp_path):
         """run() calls tracker.terminate_current() after loop exits."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls that hang when writer exits early
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()
 
@@ -386,6 +404,9 @@ class TestTelegramRelayShutdown:
     def test_run_propagates_shutdown_to_telegram(self, tmp_path):
         """HostWatcher.run() sets telegram._shutdown to the shutdown event."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls that hang when writer exits early
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()
         w.run(shutdown_event=ev)
@@ -435,6 +456,9 @@ class TestQAHandlerShutdown:
     def test_run_propagates_shutdown_to_qa(self, tmp_path):
         """HostWatcher.run() sets qa._shutdown to the shutdown event."""
         w = _make_watcher(tmp_path)
+        # Mock cleanup methods to avoid tracker calls that hang when writer exits early
+        w.monitor.cleanup_stale_review_sessions = lambda: None
+        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()
         w.run(shutdown_event=ev)

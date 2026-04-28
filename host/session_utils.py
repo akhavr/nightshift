@@ -10,7 +10,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from core.state import state_lock
+from core.state_machine import SessionStateMachine
 from host.constants import ARCHIVE_DIR
+from host.rebase import CONTAINER_GIT_PATH, _fix_container_gitdir
 
 log = logging.getLogger(__name__)
 
@@ -20,8 +23,8 @@ ARCHIVE_FILES = ("conversation.jsonl", "state.json", "raw-output.log")
 
 # ── Path helpers ─────────────────────────────────────────
 
-def get_repo_root() -> Path:
-    """Return the git repository root (main repo, not worktree).
+def _git_repo_root() -> Path:
+    """Return the git repository root based on git commands (internal helper).
 
     Uses --git-common-dir which returns the same path for both the main
     repo and all its worktrees, ensuring socket paths resolve correctly
@@ -42,7 +45,29 @@ def get_repo_root() -> Path:
     return Path(subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=True,
-    ).stdout.strip())
+    ).stdout.strip()).resolve()
+
+
+def get_repo_root() -> Path:
+    """Return the nightshift repo root with symlink resolution and validation.
+
+    1. Gets git repo root and resolves symlinks
+    2. Validates .nightshift/ exists at that location
+    3. If not found, walks up from cwd to find .nightshift/
+    4. Raises RuntimeError if no .nightshift/ found anywhere
+    """
+    root = _git_repo_root()
+    if (root / ".nightshift").exists():
+        return root
+
+    # Walk up from cwd to find .nightshift/
+    for parent in Path.cwd().resolve().parents:
+        if (parent / ".nightshift").exists():
+            return parent
+
+    raise RuntimeError(
+        "No .nightshift/ found. Run from a nightshift repo or use --repo flag."
+    )
 
 
 def sessions_dir(repo: Path | None = None) -> Path:
@@ -68,10 +93,74 @@ def write_state(session_dir: Path, state: dict) -> None:
 
 
 def update_status(session_dir: Path, status: str) -> None:
-    """Read state.json, update the status field, and write back."""
-    state = read_state(session_dir)
-    state["status"] = status
-    write_state(session_dir, state)
+    """Read state.json, validate and update the status field via SSM, and write back (locked).
+
+    All status changes go through the SessionStateMachine for validation.
+    Raises InvalidTransition if the transition is not allowed.
+    """
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        ssm = SessionStateMachine(initial_state=state.get("status", "starting"))
+        ssm.transition(status)  # validates transition
+        state["status"] = ssm.state
+        write_state(session_dir, state)
+
+
+def increment_orphan_resumes(session_dir: Path) -> int:
+    """Atomically increment orphan_resumes and return the new value (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["orphan_resumes"] = state.get("orphan_resumes", 0) + 1
+        write_state(session_dir, state)
+        return state["orphan_resumes"]
+
+
+def increment_auth_retries(session_dir: Path) -> int:
+    """Atomically increment auth_retries and return the new value (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["auth_retries"] = state.get("auth_retries", 0) + 1
+        write_state(session_dir, state)
+        return state["auth_retries"]
+
+
+def increment_provider_outage_retries(session_dir: Path) -> int:
+    """Atomically increment provider_outage_retries and return the new value (locked)."""
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["provider_outage_retries"] = state.get("provider_outage_retries", 0) + 1
+        write_state(session_dir, state)
+        return state["provider_outage_retries"]
+
+
+def update_state_fields(session_dir: Path, **fields) -> None:
+    """Atomically update arbitrary fields in state.json (locked).
+
+    If 'status' is in fields, the transition is validated via SSM.
+    Raises InvalidTransition if the status transition is not allowed.
+    """
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        if "status" in fields:
+            ssm = SessionStateMachine(initial_state=state.get("status", "starting"))
+            ssm.transition(fields["status"])  # validates transition
+            fields["status"] = ssm.state
+        state.update(fields)
+        write_state(session_dir, state)
+
+
+def clear_completed_at(session_dir: Path) -> None:
+    """Clear completed_at when resuming from a completion state.
+
+    When a session in waiting:review or waiting:human-review is resumed
+    (e.g., revise verdict), completed_at must be cleared so the orphan
+    detector doesn't treat it as a completed session that crashed.
+    """
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        if "completed_at" in state:
+            del state["completed_at"]
+            write_state(session_dir, state)
 
 
 # ── Session archival ────────────────────────────────────
@@ -161,12 +250,103 @@ def _issue_id_prefix_match(issue_id: str, existing_ids: set[str]) -> bool:
     )
 
 
+# ── Safe worktree prune (WT-6) ──────────────────────────
+
+# Session statuses that indicate active work (should not prune while these exist)
+ACTIVE_STATUSES = {"working", "starting", "reviewing"}
+
+
+def get_active_session_ids(repo: Path) -> list[str]:
+    """Return list of session IDs that are actively running (working, starting, reviewing)."""
+    sessions = repo / ".nightshift" / "sessions"
+    if not sessions.exists():
+        return []
+
+    active_ids = []
+    for session_dir in sessions.iterdir():
+        state_file = session_dir / "state.json"
+        if not state_file.exists():
+            continue
+        try:
+            state = json.loads(state_file.read_text())
+            status = state.get("status", "")
+            if status in ACTIVE_STATUSES:
+                active_ids.append(state.get("issue_id", session_dir.name))
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning("Failed to read %s: %s", state_file, e)
+            continue
+    return active_ids
+
+
+def has_active_sessions(repo: Path) -> bool:
+    """Check if any session is actively running (working, starting, reviewing)."""
+    return len(get_active_session_ids(repo)) > 0
+
+
+def fix_all_corrupted_gitdirs(repo: Path) -> None:
+    """Fix all worktrees with corrupted .git files pointing to container paths.
+
+    After container exit, the .git file may point to /repo-git/... instead of
+    the host path. This scans all worktrees and fixes them before any prune.
+    """
+    # Get list of worktrees
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    if result.returncode != 0:
+        log.warning("Failed to list worktrees: %s", result.stderr)
+        return
+
+    for line in result.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        wt_path = Path(line.split(" ", 1)[1])
+        _fix_container_gitdir(wt_path, repo)
+
+
+def safe_prune(repo: Path) -> None:
+    """Safely prune worktrees with defense-in-depth.
+
+    WT-6: Before calling global prune:
+    1. Fix all corrupted .git files (pointing to /repo-git/)
+    2. Skip prune if any session is active (working, starting, reviewing)
+
+    This prevents collateral damage where prune deletes metadata for
+    worktrees that appear orphaned due to corrupted gitdir paths.
+    """
+    # Defense 1: Fix corrupted .git files before prune can see them as orphaned
+    fix_all_corrupted_gitdirs(repo)
+
+    # Defense 2: Don't prune if sessions are actively running
+    if has_active_sessions(repo):
+        log.debug("Skipping worktree prune: active sessions exist")
+        return
+
+    # Log worktrees before prune
+    before = subprocess.run(["git", "worktree", "list", "--porcelain"],
+                            capture_output=True, text=True, cwd=str(repo))
+    log.info(f"Worktree prune starting. Current worktrees:\n{before.stdout.strip()}")
+
+    # Now safe to prune
+    result = subprocess.run(["git", "worktree", "prune", "-v"],
+                            capture_output=True, text=True, cwd=str(repo))
+    if result.stdout.strip():
+        log.warning(f"Worktree prune removed:\n{result.stdout.strip()}")
+    else:
+        log.debug("Worktree prune: nothing to remove")
+
+
 # ── Worktree cleanup ────────────────────────────────────
 
 def force_remove_dir(path: Path) -> None:
-    """Remove a directory, handling root-owned files from Docker."""
+    """Remove a directory, handling root-owned files from Docker.
+
+    Uses ignore_errors=True to handle race conditions where subdirs disappear
+    during iteration (e.g., concurrent git/fuse-overlayfs modifications).
+    """
     try:
-        shutil.rmtree(path)
+        shutil.rmtree(path, ignore_errors=True)
     except (PermissionError, OSError):
         subprocess.run(
             ["docker", "run", "--rm",
@@ -181,15 +361,21 @@ def force_remove_dir(path: Path) -> None:
 
 
 def remove_worktree(repo: Path, wt: Path, branch: str) -> None:
-    """Remove a git worktree and its branch, handling broken .git and root-owned files."""
+    """Remove a git worktree and its branch, handling broken .git and root-owned files.
+
+    WT-6: Does NOT call global `git worktree prune` because it can cause
+    collateral damage to other worktrees with corrupted .git files. The
+    `git worktree remove --force` command is sufficient for specific removal.
+    """
     if wt.exists():
+        # Fix corrupted gitdir before attempting remove (WT-6)
+        _fix_container_gitdir(wt, repo)
         result = subprocess.run(
             ["git", "worktree", "remove", str(wt), "--force"],
             capture_output=True, cwd=str(repo),
         )
         if result.returncode != 0:
             force_remove_dir(wt)
-    subprocess.run(["git", "worktree", "prune"],
-                   capture_output=True, cwd=str(repo))
+    # WT-6: No global prune here - it can delete metadata for other worktrees
     subprocess.run(["git", "branch", "-D", branch],
                    capture_output=True, cwd=str(repo))

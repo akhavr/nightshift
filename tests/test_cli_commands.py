@@ -1,6 +1,7 @@
 """Tests for CLI commands: status, answer, history, init, revise, cleanup."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from host.cli import (
     cmd_accept,
+    cmd_reject,
     cmd_status,
     cmd_answer,
     cmd_review,
@@ -21,10 +23,13 @@ from host.cli import (
     cmd_revise,
     cmd_cleanup,
     cmd_usage,
+    cmd_blocked,
     _read_issue_title,
     _truncate_title,
     _format_history_line,
+    _unblock_dependents,
 )
+from core.protocols import TrackerIssue
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -38,12 +43,21 @@ def _make_args(**kwargs):
     return args
 
 
+def _clean_git_env():
+    """Return env dict with GIT_DIR/GIT_WORK_TREE removed for isolated test repos."""
+    env = os.environ.copy()
+    env.pop("GIT_DIR", None)
+    env.pop("GIT_WORK_TREE", None)
+    return env
+
+
 def _init_repo(tmp_path):
     """Create a git repo with an initial commit on main."""
     repo = tmp_path / "repo"
     repo.mkdir()
+    env = _clean_git_env()
     run = lambda *args: subprocess.run(
-        args, cwd=str(repo), capture_output=True, text=True
+        args, cwd=str(repo), capture_output=True, text=True, env=env,
     )
     run("git", "init")
     run("git", "config", "user.email", "test@test.com")
@@ -290,9 +304,12 @@ def test_cmd_review_rejects_non_waiting_session(tmp_path, capsys):
     assert "waiting:review" in capsys.readouterr().err
 
 
-def test_cmd_resume_review_session_strips_prefix():
+def test_cmd_resume_review_session_strips_prefix(tmp_path):
     """resume resolves review sessions and passes bare issue ID to launch.py."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
     with (
+        patch("host.cli.repo_root", return_value=repo),
         patch("host.cli._resolve_workflow", return_value=Path("WORKFLOW.md")),
         patch("host.cli.resolve_session", return_value="review-47ca35f12345"),
         patch("subprocess.run") as run_mock,
@@ -306,9 +323,12 @@ def test_cmd_resume_review_session_strips_prefix():
     assert "--resume" in cmd
 
 
-def test_cmd_resume_review_session_adds_step_flag():
+def test_cmd_resume_review_session_adds_step_flag(tmp_path):
     """resume adds review step and review workflow for review sessions."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
     with (
+        patch("host.cli.repo_root", return_value=repo),
         patch("host.cli._resolve_workflow", return_value=Path("CUSTOM.md")),
         patch("host.cli.resolve_session", return_value="review-47ca35f12345"),
         patch("subprocess.run") as run_mock,
@@ -546,6 +566,97 @@ def test_cmd_init_no_duplicate_gitignore_entries(tmp_path, capsys):
     assert "already has nightshift entries" in out
     # The entries should appear exactly once
     assert gitignore_content.count(".env\n") == 1
+
+
+def test_cmd_init_installs_pre_commit_hook(tmp_path, capsys):
+    """init installs pre-commit hook that rejects conflict markers."""
+    repo, run = _init_repo(tmp_path)
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    hook_path = repo / ".git" / "hooks" / "pre-commit"
+    assert hook_path.exists()
+    assert hook_path.stat().st_mode & 0o111  # executable
+    content = hook_path.read_text()
+    assert "conflict marker" in content.lower() or "<<<<<<<" in content
+
+
+def test_cmd_init_does_not_overwrite_hook_without_force(tmp_path, capsys):
+    """init skips existing pre-commit hook when --force is not set."""
+    repo, run = _init_repo(tmp_path)
+    hook_dir = repo / ".git" / "hooks"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hook_dir / "pre-commit"
+    hook_path.write_text("#!/bin/bash\n# custom hook\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    # Original hook should be preserved
+    assert "custom hook" in hook_path.read_text()
+    out = capsys.readouterr().out
+    assert "already exists" in out
+
+
+def test_cmd_init_overwrites_hook_with_force(tmp_path, capsys):
+    """init overwrites existing pre-commit hook when --force is set."""
+    repo, run = _init_repo(tmp_path)
+    hook_dir = repo / ".git" / "hooks"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hook_dir / "pre-commit"
+    hook_path.write_text("#!/bin/bash\n# custom hook\n")
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=True, workflow_path=None))
+
+    # Hook should be overwritten with nightshift version
+    content = hook_path.read_text()
+    assert "custom hook" not in content
+    assert "conflict marker" in content.lower() or "<<<<<<<" in content
+
+
+def test_pre_commit_hook_rejects_conflict_markers(tmp_path):
+    """The pre-commit hook should reject commits with conflict markers."""
+    repo, _ = _init_repo(tmp_path)
+    env = _clean_git_env()
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    # Create a file with conflict markers
+    conflict_file = repo / "conflict.txt"
+    conflict_file.write_text("before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n")
+    subprocess.run(["git", "add", "conflict.txt"], cwd=str(repo), env=env)
+
+    # Commit should fail due to hook
+    result = subprocess.run(
+        ["git", "commit", "-m", "should fail"],
+        cwd=str(repo), capture_output=True, text=True, env=env
+    )
+    assert result.returncode != 0
+    assert "conflict marker" in result.stderr.lower() or "conflict marker" in result.stdout.lower()
+
+
+def test_pre_commit_hook_allows_clean_commits(tmp_path):
+    """The pre-commit hook should allow commits without conflict markers."""
+    repo, _ = _init_repo(tmp_path)
+    env = _clean_git_env()
+
+    with patch("host.cli.repo_root", return_value=repo):
+        cmd_init(_make_args(force=False, workflow_path=None))
+
+    # Create a clean file
+    clean_file = repo / "clean.txt"
+    clean_file.write_text("no conflicts here\n")
+    subprocess.run(["git", "add", "clean.txt"], cwd=str(repo), env=env)
+
+    # Commit should succeed
+    result = subprocess.run(
+        ["git", "commit", "-m", "should pass"],
+        cwd=str(repo), capture_output=True, text=True, env=env
+    )
+    assert result.returncode == 0
 
 
 # ── cmd_revise ────────────────────────────────────────────────────────────────
@@ -1266,3 +1377,509 @@ def test_accept_no_cost_when_no_usage(accept_env, capsys):
 
     out = capsys.readouterr().out
     assert "Cost:" not in out
+
+
+# ── Sibling review session cleanup ─────────────────────────────────────────
+
+
+def test_accept_cleans_sibling_review(tmp_path, capsys):
+    """cmd_accept cleans up sibling review session when it exists."""
+    repo, run = _init_repo(tmp_path)
+    sid = "coder1234567"
+
+    # Create coder session
+    coder_session = repo / ".nightshift" / "sessions" / sid
+    coder_session.mkdir(parents=True)
+    (coder_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    # Create sibling review session
+    review_session = repo / ".nightshift" / "sessions" / f"review-{sid}"
+    review_session.mkdir(parents=True)
+    (review_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 1,
+    }))
+    (review_session / "conversation.jsonl").write_text("")
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_tracker = MagicMock()
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.resolve_merge_ref", return_value=f"agent/{sid}"),
+        patch("host.cli.check_branch_not_behind_base", return_value=None),
+        patch("host.cli.merge_with_rebase_fallback"),
+        patch("host.cli.verify_no_conflict_markers"),
+        patch("host.cli.remove_worktree"),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    # Review session should be cleaned up
+    assert not review_session.exists()
+    out = capsys.readouterr().out
+    assert f"Cleaned up review session for {sid}" in out
+
+
+def test_revise_cleans_sibling_review(tmp_path, capsys):
+    """cmd_revise cleans up sibling review session when revising from waiting:review."""
+    repo, run = _init_repo(tmp_path)
+    sid = "revisetst123"
+
+    # Create coder session in waiting:review status
+    coder_session = repo / ".nightshift" / "sessions" / sid
+    coder_session.mkdir(parents=True)
+    (coder_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 3, "issue_id": sid,
+    }))
+
+    # Create sibling review session
+    review_session = repo / ".nightshift" / "sessions" / f"review-{sid}"
+    review_session.mkdir(parents=True)
+    (review_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 1,
+    }))
+    (review_session / "conversation.jsonl").write_text("")
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_comment = MagicMock()
+    mock_comment.author = "reviewer"
+    mock_comment.body = "Please fix this issue"
+    mock_tracker = MagicMock()
+    mock_tracker.get_comments.return_value = [mock_comment]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("host.cli.remove_worktree"),
+        patch("subprocess.run"),
+    ):
+        cmd_revise(_make_args(
+            issue_id=sid,
+            workflow=str(repo / "WORKFLOW.md"),
+            message=None,
+        ))
+
+    # Review session should be cleaned up
+    assert not review_session.exists()
+    out = capsys.readouterr().out
+    assert f"Cleaned up review session for {sid}" in out
+
+
+def test_revise_no_review_is_noop(tmp_path, capsys):
+    """cmd_revise is a no-op when there's no sibling review session."""
+    repo, run = _init_repo(tmp_path)
+    sid = "noreview1234"
+
+    # Create coder session only - no sibling review
+    coder_session = repo / ".nightshift" / "sessions" / sid
+    coder_session.mkdir(parents=True)
+    (coder_session / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_comment = MagicMock()
+    mock_comment.author = "reviewer"
+    mock_comment.body = "Needs work"
+    mock_tracker = MagicMock()
+    mock_tracker.get_comments.return_value = [mock_comment]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("host.cli.remove_worktree"),
+        patch("subprocess.run"),
+    ):
+        cmd_revise(_make_args(
+            issue_id=sid,
+            workflow=str(repo / "WORKFLOW.md"),
+            message=None,
+        ))
+
+    # Should not print "Cleaned up review session" message
+    out = capsys.readouterr().out
+    assert "Cleaned up review session" not in out
+    # Coder session should still exist
+    assert coder_session.exists()
+
+
+# ── SSM state validation tests ─────────────────────────────────────────────
+
+
+def test_accept_validates_state(tmp_path, capsys):
+    """cmd_accept uses SSM to validate transition to 'accepted' state."""
+    repo, run = _init_repo(tmp_path)
+    sid = "validaccept1"
+
+    # Create session in waiting:review (valid for accept)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_tracker = MagicMock()
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.resolve_merge_ref", return_value=f"agent/{sid}"),
+        patch("host.cli.check_branch_not_behind_base", return_value=None),
+        patch("host.cli.merge_with_rebase_fallback"),
+        patch("host.cli.verify_no_conflict_markers"),
+        patch("host.cli.remove_worktree"),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    # Should complete successfully
+    out = capsys.readouterr().out
+    assert "Accepted" in out
+
+
+def test_accept_from_wrong_state_fails_with_message(tmp_path, capsys):
+    """cmd_accept fails with clear message when called from invalid state."""
+    repo, run = _init_repo(tmp_path)
+    sid = "wrongstate12"
+
+    # Create session in 'working' (cannot accept from working)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "working", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "working" in err
+    assert "accepted" in err.lower()
+
+
+def test_reject_validates_state(tmp_path, capsys):
+    """cmd_reject validates transition to 'rejected' state via SSM."""
+    repo, run = _init_repo(tmp_path)
+    sid = "wrongreject1"
+
+    # Create session in 'starting' (cannot reject from starting)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "starting", "step": 0, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cmd_reject(_make_args(issue_id=sid, workflow=None))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "starting" in err
+    assert "rejected" in err.lower()
+
+
+def test_resume_validates_state(tmp_path, capsys):
+    """cmd_resume validates that session can transition to 'working'."""
+    repo, run = _init_repo(tmp_path)
+    sid = "badresume123"
+
+    # Create session in 'accepted' (terminal state, cannot resume)
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "accepted", "step": 5, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli._resolve_workflow", return_value=repo / "WORKFLOW.md"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cmd_resume(_make_args(issue_id=sid, workflow=None))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "accepted" in err
+    # Should mention it's a terminal state or cannot resume
+    assert "terminal" in err.lower() or "cannot" in err.lower() or "resume" in err.lower()
+
+
+
+# ── cmd_blocked ─────────────────────────────────────────────────────────────
+
+
+def test_blocked_command_lists_blocked_issues(tmp_path, capsys):
+    """cmd_blocked should list issues with blocked:<id> labels."""
+    repo, run = _init_repo(tmp_path)
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    blocked_issue = TrackerIssue(
+        id="blocked123456",
+        identifier="blocked12345",
+        title="Issue blocked by dependency",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:dep123456"],
+    )
+    unblocked_issue = TrackerIssue(
+        id="unblocked1234",
+        identifier="unblocked123",
+        title="Issue not blocked",
+        body="",
+        status="open",
+        labels=["nightshift"],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue, unblocked_issue]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+    ):
+        cmd_blocked(_make_args(workflow=None))
+
+    out = capsys.readouterr().out
+    # Should show blocked issue
+    assert "blocked12345" in out
+    assert "dep123456" in out
+    # Should NOT show unblocked issue
+    assert "unblocked" not in out
+
+
+def test_blocked_command_empty(tmp_path, capsys):
+    """cmd_blocked shows message when no issues are blocked."""
+    repo, run = _init_repo(tmp_path)
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = []
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+    ):
+        cmd_blocked(_make_args(workflow=None))
+
+    out = capsys.readouterr().out
+    assert "No blocked issues" in out
+
+
+# ── accept unblocks dependents ──────────────────────────────────────────────
+
+
+def test_accept_unblocks_dependents(tmp_path, capsys):
+    """cmd_accept should remove blocked:<accepted-id> labels from other issues."""
+    repo, run = _init_repo(tmp_path)
+    sid = "accepted1234"
+
+    # Create session
+    session_dir = repo / ".nightshift" / "sessions" / sid
+    session_dir.mkdir(parents=True)
+    (session_dir / "state.json").write_text(json.dumps({
+        "status": "waiting:review", "step": 2, "issue_id": sid,
+    }))
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    # Issue that was blocked by the one being accepted
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:accepted1234"],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue]
+
+    with (
+        patch("host.cli.repo_root", return_value=repo),
+        patch("host.cli.resolve_session", return_value=sid),
+        patch("host.cli.resolve_merge_ref", return_value=f"agent/{sid}"),
+        patch("host.cli.check_branch_not_behind_base", return_value=None),
+        patch("host.cli.merge_with_rebase_fallback"),
+        patch("host.cli.verify_no_conflict_markers"),
+        patch("host.cli.remove_worktree"),
+        patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker),
+        patch("subprocess.run", return_value=MagicMock(returncode=0)),
+    ):
+        cmd_accept(_make_args(issue_id=sid, workflow=None))
+
+    # Should have removed the blocked label
+    mock_tracker.remove_label.assert_called_once_with(
+        "dependent1234", "blocked:accepted1234"
+    )
+    out = capsys.readouterr().out
+    assert "Unblocked dependent123" in out
+
+
+def test_unblock_dependents_direct():
+    """Test _unblock_dependents helper directly."""
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:closed123456"],  # 12-char prefix
+    )
+    unrelated_issue = TrackerIssue(
+        id="unrelated1234",
+        identifier="unrelated123",
+        title="Unrelated issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:other1234567"],  # Different prefix
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue, unrelated_issue]
+
+    _unblock_dependents(mock_tracker, "closed12345678")  # Full ID, truncated to 12
+
+    # Should only remove the matching label
+    mock_tracker.remove_label.assert_called_once_with(
+        "dependent1234", "blocked:closed123456"
+    )
+
+
+def test_unblock_dependents_short_prefix():
+    """Short blocked prefixes should still be removed when the issue closes."""
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=["nightshift", "blocked:abc1234"],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue]
+
+    _unblock_dependents(mock_tracker, "abc1234567890")
+
+    mock_tracker.remove_label.assert_called_once_with(
+        "dependent1234", "blocked:abc1234"
+    )
+
+
+def test_unblock_dependents_any_prefix_length():
+    """All matching blocked prefixes should be removed, regardless of length."""
+    blocked_issue = TrackerIssue(
+        id="dependent1234",
+        identifier="dependent123",
+        title="Dependent issue",
+        body="",
+        status="open",
+        labels=[
+            "nightshift",
+            "blocked:abc12",
+            "blocked:abc1234",
+            "blocked:abc123456789",
+        ],
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.list_issues.return_value = [blocked_issue]
+
+    _unblock_dependents(mock_tracker, "abc1234567890")
+
+    assert mock_tracker.remove_label.call_args_list == [
+        call("dependent1234", "blocked:abc12"),
+        call("dependent1234", "blocked:abc1234"),
+        call("dependent1234", "blocked:abc123456789"),
+    ]

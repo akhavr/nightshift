@@ -9,7 +9,7 @@ from host.constants import (
     COMMAND_BACKOFF_BASE_S, COMMAND_BACKOFF_CAP_S, COMMAND_BACKOFF_CAP_CYCLES,
     SHORT_ID_LEN,
 )
-from host.session_utils import update_status as _update_status
+from host.session_utils import update_status as _update_status, clear_completed_at
 from core.protocols import NotificationLevel
 from core.review import collect_review_feedback, build_revise_prompt
 from host.watcher.telegram_relay import TelegramRelay
@@ -52,6 +52,9 @@ class CommandExecutor:
 
     def do_revise(self, sid: str, issue_id: str, session_dir: Path):
         """Collect review feedback and relaunch agent."""
+        if not session_dir.exists():
+            log.warning(f"[{sid[:12]}] Session directory missing, skipping revise")
+            return
         try:
             tracker = self._get_tracker()
             review_comments = collect_review_feedback(tracker, issue_id, sync=False)
@@ -63,25 +66,24 @@ class CommandExecutor:
             feedback = build_revise_prompt(review_comments)
             (session_dir / "resume-prompt.md").write_text(feedback)
 
-            _update_status(session_dir, "working")
-
-            self._comment_counts.pop(sid, None)
-            self._recently_launched[sid] = time.time()
-
-            log.info(f"[{sid}] Revising with {len(review_comments)} comment(s)")
-
             cmd = [
                 sys.executable,
                 str(_HOST_DIR / "launch.py"),
                 issue_id, "--resume",
             ]
             if not self._launch_background(cmd, sid):
-                log.warning(f"[{sid}] Revise launch failed -- reverting to waiting:review")
-                _update_status(session_dir, "waiting:review")
+                log.warning(f"[{sid}] Revise launch failed -- status unchanged")
+                return
+
+            # Only update state after successful launch (SSM-7)
+            clear_completed_at(session_dir)
+            _update_status(session_dir, "working")
+            self._comment_counts.pop(sid, None)
+            self._recently_launched[sid] = time.time()
+            log.info(f"[{sid}] Revising with {len(review_comments)} comment(s)")
 
         except Exception as e:
-            log.error(f"[{sid}] Revise failed: {e} -- reverting to waiting:review")
-            _update_status(session_dir, "waiting:review")
+            log.error(f"[{sid}] Revise failed: {e}")
 
     def do_cli_command(self, sid: str, command: str, issue_id: str):
         """Run a CLI command (accept/reject) as a subprocess."""

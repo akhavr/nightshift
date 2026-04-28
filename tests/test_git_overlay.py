@@ -1,0 +1,271 @@
+"""Tests for host.git_overlay."""
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+def test_setup_overlay_creates_merged_mount(tmp_path):
+    from host.git_overlay import setup_overlay
+
+    repo_git = tmp_path / "repo" / ".git"
+    repo_git.mkdir(parents=True)
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    with patch("host.git_overlay.is_fuse_overlayfs_available", return_value=True), \
+            patch("host.git_overlay.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        merged = setup_overlay(repo_git, session_dir)
+
+    assert merged == session_dir / "git-merged"
+    assert (session_dir / "git-upper").exists()
+    assert (session_dir / "git-work").exists()
+    assert (session_dir / "git-merged").exists()
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args.args[0]
+    assert cmd[0] == "fuse-overlayfs"
+    assert str(repo_git) in cmd[2]
+    assert str(session_dir / "git-merged") == cmd[-1]
+    assert mock_run.call_args.kwargs["capture_output"] is True
+    assert mock_run.call_args.kwargs["text"] is True
+
+
+def test_setup_overlay_raises_on_failure(tmp_path):
+    from host.git_overlay import setup_overlay
+    import pytest
+
+    repo_git = tmp_path / "repo" / ".git"
+    repo_git.mkdir(parents=True)
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    with patch("host.git_overlay.is_fuse_overlayfs_available", return_value=True), \
+            patch("host.git_overlay.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stderr="mount failed")
+        with pytest.raises(RuntimeError, match="fuse-overlayfs failed: mount failed"):
+            setup_overlay(repo_git, session_dir)
+
+
+def test_teardown_overlay_unmounts(tmp_path):
+    from host.git_overlay import teardown_overlay
+
+    merged = tmp_path / "session" / "git-merged"
+    merged.parent.mkdir(parents=True)
+    merged.mkdir()
+
+    with patch("host.git_overlay.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        teardown_overlay(merged)
+
+    mock_run.assert_called_once_with(["fusermount", "-u", str(merged)],
+                                     capture_output=True, text=True)
+
+
+def test_overlay_commit_extraction(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+    (upper_dir / "objects" / "ab").mkdir(parents=True)
+    (repo_git / "objects").mkdir(parents=True)
+    (upper_dir / "objects" / "ab" / "new-object").write_text("loose object")
+    (upper_dir / "refs" / "heads").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "test").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "test").write_text("deadbeef")
+    (upper_dir / "HEAD").write_text("ref: refs/heads/agent/test")
+
+    extract_commits(upper_dir, repo_git)
+
+    assert (repo_git / "objects" / "ab" / "new-object").read_text() == "loose object"
+    assert (repo_git / "refs" / "heads" / "agent" / "test").read_text() == "deadbeef"
+    assert (repo_git / "HEAD").read_text() == "ref: refs/heads/agent/test"
+
+
+def test_extract_commits_overwrites_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    existing_ref = repo_git / "refs" / "heads" / "agent" / "test"
+    existing_ref.parent.mkdir(parents=True)
+    existing_ref.write_text("commit-a")
+
+    (upper_dir / "refs" / "heads").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "test").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "test").write_text("commit-b")
+
+    extract_commits(upper_dir, repo_git)
+
+    assert existing_ref.read_text() == "commit-b"
+
+
+def test_extract_commits_whitelists_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    (upper_dir / "objects").mkdir(parents=True)
+    (upper_dir / "refs" / "heads").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "good").write_text("deadbeef")
+    (upper_dir / "refs" / "heads" / "agent" / "bad" / "evil").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "bad" / "evil").write_text("badc0de")
+    (upper_dir / "refs" / "heads" / "review" / "good").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "review" / "good").write_text("cafefeed")
+    (upper_dir / "refs" / "heads" / "main").write_text("cafebabe")
+
+    skipped = extract_commits(upper_dir, repo_git)
+
+    assert (repo_git / "refs" / "heads" / "agent" / "good").read_text() == "deadbeef"
+    assert (repo_git / "refs" / "heads" / "review" / "good").read_text() == "cafefeed"
+    assert not (repo_git / "refs" / "heads" / "agent" / "bad" / "evil").exists()
+    assert not (repo_git / "refs" / "heads" / "main").exists()
+    assert "refs/heads/main" in skipped
+    assert "refs/heads/agent/bad/evil" in skipped
+
+
+def test_extract_commits_blocks_nested_slash_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    (upper_dir / "objects").mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "abc123" / "evil").parent.mkdir(parents=True)
+    (upper_dir / "refs" / "heads" / "agent" / "abc123" / "evil").write_text("badc0de")
+
+    skipped = extract_commits(upper_dir, repo_git)
+
+    assert not (repo_git / "refs" / "heads" / "agent" / "abc123" / "evil").exists()
+    assert "refs/heads/agent/abc123/evil" in skipped
+
+
+def test_extract_commits_whitelists_packed_refs(tmp_path):
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    (upper_dir / "objects").mkdir(parents=True)
+    (upper_dir / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef refs/heads/agent/good\n"
+        "cafebabecafebabecafebabecafebabecafebabe refs/heads/main\n"
+    )
+
+    skipped = extract_commits(upper_dir, repo_git)
+
+    assert (repo_git / "refs" / "heads" / "agent" / "good").read_text() == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+    assert not (repo_git / "refs" / "heads" / "main").exists()
+    assert not (repo_git / "packed-refs").exists()
+    assert "refs/heads/main" in skipped
+
+
+def test_extract_commits_still_skips_objects(tmp_path):
+    """Regression test: extract_commits must skip existing read-only files.
+
+    Git objects are immutable and typically 444 permissions. Attempting to
+    overwrite them causes PermissionError. Since same hash = same content,
+    we skip existing files entirely.
+    """
+    import os
+    from host.git_overlay import extract_commits
+
+    upper_dir = tmp_path / "session" / "git-upper"
+    repo_git = tmp_path / "repo" / ".git"
+
+    # Create existing read-only object in repo
+    existing_obj = repo_git / "objects" / "ab" / "existing"
+    existing_obj.parent.mkdir(parents=True)
+    existing_obj.write_text("original content")
+    os.chmod(existing_obj, 0o444)  # read-only like real git objects
+
+    # Upper layer has same path (would overwrite if not skipped)
+    (upper_dir / "objects" / "ab").mkdir(parents=True)
+    (upper_dir / "objects" / "ab" / "existing").write_text("new content")
+
+    # Also add a new object that should be copied
+    (upper_dir / "objects" / "cd").mkdir(parents=True)
+    (upper_dir / "objects" / "cd" / "newobj").write_text("new object")
+
+    # Before fix: PermissionError. After fix: succeeds, skips existing.
+    extract_commits(upper_dir, repo_git)
+
+    # Existing file unchanged (was skipped)
+    assert existing_obj.read_text() == "original content"
+    # New file was copied
+    assert (repo_git / "objects" / "cd" / "newobj").read_text() == "new object"
+
+
+def test_overlay_fallback_to_copy(tmp_path):
+    from host.git_overlay import setup_git_copy
+
+    repo_git = tmp_path / "repo" / ".git"
+    repo_git.mkdir(parents=True)
+    (repo_git / "config").write_text("[core]\n")
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    with patch("host.git_overlay.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        copied = setup_git_copy(repo_git, session_dir)
+
+    assert copied == session_dir / "git-copy"
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:2] == ["cp", "-a"]
+    assert str(repo_git) in cmd
+    assert str(session_dir / "git-copy") in cmd
+
+
+def test_setup_git_copy_retries_on_transient_failure(tmp_path):
+    """setup_git_copy retries up to 3 times with backoff when cp fails."""
+    import subprocess
+    from host.git_overlay import setup_git_copy
+
+    repo_git = tmp_path / "repo" / ".git"
+    repo_git.mkdir(parents=True)
+    (repo_git / "config").write_text("[core]\n")
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    call_count = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise subprocess.CalledProcessError(1, args[0], stderr="Device or resource busy")
+        return MagicMock(returncode=0)
+
+    with patch("host.git_overlay.subprocess.run", side_effect=side_effect), \
+            patch("host.git_overlay.time.sleep") as mock_sleep:
+        copied = setup_git_copy(repo_git, session_dir)
+
+    assert copied == session_dir / "git-copy"
+    assert call_count == 3
+    # Verify backoff delays were used (1s, 2s)
+    assert mock_sleep.call_count == 2
+    assert mock_sleep.call_args_list[0][0][0] == 1
+    assert mock_sleep.call_args_list[1][0][0] == 2
+
+
+def test_setup_git_copy_raises_after_max_retries(tmp_path):
+    """After 3 failures, raises with clear error message."""
+    import subprocess
+    import pytest
+    from host.git_overlay import setup_git_copy
+
+    repo_git = tmp_path / "repo" / ".git"
+    repo_git.mkdir(parents=True)
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+
+    def side_effect(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr="Device or resource busy")
+
+    with patch("host.git_overlay.subprocess.run", side_effect=side_effect), \
+            patch("host.git_overlay.time.sleep"):
+        with pytest.raises(RuntimeError, match="cp -a .* failed after 3 attempts"):
+            setup_git_copy(repo_git, session_dir)

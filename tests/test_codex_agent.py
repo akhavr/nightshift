@@ -8,7 +8,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from adapters.agents.codex import CodexAgent
+from core.session import SessionRunner
+from core.state import StateManager, SessionState
 from core.protocols import AgentEvent, AgentEventType
+from core.protocols import Workspace
+from tests.conftest import (
+    MockAgent,
+    MockNotifier,
+    MockTracker,
+    MockWorkspaceManager,
+    make_test_issue,
+)
 
 
 # ── Helpers ────────────────────────────────────────────────
@@ -486,11 +496,31 @@ class TestUsageBuffering:
     def _agent(self):
         return CodexAgent()
 
+    def _make_runner(self, tmp_path: Path, events: list[AgentEvent]):
+        issue = make_test_issue()
+        session_dir = tmp_path / "session"
+        state_mgr = StateManager(session_dir)
+        state_mgr._write(SessionState(issue_id=issue.id, branch="agent/test"))
+
+        agent = MockAgent(events)
+        tracker = MockTracker({issue.id: issue})
+        notifier = MockNotifier()
+        workspace_mgr = MockWorkspaceManager(tmp_path)
+
+        runner = SessionRunner(
+            agent=agent, tracker=tracker, notifier=notifier,
+            workspace_mgr=workspace_mgr, state_mgr=state_mgr,
+            issue=issue, prompt="Fix the bug",
+        )
+        workspace = Workspace(path=tmp_path / "ws", branch="agent/test", is_new=False)
+        workspace.path.mkdir()
+        return runner, state_mgr, workspace
+
     def test_usage_captured_before_done_marker(self):
         """agent_message with @@DONE@@ waits for turn.completed to get usage."""
         agent = self._agent()
-        # First: agent_message contains @@DONE@@ text
-        msg_raw = _item_ev("item.completed", "agent_message", text="Task done @@DONE@@")
+        # First: agent_message contains only the @@DONE@@ marker
+        msg_raw = _item_ev("item.completed", "agent_message", text="@@DONE@@")
         ev1 = agent._parse(msg_raw)
         # Should return None (buffered)
         assert ev1 is None
@@ -512,6 +542,56 @@ class TestUsageBuffering:
         assert ev2.metadata["usage"]["cost_usd"] == 0.05
         # Buffer should be cleared
         assert agent._pending_done_raw is None
+
+    def test_done_with_verdict_emits_text(self):
+        """agent_message with @@DONE@@ and verdict text should not be discarded."""
+        agent = self._agent()
+        raw = _item_ev(
+            "item.completed",
+            "agent_message",
+            text="All good. @nightshift revise @@DONE@@",
+        )
+        ev = agent._parse(raw)
+
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "All good. @nightshift revise"
+        assert ev.raw == raw
+        assert agent._pending_done_raw == raw
+
+    def test_verdict_in_same_message_as_done_logged(self, tmp_path):
+        """conversation.jsonl should keep verdict text when @@DONE@@ is in the same message."""
+        agent = self._agent()
+        text_raw = _item_ev(
+            "item.completed",
+            "agent_message",
+            text="All good. @nightshift approve @@DONE@@",
+        )
+        text_ev = agent._parse(text_raw)
+        assert text_ev is not None
+
+        done_raw = _ev("turn.completed", usage={
+            "input_tokens": 100,
+            "output_tokens": 10,
+        })
+        done_ev = agent._parse(done_raw)
+        assert done_ev is not None
+
+        runner, state_mgr, workspace = self._make_runner(tmp_path, [text_ev, done_ev])
+        runner.run(workspace=workspace)
+
+        entries = [
+            json.loads(line)
+            for line in state_mgr.conversation_log.read_text().strip().splitlines()
+        ]
+        assert any(
+            e["role"] == "assistant" and "@nightshift approve" in e["content"]
+            for e in entries
+        )
+        st = state_mgr.load_state()
+        assert st.status == "waiting:review"
+        assert st.usage.input_tokens == 100
+        assert st.usage.output_tokens == 10
 
     def test_usage_from_turn_completed_after_mcp_done(self):
         """MCP nightshift_done waits for turn.completed to get usage."""
@@ -589,6 +669,79 @@ class TestUsageBuffering:
 
         assert agent._pending_done_raw is None
         assert len(agent._extra_events) == 0
+
+
+# ── stream_events() / JSONL parsing ───────────────────────
+
+
+class TestStreamParsing:
+    def test_stream_yields_agent_events(self):
+        agent = CodexAgent()
+        lines = [
+            _ev("thread.started", thread_id="019d-abc-123") + "\n",
+            _item_ev("item.started", "command_execution", command="pwd", status="in_progress") + "\n",
+            _item_ev(
+                "item.completed",
+                "command_execution",
+                command="pwd",
+                aggregated_output="/workspace\n",
+                exit_code=0,
+                status="completed",
+            ) + "\n",
+            _ev("turn.completed", usage={"input_tokens": 120, "output_tokens": 8}) + "\n",
+        ]
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.stdout = iter(lines)
+        mock_proc.returncode = 0
+        agent._process = mock_proc
+        agent._last_event = 0
+
+        events = list(agent.stream_events())
+
+        assert all(isinstance(event, AgentEvent) for event in events)
+        assert [event.type for event in events] == [
+            AgentEventType.SYSTEM,
+            AgentEventType.TOOL_CALL,
+            AgentEventType.TOOL_RESULT,
+            AgentEventType.TEXT,
+            AgentEventType.PROCESS_EXIT,
+        ]
+        assert events[0].content == "thread:019d-abc-123"
+        assert events[2].content.startswith("exit=0")
+        assert events[3].content == "@@DONE@@"
+        assert events[3].metadata["usage"]["input_tokens"] == 120
+
+    def test_jsonl_parsed_to_events(self):
+        agent = CodexAgent()
+        raw_events = [
+            _ev("thread.started", thread_id="019d-abc-123"),
+            _item_ev("item.started", "command_execution", command="ls", status="in_progress"),
+            _item_ev(
+                "item.completed",
+                "command_execution",
+                command="ls",
+                aggregated_output="a.py\nb.py\n",
+                exit_code=0,
+                status="completed",
+            ),
+            _ev("turn.completed", usage={"input_tokens": 42, "output_tokens": 3}),
+        ]
+
+        events = [agent._parse(raw) for raw in raw_events]
+
+        assert all(isinstance(event, AgentEvent) for event in events if event is not None)
+        assert [event.type for event in events if event is not None] == [
+            AgentEventType.SYSTEM,
+            AgentEventType.TOOL_CALL,
+            AgentEventType.TOOL_RESULT,
+            AgentEventType.TEXT,
+        ]
+        assert events[0].raw == raw_events[0]
+        assert events[1].content == "ls"
+        assert events[2].content.startswith("exit=0")
+        assert events[3].metadata["usage"]["output_tokens"] == 3
 
 
 # ── Registry ─────────────────────────────────────────────

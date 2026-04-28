@@ -9,6 +9,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 from adapters.notifiers.composite import CompositeNotifier
@@ -24,6 +25,7 @@ from core.protocols import Workspace
 from core.state import StateManager
 from core.session import SessionRunner
 from core.search import search_related_issues
+from core.workspace_transaction import WorkspaceTransaction
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -86,6 +88,75 @@ def _read_merge_instructions(session_dir: str) -> str | None:
     )
 
 
+def _sanitize_core_worktree(worktree_path: Path) -> None:
+    """Remove container pollution from core.worktree if it points at /workspace."""
+    if not os.environ.get("GIT_DIR"):
+        return
+
+    result = subprocess.run(
+        ["git", "config", "--get", "core.worktree"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return
+
+    if result.stdout.strip() != "/workspace":
+        return
+
+    unset_result = subprocess.run(
+        ["git", "config", "--unset", "core.worktree"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+    )
+    if unset_result.returncode == 0:
+        log.info("Sanitized core.worktree=/workspace on exit")
+
+
+def _restore_git_pointer(worktree: Path, original_content: str) -> None:
+    """Restore a worktree's .git pointer and keep it stable through exit."""
+    git_file = worktree / ".git"
+    if not git_file.exists():
+        git_file.write_text(original_content)
+
+    with WorkspaceTransaction(worktree) as txn:
+        txn.restore_git_pointer(original_content)
+
+
+def cleanup_workspace(worktree_path: Path | None = None) -> int:
+    """Restore workspace metadata and sanitize core.worktree after container exit."""
+    worktree = Path(worktree_path or os.environ.get("WORKTREE_PATH", "/workspace"))
+    original_git_file = os.environ.get("ORIGINAL_GIT_CONTENT_FILE")
+    cleanup_failed = False
+
+    if original_git_file:
+        original_path = Path(original_git_file)
+        if original_path.exists():
+            try:
+                _restore_git_pointer(worktree, original_path.read_text())
+                log.info("Restored .git pointer from %s", original_path)
+            except Exception:
+                log.exception("Failed to restore .git pointer from %s", original_path)
+                cleanup_failed = True
+        else:
+            log.warning("Missing saved .git pointer backup at %s", original_path)
+            cleanup_failed = True
+    else:
+        log.warning("Missing ORIGINAL_GIT_CONTENT_FILE; cannot restore .git pointer")
+        cleanup_failed = True
+
+    if worktree.exists():
+        try:
+            _sanitize_core_worktree(worktree)
+        except Exception:
+            log.exception("Failed to sanitize core.worktree on exit")
+            cleanup_failed = True
+
+    return 0 if not cleanup_failed else 1
+
+
 def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
                   issue_id, resume, step):
     """Build or load the agent prompt."""
@@ -110,6 +181,8 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
                     config.prompt_template, issue=issue,
                     related_context=related, attempt=None,
                     agent_kind=config.agent.kind,
+                    session_id=os.environ.get("SHORT_ID", "unknown"),
+                    date=date.today().isoformat(),
                 )
             else:
                 base_prompt = build_initial_prompt(issue.title, issue.body, related)
@@ -120,7 +193,11 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
     state_mgr.update_status("working")
 
     if config.prompt_template:
-        extra_vars = {"agent_kind": config.agent.kind}
+        extra_vars = {
+            "agent_kind": config.agent.kind,
+            "session_id": os.environ.get("SHORT_ID", "unknown"),
+            "date": date.today().isoformat(),
+        }
         if step == "review":
             extra_vars["diff"] = _read_diff()
             extra_vars["base_branch"] = os.environ.get("BASE_BRANCH", "master")
@@ -208,5 +285,14 @@ def main():
         notifier.stop()
 
 
+def run(worktree_path: Path = Path("/workspace")) -> None:
+    """Run the container entrypoint inside a workspace transaction."""
+    with WorkspaceTransaction(worktree_path):
+        main()
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--cleanup":
+        sys.exit(cleanup_workspace())
+    else:
+        run()

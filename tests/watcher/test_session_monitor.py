@@ -3,6 +3,7 @@
 import json
 import sys
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -48,7 +49,8 @@ class TestCheckOrphanedSessions:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert "abc" in launched
@@ -112,7 +114,8 @@ class TestCheckOrphanedSessions:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert "review-abc" in launched
@@ -150,7 +153,8 @@ class TestCheckOrphanedSessions:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert "review-abc" in launched
@@ -177,7 +181,8 @@ class TestCheckOrphanedSessions:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert "abc" in launched
@@ -191,7 +196,8 @@ class TestCheckOrphanedSessions:
         launched_cmds = []
         w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert len(launched_cmds) == 1
@@ -205,7 +211,8 @@ class TestCheckOrphanedSessions:
         launched_cmds = []
         w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert len(launched_cmds) == 1
@@ -221,7 +228,8 @@ class TestCheckOrphanedSessions:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert "abc" in launched
@@ -244,7 +252,8 @@ class TestCheckOrphanedSessions:
         tracker = MagicMock()
         w._tracker = tracker
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert launched == []
@@ -315,7 +324,8 @@ class TestCheckOrphanedSessions:
         notified = []
         w.telegram.notify = lambda msg, **kw: notified.append(msg)
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert launched == []
@@ -341,7 +351,8 @@ class TestCheckOrphanedSessions:
         tracker = MagicMock()
         w._tracker = tracker
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert launched == []
@@ -372,7 +383,8 @@ class TestCheckOrphanedSessions:
         notified = []
         w.telegram.notify = lambda msg, **kw: notified.append(msg)
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert launched == []
@@ -400,7 +412,8 @@ class TestCheckOrphanedSessions:
         tracker = MagicMock()
         w._tracker = tracker
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert launched == []
@@ -418,7 +431,8 @@ class TestCheckOrphanedSessions:
         launched_cmds = []
         w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert len(launched_cmds) == 1
@@ -817,7 +831,8 @@ class TestWorkflowPassthrough:
         launched_cmds = []
         w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert len(launched_cmds) == 1
@@ -842,7 +857,8 @@ class TestWorkflowPassthrough:
         launched_cmds = []
         w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert len(launched_cmds) == 1
@@ -925,7 +941,8 @@ class TestWorkflowPassthrough:
         launched_cmds = []
         w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert len(launched_cmds) == 1
@@ -942,7 +959,8 @@ class TestWorkflowPassthrough:
         launched_cmds = []
         w.monitor._launch_background = lambda cmd, sid: launched_cmds.append(cmd) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         assert len(launched_cmds) == 1
@@ -1275,6 +1293,107 @@ class TestStaleReviewSessionCleanup:
 
 
 # ---------------------------------------------------------------------------
+# Completed review cleanup after verdict tests
+# ---------------------------------------------------------------------------
+
+class TestCompletedReviewCleanupAfterVerdict:
+    """Auto-cleanup of completed review sessions after verdict processing."""
+
+    def _completed_at(self, seconds_ago: int) -> str:
+        return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+
+    def test_cleanup_completed_review_after_verdict(self, tmp_path):
+        """Completed review sessions should be archived after the coder transitions."""
+        w = _make_watcher(tmp_path)
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:human-review",
+                                 issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is True
+        assert not review_sd.exists()
+        archive_dir = w.monitor.repo_dir / ".nightshift" / "archive" / "review-abc"
+        assert archive_dir.exists()
+        assert (archive_dir / "state.json").exists()
+        mock_remove_worktree.assert_called_once()
+        assert coder_sd.exists()
+
+    def test_no_cleanup_active_review(self, tmp_path):
+        """Active review sessions must not be cleaned up."""
+        w = _make_watcher(tmp_path)
+        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is False
+        assert review_sd.exists()
+        mock_remove_worktree.assert_not_called()
+        mock_rmtree.assert_not_called()
+
+    def test_cleanup_only_when_coder_transitioned(self, tmp_path):
+        """Completed review cleanup waits until the coder has left waiting:review."""
+        w = _make_watcher(tmp_path)
+        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
+                                 issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is False
+        assert review_sd.exists()
+        mock_remove_worktree.assert_not_called()
+
+        state = json.loads((coder_sd / "state.json").read_text())
+        state["status"] = "working"
+        (coder_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        assert cleaned is True
+        assert not review_sd.exists()
+        mock_remove_worktree.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # Orphan with @@DONE@@ marker tests
 # ---------------------------------------------------------------------------
 
@@ -1317,7 +1436,8 @@ class TestOrphanWithDoneMarker:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         # Should resume normally
@@ -1358,7 +1478,8 @@ class TestOrphanWithDoneMarker:
         launched = []
         w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
 
-        with patch("host.watcher.docker_container_status", return_value=None):
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
             w.monitor.check_orphaned_sessions()
 
         # Should resume normally
@@ -1384,3 +1505,415 @@ class TestOrphanWithDoneMarker:
         # Should log the transition
         assert any("@@DONE@@" in record.message and "done:pending-review" in record.message
                    for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Revise-pending marker tests
+# ---------------------------------------------------------------------------
+
+class TestRevisePendingMarker:
+    """When an orphan has revise-pending.json, retry the revise launch."""
+
+    def test_orphan_with_revise_pending_retries_launch(self, tmp_path):
+        """Session with revise-pending.json should retry the revise launch."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+
+        # Create revise-pending.json marker
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir()
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "@nightshift revise"}) + "\n"
+        )
+        marker_data = {"issue_id": "issue-abc", "review_dir": str(review_dir)}
+        (sd / "revise-pending.json").write_text(json.dumps(marker_data))
+
+        # Create conversation.jsonl with @@DONE@@ (from previous run)
+        (sd / "conversation.jsonl").write_text(
+            json.dumps({"type": "assistant", "content": "@@DONE@@"}) + "\n"
+        )
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        # Should resume via revise handler
+        assert "abc" in launched
+        # Marker should be removed after successful retry
+        assert not (sd / "revise-pending.json").exists()
+        # Status should NOT be done:pending-review
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] != "done:pending-review"
+
+    def test_orphan_with_revise_pending_launch_failure_keeps_marker(self, tmp_path):
+        """When revise retry launch fails, marker should be kept for next attempt."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+
+        # Create revise-pending.json marker
+        marker_data = {"issue_id": "issue-abc", "review_dir": str(tmp_path / "review-abc")}
+        (sd / "revise-pending.json").write_text(json.dumps(marker_data))
+
+        # Simulate launch failure
+        w.monitor._launch_background = lambda cmd, sid: False
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()
+
+        # Marker should still exist
+        assert (sd / "revise-pending.json").exists()
+        # Status should NOT transition to done:pending-review
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] != "done:pending-review"
+
+
+# ---------------------------------------------------------------------------
+# Branch verification before resume tests
+# ---------------------------------------------------------------------------
+
+class TestBranchVerification:
+    """Verify agent branch exists before resuming a session."""
+
+    def test_detects_missing_branch(self, tmp_path):
+        """_verify_branch_exists returns False when the branch is missing."""
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+
+        # Mock git rev-parse to return non-zero (branch doesn't exist)
+        mock_result = MagicMock()
+        mock_result.returncode = 128
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            result = w.monitor._verify_branch_exists(state)
+
+        assert result is False
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        assert "git" in call_args[0][0]
+        assert "rev-parse" in call_args[0][0]
+        assert "refs/heads/agent/abc" in call_args[0][0]
+
+    def test_detects_existing_branch(self, tmp_path):
+        """_verify_branch_exists returns True when the branch exists."""
+        w = _make_watcher(tmp_path)
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+
+        # Mock git rev-parse to return zero (branch exists)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        with patch("subprocess.run", return_value=mock_result):
+            result = w.monitor._verify_branch_exists(state)
+
+        assert result is True
+
+    def test_skips_resume_on_missing_branch(self, tmp_path):
+        """Orphan resume is skipped when the agent branch is missing."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        # Mock git rev-parse to return non-zero (branch doesn't exist)
+        mock_result = MagicMock()
+        mock_result.returncode = 128
+
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch("subprocess.run", return_value=mock_result):
+            w.monitor.check_orphaned_sessions()
+
+        # Should NOT resume because branch is missing
+        assert launched == []
+        # Session status should be updated to suspended:branch-missing
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "suspended:branch-missing"
+
+    def test_resumes_when_branch_exists(self, tmp_path):
+        """Orphan resume proceeds when the agent branch exists."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        # Mock git rev-parse to return zero (branch exists)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        with patch("host.watcher.docker_container_status", return_value=None), \
+             patch("subprocess.run", return_value=mock_result):
+            w.monitor.check_orphaned_sessions()
+
+        # Should resume because branch exists
+        assert "abc" in launched
+
+
+# ---------------------------------------------------------------------------
+# Zombie container detection tests
+# ---------------------------------------------------------------------------
+
+class TestZombieContainerDetection:
+    """Detect containers that are running but stuck (no events for extended time)."""
+
+    def test_detects_stuck_container(self, tmp_path, caplog):
+        """Container running but no events for > stall_timeout * 2 -> warning logged."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log (stale for 700s with default 300s stall_timeout)
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should have logged a warning about the stuck container
+        assert any("may be stuck" in record.message and "abc" in record.message
+                   for record in caplog.records)
+
+    def test_no_alert_on_active_container(self, tmp_path, caplog):
+        """Container running with recent events -> no warning."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create a recent raw-output.log (updated just now)
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        # mtime is now by default
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT have logged any warning about stuck container
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_no_alert_when_container_not_running(self, tmp_path, caplog):
+        """Container not running (handled by orphan detector) -> no zombie alert."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log zombie warning (orphan detector handles non-running containers)
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_no_alert_without_raw_output_log(self, tmp_path, caplog):
+        """No raw-output.log file -> no zombie alert (just started)."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        # No raw-output.log created
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log zombie warning
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_skipped_within_check_interval(self, tmp_path, caplog):
+        """Zombie check skipped if called within the check interval."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = time.time()  # just checked
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log warning because we're within the check interval
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_non_working_status_skipped(self, tmp_path, caplog):
+        """Sessions not in working/starting status are skipped."""
+        import logging
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should NOT log zombie warning for non-working session
+        assert not any("may be stuck" in record.message
+                       for record in caplog.records)
+
+    def test_notifies_telegram_on_stuck_container(self, tmp_path):
+        """Stuck container detection should also notify via Telegram."""
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        w.monitor._last_zombie_check = 0.0
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+
+        # Create an old raw-output.log
+        raw_log = sd / "raw-output.log"
+        raw_log.write_text("some output\n")
+        import os
+        old_time = time.time() - 700
+        os.utime(raw_log, (old_time, old_time))
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        with patch("host.watcher.docker_container_status", return_value="running"):
+            w.monitor.check_zombie_containers()
+
+        # Should have sent a Telegram notification
+        assert any("stuck" in n.lower() or "zombie" in n.lower() for n in notified)
+
+
+# ---------------------------------------------------------------------------
+# Missing session directory handling tests
+# ---------------------------------------------------------------------------
+
+class TestMissingSessionDirHandled:
+    """Watcher should handle missing session directories gracefully.
+
+    Bug scenario:
+    1. Issue is accepted (code merged)
+    2. Tracker update fails (lock contention)
+    3. Session directory is cleaned up
+    4. Watcher sees open issue with nightshift label
+    5. Tries to resume → crash with FileNotFoundError
+    """
+
+    def test_orphan_check_skips_missing_state_json(self, tmp_path):
+        """Orphan check should skip if state.json doesn't exist."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+
+        # Create session directory but no state.json
+        sd = w.sessions_dir / "abc"
+        sd.mkdir()
+        assert not (sd / "state.json").exists()
+
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        with patch("host.watcher.docker_container_status", return_value=None):
+            w.monitor.check_orphaned_sessions()  # should not crash
+
+        assert launched == []
+
+    def test_resume_session_skips_missing_dir(self, tmp_path):
+        """_resume_session should handle missing session directory gracefully."""
+        w = _make_watcher(tmp_path)
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        # Session directory does NOT exist
+        missing_dir = w.sessions_dir / "abc"
+        assert not missing_dir.exists()
+
+        # Should not crash - will try to post lifecycle comment but skip on error
+        w.monitor._resume_session("abc", "issue-abc", reason="test")
+
+        # Should still launch (the launch itself will handle missing session)
+        assert "abc" in launched
+
+
+# ---------------------------------------------------------------------------
+# SSM-5: StateManager usage tests
+# ---------------------------------------------------------------------------
+
+class TestStateManagerUsage:
+    """Verify session_monitor uses StateManager instead of raw JSON reads."""
+
+    def test_orphan_check_uses_state_manager(self, tmp_path):
+        """Orphan detection should use StateManager for loading state."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        state_managers_loaded = []
+
+        # Patch StateManager to track when it's loaded
+        original_state_manager = __import__('core.state', fromlist=['StateManager']).StateManager
+        class TrackedStateManager(original_state_manager):
+            def __init__(self, session_dir):
+                state_managers_loaded.append(str(session_dir))
+                super().__init__(session_dir)
+
+        with patch("host.watcher.session_monitor.StateManager", TrackedStateManager), \
+             patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
+            w.monitor.check_orphaned_sessions()
+
+        # StateManager should have been used to load the session state
+        assert any("abc" in path for path in state_managers_loaded), \
+            f"StateManager should be used for session 'abc', got: {state_managers_loaded}"
+
+    def test_consistent_status_read(self, tmp_path):
+        """Status should be read via StateManager.status property for SSM consistency."""
+        w = _make_watcher(tmp_path)
+        w.monitor._last_orphan_check = 0.0
+        _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        launched = []
+        w.monitor._launch_background = lambda cmd, sid: launched.append(sid) or True
+
+        status_reads = []
+
+        # Patch StateManager.status property to track reads
+        original_state_manager = __import__('core.state', fromlist=['StateManager']).StateManager
+        class TrackedStateManager(original_state_manager):
+            @property
+            def status(self):
+                result = super().status
+                status_reads.append(result)
+                return result
+
+        with patch("host.watcher.session_monitor.StateManager", TrackedStateManager), \
+             patch("host.watcher.docker_container_status", return_value=None), \
+             patch.object(w.monitor, "_verify_branch_exists", return_value=True):
+            w.monitor.check_orphaned_sessions()
+
+        # Status should have been read via the status property
+        assert "working" in status_reads, \
+            f"Status should be read via StateManager.status, got: {status_reads}"

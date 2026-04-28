@@ -11,19 +11,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.constants import MERGE_NEEDED_FILENAME
+from core.workspace_transaction import WorkspaceTransaction
 from host.git_utils import fetch_and_resolve_ref
-from host.session_utils import force_remove_dir
+from host.session_utils import force_remove_dir, safe_prune
+
+
+def _cleanup_partial_worktree(wt_path: Path) -> None:
+    """Remove a partially created worktree directory if it exists."""
+    if wt_path.exists():
+        force_remove_dir(wt_path)
 
 
 def create_worktree(repo: Path, wt_path: Path, branch: str,
                     base_branch: str, session_dir: Path, issue_id: str):
-    """Create a fresh git worktree and initialize session state."""
+    """Create a fresh git worktree and initialize session state.
+
+    WT-6: Uses safe_prune instead of global prune to prevent collateral damage
+    to other worktrees with corrupted .git files.
+    """
     session_dir.mkdir(parents=True, exist_ok=True)
 
     if wt_path.exists():
         force_remove_dir(wt_path)
-    subprocess.run(["git", "worktree", "prune"],
-                   capture_output=True, cwd=str(repo))
+    # WT-6: Use safe_prune to fix corrupted gitdirs first and check active sessions
+    safe_prune(repo)
+
+    # Verify base commit exists before creating branch
+    verify_result = subprocess.run(
+        ["git", "cat-file", "-t", base_branch],
+        capture_output=True, text=True, cwd=str(repo),
+    )
+    if verify_result.returncode != 0:
+        raise ValueError(f"Base branch {base_branch} points to missing commit")
 
     subprocess.run(["git", "branch", branch, base_branch],
                    capture_output=True, cwd=str(repo))
@@ -34,24 +53,37 @@ def create_worktree(repo: Path, wt_path: Path, branch: str,
     )
     if result.returncode != 0:
         print(f"Failed to create worktree:\n{result.stderr}", file=sys.stderr)
+        _cleanup_partial_worktree(wt_path)
         sys.exit(1)
 
-    gitignore_src = repo / ".gitignore"
-    gitignore_dst = wt_path / ".gitignore"
-    if gitignore_src.exists() and not gitignore_dst.exists():
-        shutil.copy2(str(gitignore_src), str(gitignore_dst))
+    try:
+        with WorkspaceTransaction(wt_path):
+            gitignore_src = repo / ".gitignore"
+            gitignore_dst = wt_path / ".gitignore"
+            if gitignore_src.exists() and not gitignore_dst.exists():
+                shutil.copy2(str(gitignore_src), str(gitignore_dst))
 
-    files = [f for f in wt_path.iterdir() if f.name != ".git"]
-    if not files:
-        print(f"Worktree at {wt_path} is empty — check base_branch", file=sys.stderr)
+            files = [f for f in wt_path.iterdir() if f.name != ".git"]
+            if not files:
+                print(f"Worktree at {wt_path} is empty — check base_branch",
+                      file=sys.stderr)
+                raise RuntimeError("empty worktree")
+
+            (session_dir / "state.json").write_text(json.dumps({
+                "issue_id": issue_id, "branch": branch,
+                "status": "starting", "step": 0,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "checkpoints": [], "human_answers": [],
+            }, indent=2))
+    except Exception as exc:
+        print(f"Failed to initialize worktree at {wt_path}: {exc}",
+              file=sys.stderr)
+        state_file = session_dir / "state.json"
+        if state_file.exists():
+            state_file.unlink()
+        _cleanup_partial_worktree(wt_path)
         sys.exit(1)
 
-    (session_dir / "state.json").write_text(json.dumps({
-        "issue_id": issue_id, "branch": branch,
-        "status": "starting", "step": 0,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "checkpoints": [], "human_answers": [],
-    }, indent=2))
     print(f"Created worktree at {wt_path}")
 
 
