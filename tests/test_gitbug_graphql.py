@@ -449,7 +449,7 @@ def test_run_raw_unsupported_command_raises_when_webui_alive(graphql_tracker):
     tracker, _popen, proc = graphql_tracker
 
     with pytest.raises(RuntimeError) as exc:
-        tracker.run_raw("bug", "show", "abc123")
+        tracker.run_raw("bug", "select", "abc123")
 
     assert "not recognized" in str(exc.value)
     tracker.shutdown()
@@ -513,7 +513,78 @@ def test_unrecognized_command_raises_clear_error(graphql_tracker):
     tracker, _popen, proc = graphql_tracker
 
     with pytest.raises(RuntimeError) as exc:
-        tracker.run_raw("bug", "show", "abc123")
+        tracker.run_raw("bug", "unknown_cmd", "abc123")
 
     assert "not recognized" in str(exc.value)
+    tracker.shutdown()
+
+
+def test_parse_raw_command_bug_show(graphql_tracker):
+    """_parse_raw_command parses 'bug show <id>' correctly."""
+    tracker, _popen, _proc = graphql_tracker
+    result = tracker._parse_raw_command(("bug", "show", "abc123"))
+    assert result is not None
+    method, args = result
+    assert method == "show_issue"
+    assert args == ("abc123", None)
+    tracker.shutdown()
+
+
+def test_parse_raw_command_bug_show_format_json(graphql_tracker):
+    """_parse_raw_command parses 'bug show <id> -f json' correctly."""
+    tracker, _popen, _proc = graphql_tracker
+    result = tracker._parse_raw_command(("bug", "show", "abc123", "-f", "json"))
+    assert result is not None
+    method, args = result
+    assert method == "show_issue"
+    assert args == ("abc123", "json")
+    tracker.shutdown()
+
+
+def test_parse_raw_command_bug_show_format_long(graphql_tracker):
+    """_parse_raw_command parses 'bug show <id> --format json' correctly."""
+    tracker, _popen, _proc = graphql_tracker
+    result = tracker._parse_raw_command(("bug", "show", "abc123", "--format", "json"))
+    assert result is not None
+    method, args = result
+    assert method == "show_issue"
+    assert args == ("abc123", "json")
+    tracker.shutdown()
+
+
+def test_graphql_router_bug_show_default(graphql_tracker, monkeypatch):
+    """Router executes 'bug show' via GraphQL, returns default formatted output."""
+    tracker, _popen, _proc = graphql_tracker
+    monkeypatch.setattr(
+        tracker,
+        "_query",
+        MagicMock(return_value={"repository": {"bug": bug_payload("abc123")}}),
+    )
+
+    result = tracker.run_raw("bug", "show", "abc123")
+
+    assert "abc123" in result
+    assert "Fix lock contention" in result
+    assert "open" in result.lower()
+    tracker.shutdown()
+
+
+def test_graphql_router_bug_show_json(graphql_tracker, monkeypatch):
+    """Router executes 'bug show -f json' via GraphQL, returns JSON output."""
+    import json
+    tracker, _popen, _proc = graphql_tracker
+    monkeypatch.setattr(
+        tracker,
+        "_query",
+        MagicMock(return_value={"repository": {"bug": bug_payload("abc123")}}),
+    )
+
+    result = tracker.run_raw("bug", "show", "abc123", "-f", "json")
+
+    data = json.loads(result)
+    assert data["id"] == "abc123"
+    assert data["title"] == "Fix lock contention"
+    assert data["status"] == "open"
+    assert "labels" in data
+    assert "comments" in data
     tracker.shutdown()
