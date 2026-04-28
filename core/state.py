@@ -104,25 +104,47 @@ def _validate_usage(usage: object) -> tuple[dict, list[str]]:
     return validated, warnings
 
 
-def _validate_checkpoint(entry: object) -> tuple[dict | None, str | None]:
-    """Validate a checkpoint entry and return a normalized copy or a warning."""
-    if not isinstance(entry, dict):
-        return None, f"invalid checkpoint entry type: {type(entry).__name__}"
+def _validate_checkpoints(checkpoints: object) -> tuple[list[dict], list[str]]:
+    """Validate checkpoints as a list of mapping entries.
 
-    required_fields = ("step", "description", "timestamp", "commit")
-    for field_name in required_fields:
-        if field_name not in entry:
-            return None, f"checkpoint missing {field_name}"
+    We keep checkpoint dicts intact because host callers only rely on the
+    container-side format being a mapping, not on every field being present.
+    """
+    warnings: list[str] = []
+    if not isinstance(checkpoints, list):
+        return [], [f"invalid checkpoints {type(checkpoints).__name__}; defaulting to []"]
 
-    step = entry["step"]
-    if not _is_non_negative_int(step):
-        return None, f"checkpoint has invalid step: {step!r}"
-
-    for field_name in ("description", "timestamp", "commit"):
-        if not isinstance(entry[field_name], str):
-            return None, f"checkpoint has invalid {field_name}: {entry[field_name]!r}"
-
-    return dict(entry), None
+    validated: list[dict] = []
+    for idx, checkpoint in enumerate(checkpoints):
+        if not isinstance(checkpoint, dict):
+            warnings.append(
+                f"checkpoints[{idx}]: invalid checkpoint entry type: {type(checkpoint).__name__}"
+            )
+            continue
+        missing_fields = [field for field in ("step", "description", "timestamp", "commit")
+                          if field not in checkpoint]
+        if missing_fields:
+            warnings.append(
+                f"checkpoints[{idx}]: missing required fields: {', '.join(missing_fields)}"
+            )
+            continue
+        if not _is_non_negative_int(checkpoint["step"]):
+            warnings.append(
+                f"checkpoints[{idx}]: invalid step {checkpoint['step']!r}; skipping"
+            )
+            continue
+        invalid_text_fields = [
+            field for field in ("description", "timestamp", "commit")
+            if not isinstance(checkpoint[field], str)
+        ]
+        if invalid_text_fields:
+            details = ", ".join(
+                f"{field}={checkpoint[field]!r}" for field in invalid_text_fields
+            )
+            warnings.append(f"checkpoints[{idx}]: invalid field types: {details}")
+            continue
+        validated.append(dict(checkpoint))
+    return validated, warnings
 
 
 def _validate_state(
@@ -143,14 +165,46 @@ def _validate_state(
     state = dict(data)
     warnings: list[str] = []
 
-    for field_name in ("step", "overload_resumes", "auth_retries"):
-        if field_name in state:
-            value = state[field_name]
+    for field_name, rules in STATE_SCHEMA.items():
+        if field_name not in state:
+            continue
+        value = state[field_name]
+        expected_type = rules["type"]
+        if expected_type is int:
             if not _is_non_negative_int(value):
                 warnings.append(
                     f"invalid {field_name} {value!r}; defaulting to {STATE_DEFAULTS[field_name]!r}"
                 )
                 state[field_name] = STATE_DEFAULTS[field_name]
+                continue
+            state[field_name] = int(value)
+            continue
+        if expected_type is str:
+            if not isinstance(value, str):
+                warnings.append(
+                    f"invalid {field_name} {value!r}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+                )
+                state[field_name] = STATE_DEFAULTS[field_name]
+                continue
+            if "allowed" in rules and value not in rules["allowed"]:
+                warnings.append(
+                    f"invalid {field_name} {value!r}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+                )
+                state[field_name] = STATE_DEFAULTS[field_name]
+                continue
+            continue
+        if expected_type is list and not isinstance(value, list):
+            warnings.append(
+                f"invalid {field_name} {type(value).__name__}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+            )
+            state[field_name] = copy.deepcopy(STATE_DEFAULTS[field_name])
+            continue
+        if expected_type is dict and not isinstance(value, dict):
+            warnings.append(
+                f"invalid {field_name} {type(value).__name__}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+            )
+            state[field_name] = STATE_DEFAULTS[field_name]
+            continue
 
     if "orphan_resumes" in state:
         orphan_resumes = state["orphan_resumes"]
@@ -172,21 +226,8 @@ def _validate_state(
         state["completed_at"] = STATE_DEFAULTS["completed_at"]
 
     if "checkpoints" in state:
-        checkpoints = state["checkpoints"]
-        if not isinstance(checkpoints, list):
-            warnings.append(
-                f"invalid checkpoints {type(checkpoints).__name__}; defaulting to []"
-            )
-            state["checkpoints"] = []
-        else:
-            validated_checkpoints: list[dict] = []
-            for idx, checkpoint in enumerate(checkpoints):
-                validated_checkpoint, warning = _validate_checkpoint(checkpoint)
-                if warning is not None:
-                    warnings.append(f"checkpoints[{idx}]: {warning}")
-                    continue
-                validated_checkpoints.append(validated_checkpoint)
-            state["checkpoints"] = validated_checkpoints
+        state["checkpoints"], checkpoint_warnings = _validate_checkpoints(state["checkpoints"])
+        warnings.extend(checkpoint_warnings)
 
     if "human_answers" in state and not isinstance(state["human_answers"], list):
         warnings.append(

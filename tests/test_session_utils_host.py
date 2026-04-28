@@ -90,6 +90,19 @@ class TestReadState:
 
         assert result == state
 
+    def test_read_state_defaults_invalid_status(self, tmp_path, caplog):
+        state = {
+            "status": "not-a-real-status",
+            "issue_id": "abc123",
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["status"] == "starting"
+        assert "status" in caplog.text
+
     @pytest.mark.parametrize("cost_usd", [-1, "not-a-number"])
     def test_read_state_defaults_invalid_usage(self, tmp_path, caplog, cost_usd):
         state = {
@@ -120,7 +133,11 @@ class TestReadState:
                     "timestamp": "2026-04-28T00:00:00+00:00",
                     "commit": "abc1234",
                 },
-                {"step": "bad", "description": "Broken", "timestamp": 123, "commit": 7},
+                {
+                    "step": 2,
+                    "timestamp": "2026-04-28T00:01:00+00:00",
+                    "commit": "abc1234",
+                },
             ],
         }
         (tmp_path / "state.json").write_text(json.dumps(state))
