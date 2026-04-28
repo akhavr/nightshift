@@ -34,7 +34,8 @@ from host.watcher.issue_sync import process_outbox
 
 log = logging.getLogger("watcher")
 
-_ACTIVE_STATUSES = ("working", "starting", "waiting:answer")
+_ACTIVE_STATUSES = ("working", "starting", "running", "waiting:answer")
+_ACTIVE_ORPHAN_STATUSES = ("working", "starting", "running")
 
 # Directory containing the host package (host/)
 _HOST_DIR = Path(__file__).resolve().parent.parent
@@ -297,27 +298,39 @@ class SessionMonitor:
         if not self.sessions_dir.exists():
             return
 
-        now = time.time()
-        for session_dir, state in self.iter_session_states():
+        for session_dir, state in self._iter_runaway_session_states():
             sid = session_dir.name
-            if state.get("status") not in ("working", "starting"):
+            if state.get("status") not in _ACTIVE_ORPHAN_STATUSES:
                 self._alerted_runaway_sessions.discard(sid)
                 continue
-            self._check_session_for_runaway(session_dir, sid, state, now)
+            self._check_session_for_runaway(sid, state)
 
-    def _check_session_for_runaway(self, session_dir: Path, sid: str, state: dict, now: float):
+    def _iter_runaway_session_states(self) -> list[tuple[Path, dict]]:
+        """Read raw state.json files for runaway-resume detection."""
+        results: list[tuple[Path, dict]] = []
+        if not self.sessions_dir.exists():
+            return results
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            state_path = session_dir / "state.json"
+            if not state_path.exists():
+                continue
+
+            try:
+                state = read_state(session_dir, max_orphan_resumes=None)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"[{session_dir.name}] Failed to read state for runaway check: {e}")
+                continue
+
+            results.append((session_dir, state))
+
+        return results
+
+    def _check_session_for_runaway(self, sid: str, state: dict):
         """Check a single session for runaway orphan-resume behavior."""
-        try:
-            raw_state = json.loads((session_dir / "state.json").read_text())
-        except (json.JSONDecodeError, OSError) as e:
-            log.warning(f"[{sid}] Failed to read state for runaway check: {e}")
-            raw_state = state
-
-        if raw_state.get("status") not in ("working", "starting"):
-            self._alerted_runaway_sessions.discard(sid)
-            return
-
-        orphan_resumes = raw_state.get("orphan_resumes", 0)
+        orphan_resumes = state.get("orphan_resumes", 0)
         if orphan_resumes < RUNAWAY_RESUME_WARNING_THRESHOLD:
             self._alerted_runaway_sessions.discard(sid)
             return
@@ -390,7 +403,7 @@ class SessionMonitor:
                         f"reverting to 'waiting:review'")
             update_status(session_dir, "waiting:review")
             return
-        elif status not in ("working", "starting") and not review_waiting_for_container:
+        elif status not in _ACTIVE_ORPHAN_STATUSES and not review_waiting_for_container:
             return
 
         # Skip if recently launched (give it time to start)
@@ -804,7 +817,7 @@ class SessionMonitor:
             return
 
         status = state_mgr.status
-        if status not in ("working", "starting"):
+        if status not in _ACTIVE_ORPHAN_STATUSES:
             # Only check sessions that should be actively producing events
             return
 

@@ -30,6 +30,7 @@ COMPLETION_STATES: frozenset[str] = frozenset({
 
 STATES: frozenset[str] = frozenset({
     "starting",
+    "running",
     "working",
     "waiting:question",
     "waiting:review",
@@ -55,6 +56,7 @@ STATES: frozenset[str] = frozenset({
     "rejected",
     "closed",
     "error:merge-conflict",
+    "done",
 })
 
 TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
@@ -63,6 +65,7 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("working", "reviewing"),  # revert on failed revise launch
     # starting -> working (normal startup)
     ("starting", "working"),
+    ("running", "working"),
     # starting -> suspended states (early failures)
     ("starting", "suspended:auth-failure"),
     ("starting", "suspended:hook-failure"),

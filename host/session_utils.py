@@ -79,10 +79,16 @@ def sessions_dir(repo: Path | None = None) -> Path:
 
 # ── State I/O ────────────────────────────────────────────
 
-def read_state(session_dir: Path) -> dict:
-    """Read and parse state.json from a session directory."""
+def read_state(session_dir: Path, *, max_orphan_resumes: int | None = MAX_ORPHAN_RESUMES) -> dict:
+    """Read and parse state.json from a session directory.
+
+    By default, orphan resume counts above the hard auto-resume cap are
+    normalized to the default state value. Callers that need the raw count
+    for monitoring can pass ``max_orphan_resumes=None`` to preserve larger
+    values while still validating type/shape.
+    """
     raw_state = json.loads((session_dir / "state.json").read_text())
-    state, warnings = _validate_state(raw_state, max_orphan_resumes=MAX_ORPHAN_RESUMES)
+    state, warnings = _validate_state(raw_state, max_orphan_resumes=max_orphan_resumes)
     if warnings:
         log.warning(
             "Validated state.json in %s with issues: %s",
@@ -261,7 +267,7 @@ def _issue_id_prefix_match(issue_id: str, existing_ids: set[str]) -> bool:
 # ── Safe worktree prune (WT-6) ──────────────────────────
 
 # Session statuses that indicate active work (should not prune while these exist)
-ACTIVE_STATUSES = {"working", "starting", "reviewing"}
+ACTIVE_STATUSES = {"working", "starting", "running", "reviewing"}
 
 
 def get_active_session_ids(repo: Path) -> list[str]:

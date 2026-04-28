@@ -201,3 +201,109 @@ class TestOverflowProfileResolution:
 
                 # resolve_overflow_config should NOT be called when overflow not active
                 mock_resolve.assert_not_called()
+
+    @patch("entrypoint.load_workflow")
+    @patch("entrypoint._create_adapters")
+    @patch("entrypoint.search_related_issues")
+    @patch("entrypoint.SessionRunner")
+    def test_runner_uses_overflow_signal_method_when_set(
+        self, mock_runner, mock_search, mock_adapters, mock_load
+    ):
+        """SessionRunner should receive overflow.signal_method when the profile sets one."""
+        from core.config.models import WorkflowConfig, AgentConfig, OverflowConfig
+
+        config = WorkflowConfig(
+            agent=AgentConfig(kind="claude-code", signal_method="text"),
+            overflow=OverflowConfig(signal_method="file"),
+        )
+        mock_load.return_value = config
+
+        mock_tracker = MagicMock()
+        mock_issue = MagicMock()
+        mock_issue.identifier = "test-123"
+        mock_tracker.get_issue.return_value = mock_issue
+        mock_tracker.list_issues.return_value = []
+
+        mock_state_mgr = MagicMock()
+        mock_state = MagicMock()
+        mock_state.step = 0
+        mock_state_mgr.load_state.return_value = mock_state
+        mock_state_mgr.read_resume_prompt.return_value = None
+
+        mock_notifier = MagicMock()
+        mock_adapters.return_value = (
+            mock_tracker,
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            mock_state_mgr,
+            mock_notifier,
+        )
+        mock_search.return_value = ""
+
+        with patch.dict(os.environ, {
+            "ISSUE_ID": "test-123",
+            "OVERFLOW_ACTIVE": "1",
+        }, clear=False):
+            os.environ.pop("OVERFLOW_PROFILE", None)
+
+            with patch("entrypoint.resolve_overflow_config") as mock_resolve:
+                mock_resolve.return_value = config.overflow
+
+                from entrypoint import main
+                main()
+
+        assert mock_runner.call_args.kwargs["signal_method"] == "file"
+
+    @patch("entrypoint.load_workflow")
+    @patch("entrypoint._create_adapters")
+    @patch("entrypoint.search_related_issues")
+    @patch("entrypoint.SessionRunner")
+    def test_runner_falls_back_to_agent_signal_method_when_overflow_missing(
+        self, mock_runner, mock_search, mock_adapters, mock_load
+    ):
+        """SessionRunner should use config.agent.signal_method when overflow does not set one."""
+        from core.config.models import WorkflowConfig, AgentConfig, OverflowConfig
+
+        config = WorkflowConfig(
+            agent=AgentConfig(kind="claude-code", signal_method="text"),
+            overflow=OverflowConfig(),
+        )
+        mock_load.return_value = config
+
+        mock_tracker = MagicMock()
+        mock_issue = MagicMock()
+        mock_issue.identifier = "test-123"
+        mock_tracker.get_issue.return_value = mock_issue
+        mock_tracker.list_issues.return_value = []
+
+        mock_state_mgr = MagicMock()
+        mock_state = MagicMock()
+        mock_state.step = 0
+        mock_state_mgr.load_state.return_value = mock_state
+        mock_state_mgr.read_resume_prompt.return_value = None
+
+        mock_notifier = MagicMock()
+        mock_adapters.return_value = (
+            mock_tracker,
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            mock_state_mgr,
+            mock_notifier,
+        )
+        mock_search.return_value = ""
+
+        with patch.dict(os.environ, {
+            "ISSUE_ID": "test-123",
+            "OVERFLOW_ACTIVE": "1",
+        }, clear=False):
+            os.environ.pop("OVERFLOW_PROFILE", None)
+
+            with patch("entrypoint.resolve_overflow_config") as mock_resolve:
+                mock_resolve.return_value = config.overflow
+
+                from entrypoint import main
+                main()
+
+        assert mock_runner.call_args.kwargs["signal_method"] == "text"
