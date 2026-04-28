@@ -12,6 +12,7 @@ def test_load_profiles_from_file(tmp_path, monkeypatch):
     (profiles_dir / "profiles.yaml").write_text("""\
 codex-gpt54:
   agent_kind: codex
+  skip_oauth: true
   env:
     CODEX_MODEL: gpt-5.4
 opencode-gpt54mini:
@@ -27,6 +28,7 @@ opencode-gpt54mini:
     profiles = load_profiles(tmp_path)
 
     assert profiles["codex-gpt54"].agent_kind == "codex"
+    assert profiles["codex-gpt54"].skip_oauth is True
     assert profiles["codex-gpt54"].env["CODEX_MODEL"] == "gpt-5.4"
     assert profiles["opencode-gpt54mini"].extra_args == ["-m", "openai/gpt-5.4-mini"]
     assert profiles["opencode-gpt54mini"].env["OPENAI_API_KEY"] == "sk-openai"

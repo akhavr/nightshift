@@ -84,7 +84,7 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
     """
     # Determine which vars to exclude (Codex OAuth takes precedence over API keys)
     exclude_vars: set[str] = set()
-    if agent_kind == "codex" and _codex_oauth_present():
+    if agent_kind == "codex" and _codex_oauth_present() and not (overflow and overflow.skip_oauth):
         exclude_vars = _CODEX_OAUTH_EXCLUDES
         logger.info("Codex OAuth detected; excluding API keys from env passthrough")
 

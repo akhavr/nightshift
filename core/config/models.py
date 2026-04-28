@@ -76,6 +76,8 @@ class OverflowProfile:
     extra_args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     prompt_snippet: str | None = None
+    # When true, keep API keys in the container even if Codex OAuth is present.
+    skip_oauth: bool = False
     # Path to litellm-config.yaml for proxy-based model remapping
     litellm_config: str | None = None
     # Optional provider pricing for agents that emit tokens without cost.

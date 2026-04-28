@@ -6,12 +6,14 @@ codex:
 
 codex-gpt54:
   agent_kind: codex
+  skip_oauth: true
   env:
     CODEX_MODEL: gpt-5.4
     CODEX_API_KEY: $OPENAI_API_KEY
 
 codex-gpt54mini:
   agent_kind: codex
+  skip_oauth: true
   env:
     CODEX_MODEL: gpt-5.4-mini
     CODEX_API_KEY: $OPENAI_API_KEY
