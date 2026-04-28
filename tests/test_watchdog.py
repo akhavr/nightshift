@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
+import requests
 
 
 def _write_registration(projects_d: Path, name: str, *, path: Path, log: Path, pid: int) -> Path:
@@ -74,7 +73,7 @@ def test_detects_stale_log(tmp_path):
     assert anomalies[0].type == "stale_log"
 
 
-def test_detects_error_threshold(tmp_path):
+def test_detects_error_threshold():
     from host.watchdog import rules
 
     lines = [
@@ -90,7 +89,7 @@ def test_detects_error_threshold(tmp_path):
     assert any(a.type == "error_threshold" for a in anomalies)
 
 
-def test_detects_repeated_errors(tmp_path):
+def test_detects_repeated_errors():
     from host.watchdog import rules
 
     lines = [
@@ -164,6 +163,34 @@ def test_llm_provider_none_skips(monkeypatch):
     analyze.assert_not_called()
 
 
+def test_llm_analysis_failure_returns_empty(monkeypatch):
+    from host.watchdog import llm
+
+    def boom(*args, **kwargs):
+        raise FileNotFoundError("ollama missing")
+
+    monkeypatch.setattr(llm, "_ollama", boom)
+
+    result = llm.analyze("snippet", provider="ollama", model="phi3:mini", api_key="")
+
+    assert result == ""
+
+
+def test_llm_openrouter_failure_returns_empty(monkeypatch):
+    from host.watchdog import llm
+
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: (_ for _ in ()).throw(ValueError("bad json")),
+    )
+    post = MagicMock(return_value=response)
+    monkeypatch.setattr(llm.requests, "post", post)
+
+    result = llm.analyze("prompt", provider="openrouter", model="m", api_key="key")
+
+    assert result == ""
+
+
 def test_notify_telegram(monkeypatch):
     from host.watchdog import notify
 
@@ -184,7 +211,26 @@ def test_notify_telegram(monkeypatch):
     assert "project-a" in kwargs["json"]["text"]
 
 
-def test_config_loading(tmp_path, monkeypatch):
+def test_notify_failure_returns_false(monkeypatch):
+    from host.watchdog import notify
+
+    def boom(*args, **kwargs):
+        raise requests.RequestException("network down")
+
+    monkeypatch.setattr(notify.requests, "post", boom)
+
+    config = notify.WatchdogConfig(
+        notify=notify.NotifyConfig(
+            telegram=notify.TelegramNotifyConfig(token="tok", chat_id="42")
+        )
+    )
+
+    sent = notify.send_alert("project-a", [notify.Anomaly("error_threshold", "too many errors", "")], "summary", config)
+
+    assert sent is False
+
+
+def test_config_loading(tmp_path):
     from host.watchdog import config
 
     cfg_file = tmp_path / "watchdog.yaml"
