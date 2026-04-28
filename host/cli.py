@@ -1098,6 +1098,13 @@ def cmd_reject(a):
     """Discard agent work: remove worktree, branch, and session."""
     r = repo_root()
     sid = resolve_session(a.issue_id)
+    current_state = read_state(r / ".nightshift" / "sessions" / sid).get("status", "")
+    if current_state == "starting":
+        print(
+            f"Cannot transition session '{sid[:12]}' to 'rejected': already in state '{current_state}'",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     _validate_transition(sid, "rejected")
     config = load_workflow(_resolve_workflow(a))
     branch = f"agent/{sid}"
