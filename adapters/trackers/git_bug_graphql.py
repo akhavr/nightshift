@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import socket
 import subprocess
@@ -237,6 +238,62 @@ class GitBugGraphQLTracker:
         mutation = _STATUS_CLOSE_MUTATION if status == "closed" else _STATUS_OPEN_MUTATION
         self._query(mutation, {"id": self._short(issue_id)})
 
+    def _show_issue(self, issue_id: str, fmt: str | None) -> str:
+        """Fetch and format an issue for 'bug show' output."""
+        data = self._query(_GET_ISSUE_QUERY, {"id": self._short(issue_id)})
+        bug = data.get("repository", {}).get("bug")
+        if not bug:
+            return f"bug {issue_id} not found"
+
+        if fmt == "json":
+            return self._format_issue_json(bug)
+        return self._format_issue_default(bug)
+
+    def _format_issue_json(self, bug: dict[str, Any]) -> str:
+        """Format issue as JSON for 'bug show -f json'."""
+        comments = _connection_nodes(bug.get("comments"))
+        return json.dumps({
+            "id": bug.get("id", ""),
+            "title": bug.get("title", ""),
+            "status": str(bug.get("status", "")).lower(),
+            "createdAt": bug.get("createdAt"),
+            "lastEdit": bug.get("lastEdit"),
+            "labels": _label_names(bug.get("labels")),
+            "comments": [
+                {
+                    "author": _author_name(c.get("author")),
+                    "message": c.get("message", ""),
+                }
+                for c in comments
+            ],
+        })
+
+    def _format_issue_default(self, bug: dict[str, Any]) -> str:
+        """Format issue as human-readable text for 'bug show'."""
+        issue_id = bug.get("id", "")
+        title = bug.get("title", "Unknown")
+        status = str(bug.get("status", "unknown")).lower()
+        labels = _label_names(bug.get("labels"))
+        comments = _connection_nodes(bug.get("comments"))
+
+        lines = [
+            f"bug {issue_id[:SHORT_ID_LEN]}",
+            f"Title: {title}",
+            f"Status: {status}",
+        ]
+        if labels:
+            lines.append(f"Labels: {', '.join(labels)}")
+        lines.append("")
+
+        for i, c in enumerate(comments):
+            author = _author_name(c.get("author"))
+            message = c.get("message", "")
+            lines.append(f"#{i} {author}")
+            lines.append(message)
+            lines.append("")
+
+        return "\n".join(lines).strip()
+
     def sync(self) -> None:
         """No-op: git-bug webui does not expose pull/push operations."""
         return None
@@ -292,6 +349,8 @@ class GitBugGraphQLTracker:
             elif method == "set_status":
                 self.set_status(*method_args)
                 return ""
+            elif method == "show_issue":
+                return self._show_issue(*method_args)
         except Exception as e:
             log.warning("GraphQL mutation failed for %s: %s", args, e)
             return ""
@@ -314,13 +373,13 @@ class GitBugGraphQLTracker:
         if cmd == "comment" and len(rest) >= 4:
             if rest[0] == "new":
                 issue_id = rest[1]
-                message = self._extract_message_arg(rest[2:])
+                message = self._extract_arg(rest[2:], ("-m", "--message"))
                 if message is not None:
                     return ("add_comment", (issue_id, message))
 
         elif cmd == "add":
-            title = self._extract_title_arg(rest)
-            message = self._extract_message_arg(rest)
+            title = self._extract_arg(rest, ("-t", "--title"))
+            message = self._extract_arg(rest, ("-m", "--message"))
             if title is not None and message is not None:
                 return ("create_issue", (title, message))
 
@@ -336,21 +395,18 @@ class GitBugGraphQLTracker:
             elif rest[0] == "open":
                 return ("set_status", (rest[1], "open"))
 
+        elif cmd == "show" and len(rest) >= 1:
+            issue_id = rest[0]
+            fmt = self._extract_arg(rest[1:], ("-f", "--format"))
+            return ("show_issue", (issue_id, fmt))
+
         return None
 
     @staticmethod
-    def _extract_message_arg(args: tuple[str, ...]) -> str | None:
-        """Extract -m/--message argument value from args."""
+    def _extract_arg(args: tuple[str, ...], flags: tuple[str, ...]) -> str | None:
+        """Extract argument value for given flags from args."""
         for i, arg in enumerate(args):
-            if arg in ("-m", "--message") and i + 1 < len(args):
-                return args[i + 1]
-        return None
-
-    @staticmethod
-    def _extract_title_arg(args: tuple[str, ...]) -> str | None:
-        """Extract -t/--title argument value from args."""
-        for i, arg in enumerate(args):
-            if arg in ("-t", "--title") and i + 1 < len(args):
+            if arg in flags and i + 1 < len(args):
                 return args[i + 1]
         return None
 
