@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -40,22 +40,6 @@ def write_state(session_dir, status="waiting:review", checkpoints=None, human_an
     (session_dir / "state.json").write_text(json.dumps(state))
 
 
-def _mock_git_run(cmd, status_stdout="", diff_stdout="", fsck_stdout="", commit_returncode=0):
-    """Return a subprocess result tailored to the git command under test."""
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    if cmd[:3] == ["git", "status", "--porcelain"]:
-        result.stdout = status_stdout
-    elif len(cmd) >= 4 and cmd[:2] == ["git", "--git-dir"] and cmd[3] == "fsck":
-        result.stdout = fsck_stdout
-    elif cmd[:2] == ["git", "diff"]:
-        result.stdout = diff_stdout
-    elif cmd[:2] == ["git", "add"]:
-        result.stdout = ""
-    elif cmd[:2] == ["git", "commit"]:
-        result.returncode = commit_returncode
-    return result
-
-
 def test_posts_comment_on_waiting_review(session_dir, mock_config, tmp_path):
     """_post_container should post proof-of-work when status is waiting:review."""
     write_state(session_dir, status="waiting:review", checkpoints=[
@@ -67,11 +51,8 @@ def test_posts_comment_on_waiting_review(session_dir, mock_config, tmp_path):
 
     with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run") as mock_run:
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-            diff_stdout=" file.py | 10 ++++\n 1 file changed",
-        )
+        # Mock git diff --stat
+        mock_run.return_value = MagicMock(returncode=0, stdout=" file.py | 10 ++++\n 1 file changed")
 
         _post_container(session_dir, mock_config, tmp_path, "test-001")
 
@@ -115,11 +96,7 @@ def test_includes_diff_stat(session_dir, mock_config, tmp_path):
 
     with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run") as mock_run:
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-            diff_stdout=diff_output,
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=diff_output)
 
         _post_container(session_dir, mock_config, tmp_path, "test-001")
 
@@ -136,10 +113,7 @@ def test_handles_no_checkpoints(session_dir, mock_config, tmp_path):
 
     with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
          patch("subprocess.run") as mock_run:
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
 
         _post_container(session_dir, mock_config, tmp_path, "test-001")
 
@@ -184,11 +158,7 @@ def test_review_session_logs_usage(session_dir, mock_config, tmp_path):
     _write_state_with_usage(session_dir, status="waiting:review")
 
     with patch("host.launch.get_tracker_with_fallback", return_value=MagicMock()), \
-         patch("subprocess.run") as mock_run:
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-        )
+         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
         _post_container(session_dir, mock_config, tmp_path, "test-001", step="review")
 
     usage_file = tmp_path / ".nightshift" / "usage.jsonl"
@@ -209,12 +179,7 @@ def test_failed_session_logs_usage(session_dir, mock_config, tmp_path):
 
         _write_state_with_usage(session_dir, status=status)
 
-        with patch("host.launch.subprocess.run") as mock_run:
-            mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-                cmd,
-                status_stdout="",
-            )
-            _post_container(session_dir, mock_config, tmp_path, "test-001")
+        _post_container(session_dir, mock_config, tmp_path, "test-001")
 
         assert usage_file.exists(), f"Usage not logged for {status}"
         entry = json.loads(usage_file.read_text().strip())
@@ -226,61 +191,10 @@ def test_no_double_logging(session_dir, mock_config, tmp_path):
     _write_state_with_usage(session_dir, status="waiting:review")
 
     with patch("host.launch.get_tracker_with_fallback", return_value=MagicMock()), \
-         patch("subprocess.run") as mock_run:
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-        )
+         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
         _post_container(session_dir, mock_config, tmp_path, "test-001")
         _post_container(session_dir, mock_config, tmp_path, "test-001")
 
     usage_file = tmp_path / ".nightshift" / "usage.jsonl"
     lines = [l for l in usage_file.read_text().strip().split("\n") if l]
     assert len(lines) == 1, f"Expected 1 entry, got {len(lines)}"
-
-
-def test_uncommitted_changes_auto_committed(session_dir, mock_config, tmp_path):
-    """Dirty worktree changes should be staged and committed before review."""
-    write_state(session_dir, status="waiting:review")
-
-    mock_tracker = MagicMock()
-    dirty_status = " M file.py\n?? new_file.py\n"
-    diff_output = " file.py | 2 ++\n new_file.py | 1 +\n 2 files changed, 3 insertions(+)"
-
-    with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
-         patch("subprocess.run") as mock_run:
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout=dirty_status,
-            diff_stdout=diff_output,
-        )
-
-        _post_container(session_dir, mock_config, tmp_path, "test-001")
-
-    commands = [call.args[0] for call in mock_run.call_args_list]
-    assert ["git", "status", "--porcelain"] in commands
-    assert ["git", "add", "-A"] in commands
-    assert any(cmd[:2] == ["git", "commit"] for cmd in commands)
-
-
-def test_clean_worktree_no_auto_commit(session_dir, mock_config, tmp_path):
-    """A clean worktree should not trigger the auto-commit guardrail."""
-    write_state(session_dir, status="waiting:review")
-
-    mock_tracker = MagicMock()
-    diff_output = " file.py | 1 +\n 1 file changed"
-
-    with patch("host.launch.get_tracker_with_fallback", return_value=mock_tracker), \
-         patch("subprocess.run") as mock_run:
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-            diff_stdout=diff_output,
-        )
-
-        _post_container(session_dir, mock_config, tmp_path, "test-001")
-
-    commands = [call.args[0] for call in mock_run.call_args_list]
-    assert ["git", "status", "--porcelain"] in commands
-    assert not any(cmd[:2] == ["git", "add"] for cmd in commands)
-    assert not any(cmd[:2] == ["git", "commit"] for cmd in commands)

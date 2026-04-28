@@ -1166,40 +1166,37 @@ class TestFileSignals:
         runner, *_ = _make_runner(tmp_path)
         assert runner._check_file_signals() is None
 
-    def test_file_signal_done_becomes_event(self, tmp_path):
-        """When /session/signal/done exists, SessionRunner yields a DONE AgentEvent and deletes the file."""
+    def test_file_signal_done_detected(self, tmp_path):
+        """When /session/signal/done exists, SessionRunner detects DONE signal and deletes the file."""
         runner, *_ = _make_runner(tmp_path)
         signal_dir = tmp_path / "session" / "signal"
         done_file = signal_dir / "done"
         done_file.write_text("")
 
-        ev = runner._check_file_signals()
-        assert ev.type == AgentEventType.DONE
-        assert ev.content == ""
+        result = runner._check_file_signals()
+        assert result == "DONE"
         assert not done_file.exists(), "done file should be deleted after detection"
 
-    def test_file_signal_checkpoint_becomes_event(self, tmp_path):
-        """When /session/signal/checkpoint exists with text content, SessionRunner yields a CHECKPOINT AgentEvent."""
+    def test_file_signal_checkpoint_detected(self, tmp_path):
+        """When /session/signal/checkpoint exists with text content, SessionRunner detects CHECKPOINT signal."""
         runner, *_ = _make_runner(tmp_path)
         signal_dir = tmp_path / "session" / "signal"
         checkpoint_file = signal_dir / "checkpoint"
         checkpoint_file.write_text("All tests passing")
 
-        ev = runner._check_file_signals()
-        assert ev.type == AgentEventType.CHECKPOINT
-        assert ev.content == "All tests passing"
+        result = runner._check_file_signals()
+        assert result == ("CHECKPOINT", "All tests passing")
         assert not checkpoint_file.exists(), "checkpoint file should be deleted after detection"
 
-    def test_file_signal_question_becomes_event(self, tmp_path):
-        """When /session/signal/question.json exists with JSON, SessionRunner yields a QUESTION AgentEvent."""
+    def test_file_signal_question_detected(self, tmp_path):
+        """When /session/signal/question.json exists with JSON, SessionRunner detects QUESTION signal."""
         runner, *_ = _make_runner(tmp_path)
         signal_dir = tmp_path / "session" / "signal"
         question_file = signal_dir / "question.json"
         question_file.write_text(json.dumps({"question": "what?"}))
 
-        ev = runner._check_file_signals()
-        assert ev.type == AgentEventType.QUESTION
-        assert ev.content == "what?"
+        result = runner._check_file_signals()
+        assert result == ("QUESTION", "what?")
         assert not question_file.exists(), "question file should be deleted after detection"
 
     def test_file_signal_done_in_event_loop(self, tmp_path):

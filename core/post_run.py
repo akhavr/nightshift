@@ -168,7 +168,8 @@ def notify_done(
     state,
 ):
     """Post proof-of-work summary and notify."""
-    state_mgr.mark_done("waiting:review")
+    state_mgr.update_status("waiting:review")
+    state_mgr.mark_completed()
     # Re-read state to get latest usage (accumulated during session)
     current_state = state_mgr.load_state()
     diff = workspace_mgr.diff_stat(workspace.path) if workspace else "N/A"

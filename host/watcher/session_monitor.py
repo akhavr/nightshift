@@ -2,10 +2,8 @@
 
 import json
 import logging
-import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from host.constants import (
@@ -13,17 +11,10 @@ from host.constants import (
     MAX_ORPHAN_RESUMES, AUTH_RETRY_INTERVAL_S, MAX_AUTH_RETRIES,
     PROVIDER_OUTAGE_RETRY_INTERVAL_S, MAX_PROVIDER_OUTAGE_RETRIES,
     REVIEW_SESSION_PREFIX, LAUNCH_GRACE_PERIOD_S,
-    ZOMBIE_CHECK_INTERVAL_S, ZOMBIE_TIMEOUT_MULTIPLIER, DEFAULT_STALL_TIMEOUT_S,
-    BLOCKED_LABEL_PREFIX, REVISE_PENDING_FILENAME,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
-from core.state import StateManager
-from host.session_utils import (
-    read_state, update_status, _issue_id_prefix_match,
-    archive_session,
-    increment_orphan_resumes, update_state_fields,
-)
+from host.session_utils import read_state, write_state, update_status, _issue_id_prefix_match
 from core.config import load_workflow
 from host.watcher.lifecycle_comments import post_start, post_resume, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
@@ -35,96 +26,12 @@ _ACTIVE_STATUSES = ("working", "starting", "waiting:answer")
 
 # Directory containing the host package (host/)
 _HOST_DIR = Path(__file__).resolve().parent.parent
-REVIEW_CLEANUP_GRACE_PERIOD_S = 60
-
-
-def is_blocked(labels: list[str]) -> bool:
-    """Check if issue has any blocked:<id> labels."""
-    return any(l.startswith(BLOCKED_LABEL_PREFIX) for l in labels)
 
 
 def _pkg():
     """Lazy import of host.watcher package for test-patchable names."""
     import host.watcher as _w
     return _w
-
-
-def _parse_completed_at(timestamp: str) -> float | None:
-    """Parse a completed_at timestamp into a unix epoch seconds value."""
-    if not timestamp:
-        return None
-    try:
-        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.timestamp()
-    except ValueError:
-        return None
-
-
-def cleanup_completed_review_session(review_dir: Path, coder_dir: Path | None = None,
-                                     *, repo_dir: Path | None = None,
-                                     workflow_path: Path | None = None,
-                                     grace_period_s: int = REVIEW_CLEANUP_GRACE_PERIOD_S) -> bool:
-    """Archive and remove a completed review session once the coder has moved on.
-
-    Returns True when the review session was archived and cleaned up.
-    """
-    if not review_dir.exists() or not (review_dir / "state.json").exists():
-        return False
-
-    review_sid = review_dir.name
-    if not review_sid.startswith(REVIEW_SESSION_PREFIX):
-        return False
-
-    try:
-        review_state = read_state(review_dir)
-    except (json.JSONDecodeError, OSError) as e:
-        log.warning(f"[{review_sid}] Failed to read review state for cleanup: {e}")
-        return False
-
-    completed_at = _parse_completed_at(review_state.get("completed_at", ""))
-    if completed_at is None:
-        return False
-    if time.time() - completed_at < grace_period_s:
-        return False
-
-    coder_sid = review_sid[len(REVIEW_SESSION_PREFIX):]
-    if coder_dir is None:
-        coder_dir = review_dir.parent / coder_sid
-    if not coder_dir.exists() or not (coder_dir / "state.json").exists():
-        return False
-
-    try:
-        coder_state = read_state(coder_dir)
-    except (json.JSONDecodeError, OSError) as e:
-        log.warning(f"[{coder_sid}] Failed to read coder state for review cleanup: {e}")
-        return False
-
-    if coder_state.get("status") == "waiting:review":
-        return False
-
-    if repo_dir is None:
-        try:
-            repo_dir = review_dir.parents[2]
-        except IndexError:
-            return False
-
-    if workflow_path is None:
-        workflow_path = repo_dir / "WORKFLOW.md"
-
-    review_md = repo_dir / "REVIEW.md"
-    try:
-        config = load_workflow(review_md) if review_md.exists() else load_workflow(workflow_path)
-        worktree = repo_dir / config.workspace.root / f"{REVIEW_SESSION_PREFIX}{coder_sid}"
-        archive_session(review_dir, repo_dir)
-        _pkg().remove_worktree(repo_dir, worktree, f"review/{coder_sid}")
-        _pkg().shutil.rmtree(review_dir, ignore_errors=True)
-        log.info(f"[{review_sid}] Archived and cleaned up completed review session")
-        return True
-    except Exception as e:
-        log.error(f"[{review_sid}] Failed to clean up completed review session: {e}")
-        return False
 
 
 class SessionMonitor:
@@ -150,9 +57,6 @@ class SessionMonitor:
         self._last_auto_start_poll = 0.0
         self._last_auth_retry_check = 0.0
         self._last_provider_outage_check = 0.0
-        self._last_zombie_check = 0.0
-        self._last_review_cleanup_check = 0.0
-        self._alerted_zombies: set[str] = set()  # Avoid duplicate alerts
 
     def cleanup_stale_review_sessions(self):
         """Clean up review sessions with completed_at set but not yet cleaned up.
@@ -206,64 +110,6 @@ class SessionMonitor:
             if self._review_orchestrator:
                 self._review_orchestrator.cleanup_review_session(sid, session_dir)
 
-    def cleanup_completed_review_sessions(self):
-        """Clean up completed review sessions after the verdict has been processed."""
-        if not self.sessions_dir.exists():
-            return False
-
-        cleaned_any = False
-        for session_dir in self.sessions_dir.iterdir():
-            if not session_dir.is_dir():
-                continue
-            sid = session_dir.name
-            if not sid.startswith(REVIEW_SESSION_PREFIX):
-                continue
-            if not (session_dir / "state.json").exists():
-                continue
-            cleaned = cleanup_completed_review_session(
-                session_dir,
-                self.sessions_dir / sid[len(REVIEW_SESSION_PREFIX):],
-                repo_dir=self.repo_dir,
-                workflow_path=self.workflow_path,
-            )
-            cleaned_any = cleaned_any or cleaned
-        return cleaned_any
-
-    def cleanup_stale_blocked_labels(self):
-        """Remove blocked:<id> labels where the blocking issue is already closed.
-
-        Called on watcher startup to handle stale labels from watcher downtime.
-        """
-        try:
-            tracker = self._get_tracker()
-            all_issues = tracker.list_issues()  # Both open and closed
-        except Exception as e:
-            log.warning(f"Stale blocked cleanup: tracker poll failed: {e}")
-            return
-
-        # Build set of closed issue ID prefixes
-        closed_prefixes: set[str] = {
-            i.id[:SHORT_ID_LEN] for i in all_issues if i.status == "closed"
-        }
-
-        # Scan open issues for stale blocked labels
-        for issue in all_issues:
-            if issue.status != "open":
-                continue
-
-            for label in issue.labels:
-                if not label.startswith(BLOCKED_LABEL_PREFIX):
-                    continue
-
-                blocker_id = label[len(BLOCKED_LABEL_PREFIX):]
-                if blocker_id in closed_prefixes:
-                    try:
-                        tracker.remove_label(issue.id, label)
-                        log.info(f"Unblocked {issue.identifier}: removed stale {label}")
-                    except Exception as e:
-                        log.warning(f"Failed to remove stale label {label} from "
-                                    f"{issue.identifier}: {e}")
-
     def check_orphaned_sessions(self):
         """Detect sessions with status 'working' but no running container -- auto-resume."""
         now = time.time()
@@ -282,26 +128,21 @@ class SessionMonitor:
                 continue
             self.maybe_resume_orphan(session_dir, sid, now)
 
-        if now - self._last_review_cleanup_check >= REVIEW_POLL_INTERVAL_S:
-            self._last_review_cleanup_check = now
-            self.cleanup_completed_review_sessions()
-
     def maybe_resume_orphan(self, session_dir: Path, sid: str, now: float):
         """Check a single session and auto-resume if orphaned."""
         try:
-            state_mgr = StateManager(session_dir)
-            session_state = state_mgr.load_state()
+            state = read_state(session_dir)
         except (json.JSONDecodeError, OSError) as e:
             log.warning(f"[{sid}] Failed to read state for orphan check: {e}")
             return
 
-        status = state_mgr.status
+        status = state.get("status")
         is_review_session = sid.startswith(REVIEW_SESSION_PREFIX)
 
         # Any session with completed_at already finished normally. The
         # container may have exited before the watcher observed the final
         # status transition, so it must not be treated as an orphan.
-        if session_state.completed_at:
+        if state.get("completed_at"):
             return
 
         # Review sessions in waiting:review with no container are orphaned
@@ -331,11 +172,6 @@ class SessionMonitor:
             if self._try_recover_review_verdict(sid, session_dir, review_sid):
                 return  # verdict recovered and applied
 
-            # Check for revise-pending marker (failed revise launch after review)
-            issue_id = session_state.issue_id
-            if issue_id and self._retry_revise_if_pending(session_dir, sid, issue_id):
-                return
-
             log.warning(f"[{sid}] Stuck in 'reviewing' with no review container — "
                         f"reverting to 'waiting:review'")
             update_status(session_dir, "waiting:review")
@@ -354,13 +190,8 @@ class SessionMonitor:
         if _pkg().docker_container_status(container) in ("running", "paused"):
             return
 
-        issue_id = session_state.issue_id
+        issue_id = state.get("issue_id", "")
         if not issue_id:
-            return
-
-        # Check for revise-pending marker (failed revise launch) — retry before
-        # checking done signals, otherwise the session gets stuck in done:pending-review
-        if self._retry_revise_if_pending(session_dir, sid, issue_id):
             return
 
         # Check if session actually completed (@@DONE@@ in conversation or
@@ -370,28 +201,19 @@ class SessionMonitor:
         if self._check_done_signals(session_dir, sid):
             return
 
-        # Verify the agent branch still exists before attempting resume
-        if not self._verify_branch_exists(session_state):
-            log.warning(f"[{sid}] Branch missing — suspending session")
-            update_state_fields(session_dir, status="suspended:branch-missing")
-            self.telegram.notify(
-                f"🔀 `{sid}` branch missing — session suspended. "
-                f"Recreate the branch and `nightshift resume`.",
-                level=NotificationLevel.ACTIONS)
-            return
-
-        orphan_resumes = session_state.orphan_resumes
+        orphan_resumes = state.get("orphan_resumes", 0)
         if orphan_resumes >= MAX_ORPHAN_RESUMES:
             if is_review_session:
-                self._handle_review_orphan_limit(sid, session_dir, issue_id)
+                self._handle_review_orphan_limit(sid, session_dir, state, issue_id)
             else:
-                self._handle_coder_orphan_limit(sid, session_dir, issue_id)
+                self._handle_coder_orphan_limit(sid, session_dir, state, issue_id)
             return
 
-        new_count = increment_orphan_resumes(session_dir)
+        state["orphan_resumes"] = orphan_resumes + 1
+        write_state(session_dir, state)
 
-        log.info(f"[{sid}] Orphaned session (container gone, status: {status}, "
-                 f"orphan_resume {new_count}/{MAX_ORPHAN_RESUMES}). Auto-resuming.")
+        log.info(f"[{sid}] Orphaned session (container gone, status: {state['status']}, "
+                 f"orphan_resume {orphan_resumes + 1}/{MAX_ORPHAN_RESUMES}). Auto-resuming.")
         self._recently_launched[sid] = time.time()
 
         session_dir = self.sessions_dir / sid
@@ -429,45 +251,6 @@ class SessionMonitor:
             return True
 
         return False
-
-    def _retry_revise_if_pending(self, session_dir: Path, sid: str, issue_id: str) -> bool:
-        """Check for revise-pending marker and retry the revise launch.
-
-        When a revise launch fails (e.g., due to cp -a failure under concurrent
-        git operations), a marker file is written so we can retry later. This
-        prevents the session from getting stuck in done:pending-review.
-
-        Returns True if a retry was attempted (regardless of success), False
-        if no marker exists.
-        """
-        marker = session_dir / REVISE_PENDING_FILENAME
-        if not marker.exists():
-            return False
-
-        try:
-            marker_data = json.loads(marker.read_text())
-        except (json.JSONDecodeError, OSError) as e:
-            log.warning(f"[{sid}] Failed to read revise-pending marker: {e}")
-            marker.unlink(missing_ok=True)
-            return False
-
-        review_dir = Path(marker_data.get("review_dir", ""))
-        log.info(f"[{sid}] Found revise-pending marker (from review {review_dir.name}) — retrying launch")
-
-        cmd = [
-            sys.executable,
-            str(_HOST_DIR / "launch.py"),
-            issue_id, "--resume",
-        ]
-        if self._launch_background(cmd, sid):
-            log.info(f"[{sid}] Revise retry launch succeeded — removing marker")
-            marker.unlink(missing_ok=True)
-            self._recently_launched[sid] = time.time()
-            update_status(session_dir, "working")
-        else:
-            log.warning(f"[{sid}] Revise retry launch failed — keeping marker for next attempt")
-
-        return True
 
     def _try_recover_review_verdict(self, coder_sid: str, coder_dir: Path,
                                     review_sid: str) -> bool:
@@ -525,11 +308,12 @@ class SessionMonitor:
         return True
 
     def _handle_coder_orphan_limit(self, sid: str, session_dir: Path,
-                                    issue_id: str):
+                                    state: dict, issue_id: str):
         """Suspend a coder session as too-complex after hitting the orphan limit."""
         log.error(f"[{sid}] Hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
                   f"Task may be too complex — stopping.")
-        update_state_fields(session_dir, status="suspended:too-complex")
+        state["status"] = "suspended:too-complex"
+        write_state(session_dir, state)
         try:
             tracker = self._get_tracker()
             tracker.add_comment(issue_id,
@@ -545,12 +329,13 @@ class SessionMonitor:
             level=NotificationLevel.ACTIONS)
 
     def _handle_review_orphan_limit(self, sid: str, session_dir: Path,
-                                     issue_id: str):
+                                     state: dict, issue_id: str):
         """Handle a review session that hit the orphan limit: fail and fall back to human review."""
         coder_sid = sid[len(REVIEW_SESSION_PREFIX):]
         log.error(f"[{sid}] Review session hit max orphan resumes ({MAX_ORPHAN_RESUMES}). "
                   f"Falling back to human review for coder session {coder_sid}.")
-        update_state_fields(session_dir, status="suspended:review-failed")
+        state["status"] = "suspended:review-failed"
+        write_state(session_dir, state)
 
         # Transition coder session to waiting:human-review
         coder_dir = self.sessions_dir / coder_sid
@@ -572,31 +357,6 @@ class SessionMonitor:
             f"falling back to human review.\n"
             f"`nightshift accept/reject/revise {issue_id}`",
             level=NotificationLevel.ACTIONS)
-
-    def _verify_branch_exists(self, session_state) -> bool:
-        """Verify the agent branch exists before resuming.
-
-        Args:
-            session_state: SessionState dataclass or dict with branch/issue_id fields.
-
-        Returns True if the branch exists, False if missing.
-        """
-        branch = getattr(session_state, "branch", "") or (
-            session_state.get("branch", "") if isinstance(session_state, dict) else ""
-        )
-        if not branch:
-            return False
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", f"refs/heads/{branch}"],
-            capture_output=True, cwd=self.repo_dir
-        )
-        if result.returncode != 0:
-            issue_id = getattr(session_state, "issue_id", "") or (
-                session_state.get("issue_id", "?") if isinstance(session_state, dict) else "?"
-            )
-            log.error("Branch %s missing for session (issue %s)", branch, issue_id)
-            return False
-        return True
 
     def _resume_session(self, sid: str, issue_id: str, reason: str):
         """Post lifecycle comment and launch a resume for the given session."""
@@ -638,24 +398,24 @@ class SessionMonitor:
                 continue
 
             try:
-                state_mgr = StateManager(session_dir)
-                session_state = state_mgr.load_state()
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError) as e:
                 log.warning(f"[{sid}] Failed to read state for auth-retry check: {e}")
                 continue
 
-            if state_mgr.status != "suspended:auth-failure":
+            if state.get("status") != "suspended:auth-failure":
                 continue
 
-            issue_id = session_state.issue_id
+            issue_id = state.get("issue_id", "")
             if not issue_id:
                 continue
 
-            auth_retries = session_state.auth_retries
+            auth_retries = state.get("auth_retries", 0)
             if auth_retries >= MAX_AUTH_RETRIES:
                 log.warning(f"[{sid}] Auth retry limit reached ({MAX_AUTH_RETRIES}). "
                             f"Token still invalid — giving up.")
-                update_state_fields(session_dir, status="suspended:auth-failure-permanent")
+                state["status"] = "suspended:auth-failure-permanent"
+                write_state(session_dir, state)
                 self.telegram.notify(
                     f"🔑 `{sid}` hit {MAX_AUTH_RETRIES} auth retries — token still invalid. "
                     f"Giving up. Fix credentials and `nightshift resume` manually.",
@@ -664,7 +424,9 @@ class SessionMonitor:
 
             log.info(f"[{sid}] Auth-failure session — retrying (token may have been refreshed, "
                      f"attempt {auth_retries + 1}/{MAX_AUTH_RETRIES})")
-            update_state_fields(session_dir, auth_retries=auth_retries + 1, status="working")
+            state["auth_retries"] = auth_retries + 1
+            state["status"] = "working"
+            write_state(session_dir, state)
             self._recently_launched[sid] = time.time()
 
             self._resume_session(sid, issue_id, reason="auth-failure retry")
@@ -687,24 +449,24 @@ class SessionMonitor:
                 continue
 
             try:
-                state_mgr = StateManager(session_dir)
-                session_state = state_mgr.load_state()
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError) as e:
                 log.warning(f"[{sid}] Failed to read state for provider-outage check: {e}")
                 continue
 
-            if state_mgr.status != "suspended:provider-overload":
+            if state.get("status") != "suspended:provider-overload":
                 continue
 
-            issue_id = session_state.issue_id
+            issue_id = state.get("issue_id", "")
             if not issue_id:
                 continue
 
-            overload_retries = session_state.overload_resumes
+            overload_retries = state.get("overload_resumes", 0)
             if overload_retries >= MAX_PROVIDER_OUTAGE_RETRIES:
                 log.warning(f"[{sid}] Provider outage retry limit reached ({MAX_PROVIDER_OUTAGE_RETRIES}). "
                             f"Provider still overloaded — giving up.")
-                update_state_fields(session_dir, status="suspended:provider-overload-permanent")
+                state["status"] = "suspended:provider-overload-permanent"
+                write_state(session_dir, state)
                 self.telegram.notify(
                     f"⏳ `{sid}` hit {MAX_PROVIDER_OUTAGE_RETRIES} provider outage retries — "
                     f"provider still overloaded. Giving up. `nightshift resume` manually when available.",
@@ -713,101 +475,12 @@ class SessionMonitor:
 
             log.info(f"[{sid}] Provider-overload session — retrying (provider may be available, "
                      f"attempt {overload_retries + 1}/{MAX_PROVIDER_OUTAGE_RETRIES})")
-            update_state_fields(session_dir, overload_resumes=overload_retries + 1, status="working")
+            state["overload_resumes"] = overload_retries + 1
+            state["status"] = "working"
+            write_state(session_dir, state)
             self._recently_launched[sid] = time.time()
 
             self._resume_session(sid, issue_id, reason="provider-outage retry")
-
-    def check_zombie_containers(self):
-        """Detect containers that are running but stuck (no events for extended time).
-
-        A zombie container is one where:
-        - Session status is 'working' or 'starting'
-        - Docker container is running
-        - No events for longer than stall_timeout_s * ZOMBIE_TIMEOUT_MULTIPLIER
-
-        This differs from orphan detection: orphans have no container running,
-        zombies have a running container that's stuck (infinite loop, deadlock).
-        """
-        now = time.time()
-        if now - self._last_zombie_check < ZOMBIE_CHECK_INTERVAL_S:
-            return
-        self._last_zombie_check = now
-
-        if not self.sessions_dir.exists():
-            return
-
-        for session_dir in self.sessions_dir.iterdir():
-            if not session_dir.is_dir():
-                continue
-            sid = session_dir.name
-            if not (session_dir / "state.json").exists():
-                continue
-            self._check_session_for_zombie(session_dir, sid, now)
-
-    def _check_session_for_zombie(self, session_dir: Path, sid: str, now: float):
-        """Check a single session for zombie container behavior."""
-        try:
-            state_mgr = StateManager(session_dir)
-        except (json.JSONDecodeError, OSError) as e:
-            log.warning(f"[{sid}] Failed to read state for zombie check: {e}")
-            return
-
-        status = state_mgr.status
-        if status not in ("working", "starting"):
-            # Only check sessions that should be actively producing events
-            return
-
-        # Check if container is actually running
-        container = f"nightshift-{sid}"
-        if _pkg().docker_container_status(container) not in ("running",):
-            # Container not running — orphan detector handles this
-            return
-
-        # Check last event time via raw-output.log mtime
-        last_event_time = self._get_last_event_time(session_dir)
-        if last_event_time is None:
-            # No raw-output.log yet — session just started
-            return
-
-        stall_timeout = DEFAULT_STALL_TIMEOUT_S
-        try:
-            config = load_workflow(self.workflow_path)
-            stall_timeout = config.agent.stall_timeout_s
-        except Exception as e:
-            log.debug(f"[{sid}] Could not load workflow config for stall timeout: {e}")
-
-        zombie_threshold = stall_timeout * ZOMBIE_TIMEOUT_MULTIPLIER
-        elapsed = now - last_event_time
-
-        if elapsed > zombie_threshold:
-            # Avoid duplicate alerts for the same session
-            if sid in self._alerted_zombies:
-                return
-            self._alerted_zombies.add(sid)
-
-            log.warning(f"[{sid}] Container may be stuck: no events for {elapsed:.0f}s "
-                        f"(threshold: {zombie_threshold:.0f}s)")
-            self.telegram.notify(
-                f"⚠️ `{sid}` container may be stuck — no events for {elapsed:.0f}s. "
-                f"Consider checking logs or restarting.",
-                level=NotificationLevel.ACTIONS)
-        else:
-            # Container is active — clear from alerted set if it was there
-            self._alerted_zombies.discard(sid)
-
-    def _get_last_event_time(self, session_dir: Path) -> float | None:
-        """Get the timestamp of the last event from raw-output.log mtime.
-
-        Returns None if the file doesn't exist.
-        """
-        raw_log = session_dir / "raw-output.log"
-        if not raw_log.exists():
-            return None
-        try:
-            return raw_log.stat().st_mtime
-        except OSError:
-            return None
 
     def check_closed_issues(self):
         """Detect sessions whose issues have been closed -- clean up worktree + session."""
@@ -827,13 +500,12 @@ class SessionMonitor:
                 continue
 
             try:
-                state_mgr = StateManager(session_dir)
-                session_state = state_mgr.load_state()
+                state = read_state(session_dir)
             except (json.JSONDecodeError, OSError) as e:
                 log.warning(f"[{sid}] Failed to read state for closed-issue check: {e}")
                 continue
 
-            issue_id = session_state.issue_id
+            issue_id = state.get("issue_id", "")
             if not issue_id:
                 continue
 
@@ -948,11 +620,6 @@ class SessionMonitor:
 
         for issue in issues:
             if _issue_id_prefix_match(issue.id, existing_issue_ids):
-                continue
-
-            # Skip issues blocked by dependencies
-            if is_blocked(issue.labels):
-                log.debug(f"Auto-start: skipping {issue.identifier} (blocked by dependency)")
                 continue
 
             if active_count >= asc.max_concurrent:

@@ -1,6 +1,5 @@
 """Git command utilities shared across host modules."""
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -73,41 +72,3 @@ def diff_stat(repo: Path, base: str, head: str) -> str:
         capture_output=True, text=True, cwd=str(repo),
     )
     return result.stdout.strip() if result.returncode == 0 else "N/A"
-
-
-def audit_worktree_symlinks(
-    worktree_path: Path,
-    workspace_root: Path | None = None,
-) -> list[tuple[Path, Path]]:
-    """Return symlinks in a worktree whose targets resolve outside /workspace."""
-    workspace_root = Path("/workspace") if workspace_root is None else workspace_root
-    workspace_root = workspace_root.resolve()
-    escaping_symlinks: list[tuple[Path, Path]] = []
-    git_env = os.environ.copy()
-    git_env.pop("GIT_DIR", None)
-    git_env.pop("GIT_WORK_TREE", None)
-
-    result = subprocess.run(
-        ["git", "ls-files", "-s"],
-        cwd=str(worktree_path), capture_output=True, text=True, env=git_env,
-    )
-    tracked_files = {line.split()[-1] for line in result.stdout.splitlines()}
-
-    for dirpath, dirnames, filenames in os.walk(worktree_path):
-        if ".git" in dirnames:
-            dirnames.remove(".git")
-
-        for name in (*dirnames, *filenames):
-            rel_path = Path(dirpath).relative_to(worktree_path) / name
-            if str(rel_path) not in tracked_files:
-                continue
-
-            symlink_path = Path(dirpath) / name
-            if not symlink_path.is_symlink():
-                continue
-
-            target_path = symlink_path.resolve(strict=False)
-            if not target_path.is_relative_to(workspace_root):
-                escaping_symlinks.append((symlink_path, target_path))
-
-    return escaping_symlinks

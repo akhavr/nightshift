@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from host.watcher.main import _handle_reload, reload_event, gitbug_cache_clear_event
+from host.watcher.main import _handle_reload, reload_event
 from host.watcher.host_watcher import HostWatcher, _diff_config
 from core.config.models import (
     WorkflowConfig, NotifierConfig, AutoStartConfig, MergeConfig,
@@ -28,19 +28,12 @@ from tests.watcher.conftest import _make_watcher
 class TestReloadSignalHandler:
     def setup_method(self):
         reload_event.clear()
-        gitbug_cache_clear_event.clear()
 
     def test_handle_reload_sets_event(self):
         """_handle_reload sets the reload event on SIGHUP."""
         assert not reload_event.is_set()
         _handle_reload(signal.SIGHUP, None)
         assert reload_event.is_set()
-
-    def test_handle_reload_sets_cache_clear_event(self):
-        """_handle_reload also schedules git-bug cache clearing."""
-        assert not gitbug_cache_clear_event.is_set()
-        _handle_reload(signal.SIGHUP, None)
-        assert gitbug_cache_clear_event.is_set()
 
     def test_reload_event_is_independent_of_shutdown(self):
         """reload_event and shutdown_event are separate events."""
@@ -271,9 +264,6 @@ class TestRunReloadIntegration:
     def test_run_default_reload_event(self, tmp_path):
         """run() creates a default reload event if none passed."""
         w = _make_watcher(tmp_path)
-        # Mock cleanup methods to avoid tracker calls
-        w.monitor.cleanup_stale_review_sessions = lambda: None
-        w.monitor.cleanup_stale_blocked_labels = lambda: None
         ev = threading.Event()
         ev.set()  # exit immediately
         w.run(shutdown_event=ev)

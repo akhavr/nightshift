@@ -291,17 +291,6 @@ class CodexAgent(HeadlessAgentBase):
         # @@DONE@@ - task completion (buffer until turn.completed for usage data)
         if "@@DONE@@" in text:
             self._pending_done_raw = raw
-            # If the same message also includes a reviewer verdict, preserve the
-            # text so SessionRunner can log it before turn.completed arrives.
-            if re.search(r"@nightshift\s+(approve|revise)\b", text):
-                content = text.replace("@@DONE@@", "").rstrip()
-                return AgentEvent(
-                    type=AgentEventType.TEXT,
-                    content=content,
-                    raw=raw,
-                )
-            # Otherwise buffer the whole message and wait for turn.completed so
-            # usage data stays attached to the emitted @@DONE@@ event.
             return None
 
         # @@CHECKPOINT@@ <description>

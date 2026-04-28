@@ -26,7 +26,6 @@ Monitor nightshift sessions and act on results. Run periodically until told to s
 - **Accept**: `nightshift accept <id>` — merges agent branch, cleans up. Use when work is correct and complete.
 - **Reject**: `nightshift reject <id>` — discards work. Use when approach is fundamentally wrong.
 - **Revise**: `nightshift revise <id> "feedback"` — sends back with feedback. Use when work is partially correct but needs fixes.
-- **Blocked**: `nightshift blocked` — list issues blocked by unmet dependencies. Check before starting new work.
 - **Follow-up**: If work is partially done but acceptable, accept it and file a new focused git-bug issue for remaining work. Label it `nightshift`.
 
 ## Rules

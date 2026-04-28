@@ -161,36 +161,6 @@ class TestParse:
         from adapters.agents.openhands import OpenHandsAgent
         return OpenHandsAgent()
 
-    def test_action_becomes_tool_call(self):
-        agent = self._agent()
-        raw = json.dumps({
-            "kind": "ActionEvent",
-            "source": "agent",
-            "action": {
-                "kind": "TerminalAction",
-                "command": "ls -la",
-            },
-        })
-        ev = agent._parse(raw)
-        assert ev is not None
-        assert ev.type == AgentEventType.TOOL_CALL
-        assert "ls -la" in ev.content
-
-    def test_observation_becomes_tool_result(self):
-        agent = self._agent()
-        raw = json.dumps({
-            "kind": "ObservationEvent",
-            "source": "environment",
-            "observation": {
-                "kind": "CmdOutputObservation",
-                "content": "file1.py\nfile2.py",
-            },
-        })
-        ev = agent._parse(raw)
-        assert ev is not None
-        assert ev.type == AgentEventType.TOOL_RESULT
-        assert "file1.py" in ev.content
-
     def test_checkpoint_for_file_editor_action(self):
         agent = self._agent()
         raw = _action_event("FileEditorAction", summary="Created main.py")
@@ -316,48 +286,6 @@ class TestParse:
         assert ev.type == AgentEventType.TOOL_CALL
         assert "ls -la" in ev.content
         assert "@@LOG@@" not in ev.content
-
-
-class TestStreamEventsUnified:
-    def test_stream_yields_agent_events(self):
-        from adapters.agents.openhands import OpenHandsAgent
-
-        agent = OpenHandsAgent()
-        lines = [
-            json.dumps({
-                "kind": "ActionEvent",
-                "source": "agent",
-                "action": {"kind": "TerminalAction", "command": "pwd"},
-            }) + "\n",
-            EVENT_SEPARATOR + "\n",
-            json.dumps({
-                "kind": "ObservationEvent",
-                "source": "environment",
-                "observation": {
-                    "kind": "CmdOutputObservation",
-                    "content": "/workspace",
-                },
-            }) + "\n",
-            EVENT_SEPARATOR + "\n",
-        ]
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = 0
-        mock_proc.stdout = iter(lines)
-        mock_proc.stderr.read.return_value = ""
-        mock_proc.returncode = 0
-        agent._process = mock_proc
-        agent._last_event = time.monotonic()
-
-        events = list(agent.stream_events())
-
-        assert [e.type for e in events if e.type in (
-            AgentEventType.TOOL_CALL,
-            AgentEventType.TOOL_RESULT,
-        )] == [
-            AgentEventType.TOOL_CALL,
-            AgentEventType.TOOL_RESULT,
-        ]
 
 
 # ── stream_events() ──────────────────────────────────────────

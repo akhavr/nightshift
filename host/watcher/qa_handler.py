@@ -10,12 +10,8 @@ from host.constants import (
 )
 from host.watcher.lifecycle_comments import post_question
 from host.watcher.telegram_relay import TelegramRelay
-from host.session_utils import read_state
 
 log = logging.getLogger("watcher")
-
-# Valid states for receiving an answer
-ANSWER_VALID_STATES = {"waiting:question"}
 
 
 def _pkg():
@@ -88,19 +84,6 @@ class QAHandler:
                 else:
                     log.warning(f"[{sid}] Pause failed -- container will poll internally")
 
-    def _is_valid_answer_state(self, session_dir: Path) -> bool:
-        """Check if session is in a valid state to receive an answer."""
-        state_file = session_dir / "state.json"
-        if not state_file.exists():
-            return True  # No state file = permissive (legacy behavior)
-        try:
-            state = read_state(session_dir)
-            status = state.get("status", "")
-            return status in ANSWER_VALID_STATES
-        except (json.JSONDecodeError, OSError) as e:
-            log.warning(f"Failed to read state for answer validation: {e}")
-            return True  # Permissive on read failure
-
     def check_for_answers(self, tg_replies: dict[str, str]):
         """Check for answers (Telegram + CLI), write answer.txt, unpause."""
         for sid, info in list(self._paused.items()):
@@ -116,11 +99,6 @@ class QAHandler:
 
             # Check Telegram replies
             if sid in tg_replies:
-                # Validate state before delivering answer
-                if not self._is_valid_answer_state(info["dir"]):
-                    log.warning(f"[{sid}] Skipping answer delivery: invalid state")
-                    continue
-
                 answer = tg_replies[sid]
                 log.info(f"[{sid}] Telegram reply: {answer[:LOG_PREVIEW_LEN]}")
                 answer_file.write_text(answer)

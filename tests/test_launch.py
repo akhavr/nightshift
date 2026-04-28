@@ -1,7 +1,6 @@
 """Tests for host/launch.py and its extracted modules."""
 
 import json
-import logging
 import os
 import sys
 from pathlib import Path
@@ -49,29 +48,12 @@ def sample_issue():
     )
 
 
-def _mock_git_run(cmd, status_stdout="", diff_stdout="", fsck_stdout="", commit_returncode=0):
-    """Return a subprocess result tailored to the git command under test."""
-    result = MagicMock(returncode=0, stdout="", stderr="")
-    if cmd[:3] == ["git", "status", "--porcelain"]:
-        result.stdout = status_stdout
-    elif len(cmd) >= 4 and cmd[:2] == ["git", "--git-dir"] and cmd[3] == "fsck":
-        result.stdout = fsck_stdout
-    elif cmd[:2] == ["git", "diff"]:
-        result.stdout = diff_stdout
-    elif cmd[:2] == ["git", "add"]:
-        result.stdout = ""
-    elif cmd[:2] == ["git", "commit"]:
-        result.returncode = commit_returncode
-    return result
-
-
 # ── create_worktree tests ───────────────────────────────
 
 class TestCreateWorktree:
 
-    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_creates_worktree_and_writes_state(self, mock_run, mock_safe_prune, tmp_path):
+    def test_creates_worktree_and_writes_state(self, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -81,12 +63,11 @@ class TestCreateWorktree:
         issue_id = "abc123def456"
 
         # Simulate subprocess calls:
-        # 1. git cat-file -t     -> ok (verify base commit exists)
+        # 1. git worktree prune  -> ok
         # 2. git branch          -> ok
         # 3. git worktree add    -> ok (creates the wt dir with a file)
-        # (WT-6: safe_prune is mocked, not called via subprocess)
         def side_effect(cmd, **kwargs):
-            result = MagicMock(returncode=0, stderr="", stdout="commit")
+            result = MagicMock(returncode=0, stderr="", stdout="")
             if cmd[1] == "worktree" and cmd[2] == "add":
                 # simulate worktree directory being created with content
                 wt_path.mkdir(exist_ok=True)
@@ -111,27 +92,23 @@ class TestCreateWorktree:
         assert state["checkpoints"] == []
         assert state["human_answers"] == []
 
-        # WT-6: safe_prune is called instead of direct git worktree prune
-        mock_safe_prune.assert_called_once_with(repo)
-
         # Correct git commands were called
         assert mock_run.call_count == 3
-        assert mock_run.call_args_list[0][0][0] == ["git", "cat-file", "-t", base_branch]
+        assert mock_run.call_args_list[0][0][0] == ["git", "worktree", "prune"]
         assert mock_run.call_args_list[1][0][0] == ["git", "branch", branch, base_branch]
         assert mock_run.call_args_list[2][0][0] == ["git", "worktree", "add", str(wt_path), branch]
 
-    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_exits_on_worktree_failure(self, mock_run, mock_safe_prune, tmp_path):
+    def test_exits_on_worktree_failure(self, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
         session_dir = tmp_path / "session"
 
         mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
-        # WT-6: safe_prune is mocked, so only 3 subprocess calls
+        # Third call (worktree add) fails
         mock_run.side_effect = [
-            MagicMock(returncode=0),  # cat-file -t (verify base exists)
+            MagicMock(returncode=0),  # prune
             MagicMock(returncode=0),  # branch
             MagicMock(returncode=1, stderr="fatal: already exists"),  # worktree add
         ]
@@ -140,9 +117,8 @@ class TestCreateWorktree:
             create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
-    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.subprocess.run")
-    def test_exits_on_empty_worktree(self, mock_run, mock_safe_prune, tmp_path):
+    def test_exits_on_empty_worktree(self, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -162,10 +138,9 @@ class TestCreateWorktree:
             create_worktree(repo, wt_path, "agent/x", "master", session_dir, "x")
         assert exc_info.value.code == 1
 
-    @patch("host.workspace_setup.safe_prune")
     @patch("host.workspace_setup.force_remove_dir")
     @patch("host.workspace_setup.subprocess.run")
-    def test_removes_existing_worktree_dir(self, mock_run, mock_force_rm, mock_safe_prune, tmp_path):
+    def test_removes_existing_worktree_dir(self, mock_run, mock_force_rm, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         wt_path = tmp_path / "worktree"
@@ -305,7 +280,6 @@ class TestBuildDockerCmd:
               issue_id="abc123def456", short_id="abc123def456",
               max_turns=30, step="coder", is_resume=False,
               workflow_path="/repo/WORKFLOW.md", image="nightshift:latest",
-              git_mount_path=None,
               **env_overrides):
         if repo is None:
             repo = Path("/fake/repo")
@@ -331,7 +305,6 @@ class TestBuildDockerCmd:
                 repo, workspace_mount, session_dir, container_name,
                 worktree_name, issue_id, short_id, max_turns,
                 step, is_resume, workflow_path, image,
-                git_mount_path=git_mount_path,
             )
         finally:
             # Restore env
@@ -367,26 +340,6 @@ class TestBuildDockerCmd:
         assert "/ws:/workspace:rw" in cmd_str
         assert f"{session_dir}:/session:rw" in cmd_str
         assert f"{repo / '.git'}:/repo-git:rw" in cmd_str
-
-    def test_git_mount_path_override(self, tmp_path):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        git_mount_path = tmp_path / "session" / "git-merged"
-        git_mount_path.mkdir(parents=True)
-        session_dir = tmp_path / "session"
-        session_dir.mkdir(exist_ok=True)
-
-        cmd = self._call(
-            repo=repo,
-            workspace_mount="/ws",
-            session_dir=session_dir,
-            workflow_path=str(tmp_path / "WORKFLOW.md"),
-            git_mount_path=git_mount_path,
-        )
-
-        cmd_str = " ".join(cmd)
-        assert f"{git_mount_path}:/repo-git:rw" in cmd_str
-        assert f"{repo / '.git'}:/repo-git:rw" not in cmd_str
 
     def test_env_vars_set(self):
         cmd = self._call(issue_id="issue-42", short_id="issue-42",
@@ -616,13 +569,12 @@ class TestMain:
     @patch("host.launch.dump_issue_data")
     @patch("host.workspace_setup.create_worktree")
     @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
-    @patch("host.launch._setup_git_overlay")
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
     @patch("host.launch._post_container")
     def test_main_start_flow(self, mock_post, mock_repo_root, mock_dotenv,
-                             mock_load_wf, mock_setup_overlay, mock_build_cmd,
+                             mock_load_wf, mock_build_cmd,
                              mock_create_wt, mock_dump, mock_run,
                              mock_docker_rm, tmp_path):
         repo = tmp_path / "repo"
@@ -637,7 +589,6 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
-        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-copy"
 
         with patch("sys.argv", ["launch.py", "abc123def456ef"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -650,48 +601,6 @@ class TestMain:
         mock_build_cmd.assert_called_once()
         mock_run.assert_called_once_with(["docker", "run", "test"])
         mock_docker_rm.assert_called_once()
-
-    @patch("host.launch.run_container", side_effect=RuntimeError("launch failed"))
-    @patch("host.launch._setup_git_overlay")
-    @patch("host.launch._teardown_git_overlay")
-    @patch("host.launch._post_container")
-    @patch("host.launch.setup_workspace")
-    @patch("host.launch.dump_issue_data")
-    @patch("host.launch.load_workflow")
-    @patch("host.launch.load_all_dotenv")
-    @patch("host.launch.get_repo_root")
-    def test_main_cleans_up_overlay_when_launch_fails(self, mock_repo_root,
-                                                      mock_dotenv, mock_load_wf,
-                                                      mock_dump_issue_data,
-                                                      mock_setup_workspace, mock_post,
-                                                      mock_teardown,
-                                                      mock_setup_overlay,
-                                                      mock_run_container, tmp_path):
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-        (repo / ".worktrees").mkdir()
-        (repo / "WORKFLOW.md").write_text("---\n---\n")
-        mock_repo_root.return_value = repo
-
-        mock_load_wf.return_value = WorkflowConfig(
-            workspace=WorkspaceConfig(base_branch="master", root=".worktrees"),
-            agent=AgentConfig(max_turns=50),
-        )
-        mock_dump_issue_data.return_value = None
-        mock_setup_workspace.return_value = repo / ".worktrees" / "agent-abc123def456"
-        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged"
-
-        with patch("sys.argv", ["launch.py", "abc123def456ef"]):
-            with pytest.raises(RuntimeError, match="launch failed"):
-                from host.launch import main
-                main()
-
-        mock_post.assert_not_called()
-        mock_teardown.assert_called_once_with(
-            repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged",
-            repo / ".nightshift" / "sessions" / "abc123def456",
-        )
 
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
@@ -725,13 +634,12 @@ class TestMain:
     @patch("host.launch.subprocess.run")
     @patch("host.launch.dump_issue_data")
     @patch("host.docker_cmd.build_docker_cmd", return_value=["docker", "run", "test"])
-    @patch("host.launch._setup_git_overlay")
     @patch("host.launch.load_workflow")
     @patch("host.launch.load_all_dotenv")
     @patch("host.launch.get_repo_root")
     @patch("host.launch._post_container")
     def test_main_resume_with_state(self, mock_post, mock_repo_root, mock_dotenv,
-                                    mock_load_wf, mock_setup_overlay, mock_build_cmd,
+                                    mock_load_wf, mock_build_cmd,
                                     mock_dump, mock_run, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -750,7 +658,6 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
-        mock_setup_overlay.return_value = session_dir / "git-copy"
 
         with patch("sys.argv", ["launch.py", "abc123def456ef", "--resume"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -798,11 +705,7 @@ class TestPostContainer:
             "human_answers": [{"q": "why?", "a": "because"}],
         }))
 
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-            diff_stdout="1 file changed",
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -829,10 +732,7 @@ class TestPostContainer:
             "human_answers": [],
         }))
 
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
         mock_create_tracker.side_effect = Exception("tracker down")
 
         # Should not raise
@@ -862,11 +762,7 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-            diff_stdout="1 file changed",
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="1 file changed")
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -905,10 +801,7 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -947,10 +840,7 @@ class TestPostContainer:
             },
         }))
 
-        mock_run.side_effect = lambda cmd, **kwargs: _mock_git_run(
-            cmd,
-            status_stdout="",
-        )
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
         mock_tracker = MagicMock()
         mock_create_tracker.return_value = mock_tracker
 
@@ -965,219 +855,6 @@ class TestPostContainer:
         assert usage_file.exists()
         entry = json.loads(usage_file.read_text().strip())
         assert entry["input_tokens"] == 10000
-
-    @patch("host.launch._copy_git_changes")
-    def test_overlay_extraction_runs_after_container(self, mock_copy,
-                                                     tmp_path, config):
-        from host.launch import _post_container
-
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        (session_dir / "state.json").write_text(json.dumps({
-            "status": "running",
-            "checkpoints": [],
-            "human_answers": [],
-        }))
-        (session_dir / "git-upper").mkdir()
-        (session_dir / "git-merged").mkdir()
-        (tmp_path / ".git").mkdir()
-
-        _post_container(session_dir, config, tmp_path, "issue1")
-
-        mock_copy.assert_called_once_with(session_dir, tmp_path)
-
-
-class TestCopyGitChanges:
-
-    @patch("host.launch.subprocess.run")
-    def test_copy_git_changes_runs_fsck(self, mock_run, tmp_path):
-        from host.launch import _copy_git_changes
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        source = session_dir / "git-copy"
-        source.mkdir()
-        (source / "objects").mkdir()
-        (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
-
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-
-        _copy_git_changes(session_dir, repo)
-
-        mock_run.assert_called_once_with(
-            ["git", "--git-dir", str(source), "fsck", "--connectivity-only"],
-            capture_output=True,
-            text=True,
-        )
-
-    @patch("host.launch.subprocess.run")
-    def test_fsck_filters_gitbug_noise(self, mock_run, tmp_path, caplog):
-        from host.launch import _copy_git_changes
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        source = session_dir / "git-copy"
-        source.mkdir()
-        (source / "objects").mkdir()
-        (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "good").write_text(
-            "0123456789abcdef0123456789abcdef01234567\n"
-        )
-
-        mock_run.return_value = MagicMock(
-            returncode=128,
-            stdout="",
-            stderr=(
-                "error: Unknown object type for b6f32d868edadd0a96e6f0256fdc568c6688deae\n"
-                "error: Could not read b619a2a6fb4d71eda862f66e0f9847ed7784aa18\n"
-                "fatal: not a git repository (or any of the parent directories): .git\n"
-            ),
-        )
-
-        with caplog.at_level(logging.ERROR, logger="host.launch"):
-            result = _copy_git_changes(session_dir, repo)
-
-        assert result == 0
-        assert not any(record.levelno >= logging.ERROR for record in caplog.records)
-        assert (repo / ".git" / "refs" / "heads" / "agent" / "good").read_text().strip() == \
-            "0123456789abcdef0123456789abcdef01234567"
-
-    @patch("host.launch.subprocess.run")
-    def test_fsck_reports_real_corruption(self, mock_run, tmp_path, caplog):
-        from host.launch import _copy_git_changes
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        source = session_dir / "git-copy"
-        source.mkdir()
-        (source / "objects" / "aa").mkdir(parents=True)
-        (source / "objects" / "aa" / "badpack").write_text("corrupt")
-        (source / "refs" / "heads").mkdir(parents=True)
-        (source / "refs" / "heads" / "agent-123").write_text("0123456789abcdef0123456789abcdef01234567\n")
-
-        mock_run.return_value = MagicMock(
-            returncode=128,
-            stdout="",
-            stderr=(
-                "error: Unknown object type for b6f32d868edadd0a96e6f0256fdc568c6688deae\n"
-                "fatal: bad object 0123456789abcdef0123456789abcdef01234567\n"
-            ),
-        )
-
-        with caplog.at_level(logging.ERROR, logger="host.launch"):
-            result = _copy_git_changes(session_dir, repo)
-
-        assert result != 0
-        assert "git fsck found issues" in caplog.text
-        assert "fatal: bad object" in caplog.text
-        assert "Unknown object type" not in caplog.text
-        assert not (repo / ".git" / "objects" / "aa" / "badpack").exists()
-        assert not (repo / ".git" / "refs" / "heads" / "agent-123").exists()
-
-    @patch("host.launch.subprocess.run")
-    def test_copy_git_changes_whitelists_refs(self, mock_run, tmp_path, caplog):
-        from host.launch import _copy_git_changes
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        source = session_dir / "git-copy"
-        source.mkdir()
-        (source / "objects").mkdir()
-        (source / "refs" / "heads").mkdir(parents=True)
-        # Use agent/xxx format (slash, not hyphen) per current ref whitelist
-        (source / "refs" / "heads" / "agent" / "good").parent.mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "good").write_text("0123456789abcdef0123456789abcdef01234567\n")
-        (source / "refs" / "heads" / "agent" / "bad" / "evil").parent.mkdir(parents=True)
-        (source / "refs" / "heads" / "agent" / "bad" / "evil").write_text(
-            "fedcba9876543210fedcba9876543210fedcba98\n"
-        )
-        (source / "refs" / "heads" / "main").write_text("89abcdef0123456789abcdef0123456789abcdef\n")
-
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-
-        with caplog.at_level(logging.WARNING, logger="host.git_overlay"):
-            result = _copy_git_changes(session_dir, repo)
-
-        assert result == 0
-        assert (repo / ".git" / "refs" / "heads" / "agent" / "good").read_text().strip() == \
-            "0123456789abcdef0123456789abcdef01234567"
-        assert not (repo / ".git" / "refs" / "heads" / "agent" / "bad" / "evil").exists()
-        assert not (repo / ".git" / "refs" / "heads" / "main").exists()
-        assert "skipped" in caplog.text.lower()
-
-
-# ── Git overlay wiring tests ────────────────────────────
-
-class TestGitOverlayWiring:
-
-    @patch("host.launch.is_fuse_overlayfs_available", return_value=True)
-    @patch("host.launch.setup_overlay")
-    @patch("host.launch.setup_git_copy")
-    def test_overlay_setup_creates_merged_mount(self, mock_copy, mock_setup,
-                                                mock_available, tmp_path):
-        from host.launch import _setup_git_overlay
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / ".git").mkdir()
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
-        merged = session_dir / "git-merged"
-        mock_setup.return_value = merged
-
-        result = _setup_git_overlay(repo, session_dir)
-
-        assert result == merged
-        mock_setup.assert_called_once_with(repo / ".git", session_dir)
-        mock_copy.assert_not_called()
-
-    @patch("host.launch.teardown_overlay")
-    def test_overlay_teardown_unmounts(self, mock_teardown, tmp_path):
-        from host.launch import _teardown_git_overlay
-
-        merged = tmp_path / "session" / "git-merged"
-        merged.parent.mkdir(parents=True)
-        merged.mkdir()
-
-        _teardown_git_overlay(merged, merged.parent)
-
-        mock_teardown.assert_called_once_with(merged)
-
-    @patch("host.launch.teardown_overlay")
-    def test_overlay_teardown_removes_session_dirs(self, mock_teardown, tmp_path):
-        from host.launch import _teardown_git_overlay
-
-        session_dir = tmp_path / "session"
-        merged = session_dir / "git-merged"
-        upper = session_dir / "git-upper"
-        work = session_dir / "git-work"
-        for path in (merged, upper, work):
-            path.mkdir(parents=True)
-
-        _teardown_git_overlay(merged, session_dir)
-
-        mock_teardown.assert_called_once_with(merged)
-        assert not merged.exists()
-        assert not upper.exists()
-        assert not work.exists()
 
 
 # ── prepare_review_session tests ────────────────────────

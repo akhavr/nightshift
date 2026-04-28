@@ -7,8 +7,6 @@ Heavy lifting is delegated to workspace_setup, issue_dump, and docker_cmd.
 
 import argparse
 import json
-import logging
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,20 +19,11 @@ from core.protocols import UsageData
 from host.tracker_client import get_tracker_with_fallback
 from host.config_discovery import discover_workflow
 from host.constants import SHORT_ID_LEN, REVIEW_SESSION_PREFIX, OVERFLOW_FLAG_FILENAME, USAGE_LOG_FILENAME
-from host.git_overlay import extract_commits, is_fuse_overlayfs_available, setup_git_copy, setup_overlay, teardown_overlay
 from host.docker_cmd import run_container
 from host.env import load_all_dotenv
 from host.issue_dump import dump_issue_data
 from host.session_utils import get_repo_root, find_existing_session_by_prefix
 from host.workspace_setup import setup_workspace
-
-logger = logging.getLogger(__name__)
-
-_FSCK_NOISE_SUBSTRINGS = (
-    "Unknown object type",
-    "Could not read",
-    "fatal: not a git repository",
-)
 
 
 def _resolve_names(issue_id: str, step: str, config):
@@ -59,122 +48,6 @@ def _read_overflow_profile_name(flag: Path) -> str | None:
         return None
     profile_name = flag.read_text().strip()
     return profile_name or None
-
-
-def _setup_git_overlay(repo: Path, session_dir: Path) -> Path:
-    """Create the session-local git mount path."""
-    repo_git = repo / ".git"
-    if is_fuse_overlayfs_available():
-        return setup_overlay(repo_git, session_dir)
-    return setup_git_copy(repo_git, session_dir)
-
-
-def _teardown_git_overlay(git_mount_path: Path, session_dir: Path) -> None:
-    """Clean up the session-local git mount path and its temp directories."""
-    if git_mount_path.name == "git-merged":
-        teardown_overlay(git_mount_path)
-        for temp_dir in ("git-merged", "git-upper", "git-work"):
-            path = session_dir / temp_dir
-            if path.exists():
-                shutil.rmtree(path)
-    elif git_mount_path.exists():
-        shutil.rmtree(git_mount_path)
-
-
-def _fsck_real_errors(details: str) -> list[str]:
-    """Return fsck lines that are not known git-bug/session-cleanup noise."""
-    return [
-        line for line in details.splitlines()
-        if not any(skip in line for skip in _FSCK_NOISE_SUBSTRINGS)
-    ]
-
-
-def _copy_git_changes(session_dir: Path, repo: Path) -> int:
-    """Validate and copy back git objects and whitelisted refs."""
-    source_git = None
-    for candidate in (session_dir / "git-merged", session_dir / "git-copy"):
-        if candidate.exists():
-            source_git = candidate
-            break
-    if source_git is None:
-        return 0
-
-    fsck_result = subprocess.run(
-        ["git", "--git-dir", str(source_git), "fsck", "--connectivity-only"],
-        capture_output=True,
-        text=True,
-    )
-    if fsck_result.returncode != 0:
-        details = fsck_result.stderr or fsck_result.stdout or ""
-        real_errors = _fsck_real_errors(details)
-        if real_errors:
-            logger.error(
-                "git fsck found issues for %s:\n%s",
-                source_git,
-                "\n".join(real_errors),
-            )
-            return fsck_result.returncode or 1
-
-    repo_git = repo / ".git"
-    skipped_refs = extract_commits(source_git, repo_git)
-
-    if skipped_refs:
-        logger.warning(
-            "Skipped non-whitelisted refs during copy-back: %s",
-            ", ".join(sorted(set(skipped_refs))),
-        )
-
-    return 0
-
-
-def _auto_commit_uncommitted_changes(repo: Path, session_id: str) -> bool:
-    """Commit dirty worktree changes left behind after @@DONE@@."""
-    status_result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-    )
-    if status_result.returncode != 0:
-        details = (status_result.stderr or status_result.stdout or "").strip()
-        if not details:
-            details = "git status failed without output"
-        logger.warning("[%s] Could not inspect worktree status: %s",
-                       session_id, details)
-        return False
-
-    if not status_result.stdout.strip():
-        return False
-
-    logger.warning("[%s] Container exited with uncommitted changes", session_id)
-
-    add_result = subprocess.run(
-        ["git", "add", "-A"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-    )
-    if add_result.returncode != 0:
-        details = (add_result.stderr or add_result.stdout or "").strip()
-        if not details:
-            details = "git add failed without output"
-        logger.warning("[%s] Auto-commit staging failed: %s", session_id, details)
-        return False
-
-    commit_result = subprocess.run(
-        ["git", "commit", "-m", "WIP: auto-commit uncommitted changes on @@DONE@@"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-    )
-    if commit_result.returncode != 0:
-        details = (commit_result.stderr or commit_result.stdout or "").strip()
-        if not details:
-            details = "git commit failed without output"
-        logger.warning("[%s] Auto-commit failed: %s", session_id, details)
-        return False
-
-    return True
 
 
 def _append_usage_log(repo, state, issue_id, title="", agent_kind="claude-code",
@@ -229,11 +102,9 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
     Usage is logged for ALL sessions with usage data (any status/step).
     Proof-of-work comment is only posted for coder sessions in waiting:review.
     """
-    copy_status = _copy_git_changes(session_dir, repo)
-
     state_file = session_dir / "state.json"
     if not state_file.exists():
-        return copy_status
+        return
 
     state = json.loads(state_file.read_text())
 
@@ -252,9 +123,7 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
 
     # Proof-of-work comment only for coder sessions that reached waiting:review
     if state.get("status") != "waiting:review" or step == "review":
-        return copy_status
-
-    _auto_commit_uncommitted_changes(repo, state.get("branch", issue_id))
+        return
 
     checkpoints = state.get("checkpoints", [])
     human_answers = state.get("human_answers", [])
@@ -303,7 +172,6 @@ def _post_container(session_dir, config, repo, issue_id, step="coder"):
         print(f"Posted review summary to tracker for {issue_id[:SHORT_ID_LEN]}")
     except Exception as e:
         print(f"Failed to post review summary: {e}", file=sys.stderr)
-    return copy_status
 
 
 def main():
@@ -363,19 +231,13 @@ def main():
     actual_agent_kind = (
         overflow.agent_kind if overflow and overflow.agent_kind else config.agent.kind
     )
-    git_mount_path = _setup_git_overlay(repo, session_dir)
-    try:
-        returncode = run_container(
-            repo, workspace_mount, session_dir, names, args.issue_id,
-            max_turns, args.step, args.resume, str(workflow_path), args.image,
-            git_mount_path=git_mount_path,
-            overflow=overflow, agent_kind=actual_agent_kind,
-        )
-        post_status = _post_container(session_dir, config, repo, args.issue_id, step=args.step)
-        if isinstance(post_status, int) and post_status != 0:
-            returncode = post_status
-    finally:
-        _teardown_git_overlay(git_mount_path, session_dir)
+    returncode = run_container(
+        repo, workspace_mount, session_dir, names, args.issue_id,
+        max_turns, args.step, args.resume, str(workflow_path), args.image,
+        overflow=overflow, agent_kind=actual_agent_kind,
+    )
+
+    _post_container(session_dir, config, repo, args.issue_id, step=args.step)
 
     sys.exit(returncode)
 
