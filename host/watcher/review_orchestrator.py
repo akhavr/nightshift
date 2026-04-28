@@ -16,6 +16,7 @@ from host.constants import (
 from core.protocols import NotificationLevel
 from host.session_utils import read_state, update_status as _update_status
 from core.config import load_workflow
+from core.post_run import check_empty_session
 from core.review import parse_nightshift_command
 from host.watcher.lifecycle_comments import post_done, read_checkpoint_count
 from host.watcher.telegram_relay import TelegramRelay
@@ -157,6 +158,36 @@ class ReviewOrchestrator:
         except Exception as e:
             log.warning(f"[{sid}] Failed to load REVIEW.md config, using default max rounds: {e}")
             max_rounds = DEFAULT_MAX_REVIEW_ROUNDS
+            base_branch = "master"
+        else:
+            base_branch = review_config.workspace.base_branch
+
+        try:
+            state = read_state(session_dir)
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{sid}] Failed to read state before review launch: {e}")
+            return
+
+        branch = state.get("branch", "")
+        if branch and check_empty_session(self.repo_dir, branch, base_branch):
+            log.warning(f"[{sid}] Empty session detected — skipping review launch")
+            if session_dir.exists():
+                _update_status(session_dir, "waiting:human-review")
+            try:
+                tracker = self._get_tracker()
+                tracker.add_comment(
+                    issue_id,
+                    "⚠️ Empty session: no commits detected. "
+                    "Did you forget to commit your changes?",
+                )
+            except Exception as e:
+                log.warning(f"[{sid}] Failed to post empty-session comment: {e}")
+            self.telegram.notify(
+                f"⚠️ `{sid}` empty session detected — skipping review.\n"
+                f"`nightshift accept/reject/revise {issue_id}`",
+                level=NotificationLevel.ACTIONS,
+            )
+            return
 
         rounds = self._rounds.get(sid, 0)
         if rounds >= max_rounds:

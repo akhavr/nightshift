@@ -204,6 +204,24 @@ class TestMaybeLaunchReview:
 
         assert w.reviews._rounds["abc"] == 2
 
+    def test_empty_branch_not_reviewed(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        (w.repo_dir / "REVIEW.md").write_text(
+            "---\nworkspace:\n  base_branch: master\nreview:\n  max_rounds: 3\n---\n"
+        )
+        sd = _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
+        launched = []
+        w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
+        w.telegram.notify = MagicMock()
+
+        with patch("host.watcher.review_orchestrator.check_empty_session", return_value=True):
+            w.reviews.maybe_launch_review("abc", sd, "issue-abc", w.repo_dir / "REVIEW.md")
+
+        assert launched == []
+        state = json.loads((sd / "state.json").read_text())
+        assert state["status"] == "waiting:human-review"
+        w.telegram.notify.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # extract_reviewer_verdict tests

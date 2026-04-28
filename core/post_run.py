@@ -5,6 +5,7 @@ Extracted from SessionRunner to keep session.py focused on the event loop.
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 from core.protocols import (
@@ -19,6 +20,25 @@ log = logging.getLogger(__name__)
 
 CHECKPOINT_SUMMARIZE_THRESHOLD = 10
 CHECKPOINT_SUMMARY_COUNT = 5
+
+
+def check_empty_session(repo: Path, branch: str, base: str) -> bool:
+    """Return True when branch has no commits beyond base."""
+    result = subprocess.run(
+        ["git", "log", "--oneline", f"{base}..{branch}"],
+        capture_output=True,
+        text=True,
+        cwd=repo,
+    )
+    if result.returncode != 0:
+        log.warning(
+            "Failed to check commits for %s against %s: %s",
+            branch,
+            base,
+            result.stderr.strip() or result.stdout.strip(),
+        )
+        return False
+    return not result.stdout.strip()
 
 
 def post_run_action(
@@ -45,7 +65,10 @@ def post_run_action(
         # Pre-review rebase now runs on host side (review_orchestrator) to avoid
         # bind-mount issues where git cannot unlink mounted files like WORKFLOW.md.
         # Container just transitions to waiting:review.
-        notify_done(state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st)
+        notify_done(
+            state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st,
+            base_branch=base_branch,
+        )
         return None
     if st.status in ("accepted", "rejected", "closed",
                       "suspended:auth-failure", "suspended:auth-failure-permanent"):
@@ -166,6 +189,7 @@ def notify_done(
     notifier: Notifier,
     issue: TrackerIssue,
     state,
+    base_branch: str = "master",
 ):
     """Post proof-of-work summary and notify."""
     state_mgr.mark_done("waiting:review")
@@ -173,6 +197,12 @@ def notify_done(
     current_state = state_mgr.load_state()
     diff = workspace_mgr.diff_stat(workspace.path) if workspace else "N/A"
     ticks = "```"
+    empty_session = (
+        workspace is not None
+        and check_empty_session(workspace.path, state.branch, base_branch)
+    )
+    if empty_session:
+        state_mgr.update_status("waiting:human-review")
 
     summary_lines = [f"- {cp.description}" for cp in state.checkpoints]
     summary = "\n".join(summary_lines) if summary_lines else "No checkpoints recorded."
@@ -180,8 +210,14 @@ def notify_done(
     cost_line = format_cost_line(current_state.usage, resumes=current_state.step)
     cost_section = f"\n{cost_line}" if cost_line else ""
 
+    heading = "🏁 **Work complete — awaiting review**"
+    note = ""
+    if empty_session:
+        heading = "🏁 **Empty session — awaiting human review**"
+        note = "\n⚠️ No commits detected. Did you forget to commit your changes?"
     proof = (
-        f"🏁 **Work complete — awaiting review**\n\n"
+        f"{heading}\n\n"
+        f"{note}\n"
         f"**Summary:**\n{summary}\n\n"
         f"**Q&A exchanges:** {len(state.human_answers)}\n"
         f"**Changes:**\n{ticks}\n{diff}\n{ticks}"
@@ -191,7 +227,8 @@ def notify_done(
     tracker.add_label(issue.id, "needs-review")
     tracker.remove_label(issue.id, "agent-in-progress")
     notifier.notify(
-        f"🏁 {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]} — done."
+        f"🏁 {issue.identifier} {issue.title[:TITLE_TRUNCATE_LEN]}"
+        f"{' — empty session.' if empty_session else ' — done.'}"
         f" nightshift accept/reject/revise {issue.identifier}",
         level=NotificationLevel.ACTIONS,
     )
