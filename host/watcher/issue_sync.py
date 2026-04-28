@@ -118,7 +118,7 @@ def _process_file(session_dir: Path, path: Path, tracker) -> int:
         try:
             _validate_outbox_entry(entry)
         except ValueError as e:
-            log.warning(f"[{session_dir.name}] Invalid outbox entry on line {line_no}: {e}; entry={entry}")
+            log.error(f"[{session_dir.name}] Invalid outbox entry on line {line_no}: {e}; entry={entry}")
             continue
         if _apply_outbox_entry(session_dir.name, tracker, entry):
             processed += 1

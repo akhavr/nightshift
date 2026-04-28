@@ -9,8 +9,10 @@ import pytest
 
 from host.watchdog.session_checker import (
     check_sessions,
+    check_dead_review_containers,
     find_stuck_sessions,
     StuckSession,
+    DeadReviewSession,
     STUCK_THRESHOLD_MINUTES,
 )
 
@@ -155,3 +157,63 @@ def test_finds_stuck_reviewing_session(tmp_path):
     stuck = list(check_sessions(tmp_path, "test-project"))
     assert len(stuck) == 1
     assert stuck[0].status == "reviewing"
+
+
+def test_detects_reviewing_with_no_container(tmp_path, monkeypatch):
+    """Session in reviewing status with no running container should be flagged."""
+    sessions_dir = tmp_path / ".nightshift" / "sessions"
+    session_dir = sessions_dir / "abc123def456"
+    session_dir.mkdir(parents=True)
+
+    state_file = session_dir / "state.json"
+    state_file.write_text(json.dumps({"status": "reviewing", "short_id": "abc123"}))
+
+    # Mock docker_container_status to return None (no container)
+    monkeypatch.setattr(
+        "host.watchdog.session_checker.docker_container_status",
+        lambda name: None
+    )
+
+    dead = list(check_dead_review_containers(tmp_path, "test-project"))
+    assert len(dead) == 1
+    assert dead[0].session_id == "abc123def456"[:12]
+    assert dead[0].status == "reviewing"
+    assert dead[0].container_missing is True
+
+
+def test_ignores_reviewing_with_running_container(tmp_path, monkeypatch):
+    """Session in reviewing status with running container should NOT be flagged."""
+    sessions_dir = tmp_path / ".nightshift" / "sessions"
+    session_dir = sessions_dir / "abc123def456"
+    session_dir.mkdir(parents=True)
+
+    state_file = session_dir / "state.json"
+    state_file.write_text(json.dumps({"status": "reviewing", "short_id": "abc123"}))
+
+    # Mock docker_container_status to return "running" (container exists)
+    monkeypatch.setattr(
+        "host.watchdog.session_checker.docker_container_status",
+        lambda name: "running"
+    )
+
+    dead = list(check_dead_review_containers(tmp_path, "test-project"))
+    assert len(dead) == 0
+
+
+def test_ignores_non_reviewing_status_for_container_check(tmp_path, monkeypatch):
+    """Only reviewing sessions should be checked for container status."""
+    sessions_dir = tmp_path / ".nightshift" / "sessions"
+    session_dir = sessions_dir / "abc123def456"
+    session_dir.mkdir(parents=True)
+
+    state_file = session_dir / "state.json"
+    state_file.write_text(json.dumps({"status": "working", "short_id": "abc123"}))
+
+    # Mock docker_container_status to return None (no container)
+    monkeypatch.setattr(
+        "host.watchdog.session_checker.docker_container_status",
+        lambda name: None
+    )
+
+    dead = list(check_dead_review_containers(tmp_path, "test-project"))
+    assert len(dead) == 0
