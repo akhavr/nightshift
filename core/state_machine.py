@@ -66,9 +66,12 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     # starting -> suspended states (early failures)
     ("starting", "suspended:auth-failure"),
     ("starting", "suspended:hook-failure"),
+    ("starting", "suspended:too-complex"),
     # starting -> done (immediate completion in tests/edge cases)
     ("starting", "done:pending-review"),
     ("starting", "waiting:review"),
+    # starting -> rejected (discard stuck session)
+    ("starting", "rejected"),
     # working -> waiting states
     ("working", "waiting:question"),
     ("working", "waiting:review"),
