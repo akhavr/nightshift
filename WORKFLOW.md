@@ -43,10 +43,7 @@ terminal_statuses:
   - closed
 
 overflow:
-  agent_kind: codex
-  extra_args: []
-  env:
-    CODEX_MODEL: gpt-5.4-mini
+  profile: codex
 
 overflow_profiles:
   codex-gpt54:

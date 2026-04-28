@@ -1,3 +1,7 @@
+codex:
+  agent_kind: codex
+  # Uses default OAuth authentication
+
 codex-gpt54:
   agent_kind: codex
   env:
