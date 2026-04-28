@@ -588,3 +588,19 @@ def test_graphql_router_bug_show_json(graphql_tracker, monkeypatch):
     assert "labels" in data
     assert "comments" in data
     tracker.shutdown()
+
+
+def test_graphql_router_bug_show_not_found(graphql_tracker, monkeypatch):
+    """Router returns 'not found' message when bug doesn't exist."""
+    tracker, _popen, _proc = graphql_tracker
+    monkeypatch.setattr(
+        tracker,
+        "_query",
+        MagicMock(return_value={"repository": {"bug": None}}),
+    )
+
+    result = tracker.run_raw("bug", "show", "nonexistent")
+
+    assert "not found" in result
+    assert "nonexistent" in result
+    tracker.shutdown()

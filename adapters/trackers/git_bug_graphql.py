@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import socket
 import subprocess
@@ -250,7 +251,6 @@ class GitBugGraphQLTracker:
 
     def _format_issue_json(self, bug: dict[str, Any]) -> str:
         """Format issue as JSON for 'bug show -f json'."""
-        import json
         comments = _connection_nodes(bug.get("comments"))
         return json.dumps({
             "id": bug.get("id", ""),
@@ -373,13 +373,13 @@ class GitBugGraphQLTracker:
         if cmd == "comment" and len(rest) >= 4:
             if rest[0] == "new":
                 issue_id = rest[1]
-                message = self._extract_message_arg(rest[2:])
+                message = self._extract_arg(rest[2:], ("-m", "--message"))
                 if message is not None:
                     return ("add_comment", (issue_id, message))
 
         elif cmd == "add":
-            title = self._extract_title_arg(rest)
-            message = self._extract_message_arg(rest)
+            title = self._extract_arg(rest, ("-t", "--title"))
+            message = self._extract_arg(rest, ("-m", "--message"))
             if title is not None and message is not None:
                 return ("create_issue", (title, message))
 
@@ -397,32 +397,16 @@ class GitBugGraphQLTracker:
 
         elif cmd == "show" and len(rest) >= 1:
             issue_id = rest[0]
-            fmt = self._extract_format_arg(rest[1:])
+            fmt = self._extract_arg(rest[1:], ("-f", "--format"))
             return ("show_issue", (issue_id, fmt))
 
         return None
 
     @staticmethod
-    def _extract_message_arg(args: tuple[str, ...]) -> str | None:
-        """Extract -m/--message argument value from args."""
+    def _extract_arg(args: tuple[str, ...], flags: tuple[str, ...]) -> str | None:
+        """Extract argument value for given flags from args."""
         for i, arg in enumerate(args):
-            if arg in ("-m", "--message") and i + 1 < len(args):
-                return args[i + 1]
-        return None
-
-    @staticmethod
-    def _extract_title_arg(args: tuple[str, ...]) -> str | None:
-        """Extract -t/--title argument value from args."""
-        for i, arg in enumerate(args):
-            if arg in ("-t", "--title") and i + 1 < len(args):
-                return args[i + 1]
-        return None
-
-    @staticmethod
-    def _extract_format_arg(args: tuple[str, ...]) -> str | None:
-        """Extract -f/--format argument value from args."""
-        for i, arg in enumerate(args):
-            if arg in ("-f", "--format") and i + 1 < len(args):
+            if arg in flags and i + 1 < len(args):
                 return args[i + 1]
         return None
 
