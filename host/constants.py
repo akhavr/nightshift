@@ -1,3 +1,4 @@
+# File signaling test - can be removed
 """Named constants for host-side modules.
 
 Replaces magic numbers scattered across watcher.py, cli.py, and launch.py.
