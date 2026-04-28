@@ -13,6 +13,7 @@ codex-gpt54:
 
 codex-gpt54mini:
   agent_kind: codex
+  signal_method: file
   skip_oauth: true
   env:
     CODEX_MODEL: gpt-5.4-mini
