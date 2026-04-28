@@ -1723,7 +1723,7 @@ def test_reject_suspended_session(tmp_path, capsys, monkeypatch):
         cmd_reject(_make_args(issue_id=sid, workflow=None))
 
     out = capsys.readouterr().out
-    assert "Discarding" in out or not out.strip()
+    assert "Rejected and cleaned up" in out
 
 
 def test_resume_validates_state(tmp_path, capsys):

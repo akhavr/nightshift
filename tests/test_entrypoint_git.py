@@ -66,6 +66,9 @@ def _init_repo_with_worktree(tmp_path: Path) -> tuple[Path, Path, Path]:
     return repo, worktree, git_dir
 
 
+_REPO_ROOT = Path(__file__).parent.parent
+
+
 def _write_cleanup_harness(
     tmp_path: Path,
     worktree: Path,
@@ -81,6 +84,7 @@ def _write_cleanup_harness(
     if remove_git_file:
         remove_git_line = f'\nrm -f "{worktree / ".git"}"'
 
+    entrypoint_path = _REPO_ROOT / "entrypoint.py"
     script = tmp_path / "entrypoint_harness.sh"
     script.write_text(
         f"""#!/bin/sh
@@ -93,7 +97,7 @@ export ORIGINAL_GIT_CONTENT_FILE="{original_git_file}"
 
 cleanup() {{
     cleanup_status=0
-    if python3 /workspace/entrypoint.py --cleanup; then
+    if python3 "{entrypoint_path}" --cleanup; then
         cleanup_status=0
     else
         cleanup_status=$?

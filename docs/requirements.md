@@ -65,9 +65,9 @@ The system sends notifications (status updates, questions, completion) through c
 - **Status:** covered
 
 ### REQ-011: Configuration via workflow file with per-repo discovery
-All adapter selection, runtime settings, hooks, and prompt templates are configured through a YAML-front-matter workflow file. Environment variables are resolved with `$VAR` syntax. Workflow file discovery follows a priority order: CLI `--workflow` flag > `.nightshift.yaml` pointer in repo root > `WORKFLOW.md` in repo root. `nightshift init --workflow-path` scaffolds workflow files at custom locations and writes the `.nightshift.yaml` pointer.
+All adapter selection, runtime settings, hooks, and prompt templates are configured through a YAML-front-matter workflow file. Environment variables are resolved with `$VAR` syntax. Overflow profiles can also be loaded from `.nightshift/profiles.yaml`, with workflow-local `overflow_profiles` entries acting as overrides. Workflow file discovery follows a priority order: CLI `--workflow` flag > `.nightshift.yaml` pointer in repo root > `WORKFLOW.md` in repo root. `nightshift init --workflow-path` scaffolds workflow files at custom locations and writes the `.nightshift.yaml` pointer.
 
-- **Tests:** test_auto_start.py (config parsing), test_review_step.py (config parsing), test_config_factories.py, test_prompts.py, test_search.py, test_config_discovery.py (discovery order, pointer read/write, init --workflow-path, error messages)
+- **Tests:** test_auto_start.py (config parsing), test_review_step.py (config parsing), test_config_factories.py, test_config_loader.py, test_entrypoint_overflow.py, test_prompts.py, test_search.py, test_config_discovery.py (discovery order, pointer read/write, init --workflow-path, error messages)
 - **Status:** covered
 
 ### REQ-012: CLI for all operations
@@ -236,6 +236,7 @@ The host-container interface is hardened against compromised or misbehaving agen
 | test_cli_helpers.py | REQ-001, REQ-005, REQ-006, REQ-012 |
 | test_composite_notifier.py | REQ-010 |
 | test_codex_agent.py | REQ-033 |
+| test_config_loader.py | REQ-011 |
 | test_config_factories.py | REQ-011, REQ-022, REQ-030 |
 | test_docker_utils.py | REQ-019 |
 | test_dotenv.py | REQ-013 |

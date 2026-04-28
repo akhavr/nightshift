@@ -16,9 +16,11 @@ from core.config.models import (
 log = logging.getLogger(__name__)
 
 
-def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
+def load_workflow(path: Path | str = "WORKFLOW.md",
+                  repo_root: Path | str | None = None) -> WorkflowConfig:
     """Load and parse WORKFLOW.md. Returns defaults if file doesn't exist."""
     path = Path(path)
+    repo_root = Path(repo_root) if repo_root is not None else path.resolve().parent
 
     if not path.exists():
         log.info(f"{path} not found — using defaults")
@@ -57,7 +59,7 @@ def load_workflow(path: Path | str = "WORKFLOW.md") -> WorkflowConfig:
         raw["overflow_profiles"] = _resolve_env_vars(overflow_profiles_raw, quiet=True)
     if overflow_raw is not None:
         raw["overflow"] = _resolve_env_vars(overflow_raw, quiet=True)
-    _parse_overflow(raw, config)
+    _parse_overflow(raw, config, repo_root)
 
     if "terminal_statuses" in raw:
         config.terminal_statuses = [str(s) for s in raw["terminal_statuses"]]
@@ -187,15 +189,48 @@ def _parse_overflow_profile(raw_profile: dict[str, Any]) -> OverflowProfile:
     )
 
 
+def _parse_overflow_profiles(raw_profiles: Any, source: str) -> dict[str, OverflowProfile]:
+    if not isinstance(raw_profiles, dict):
+        raise ValueError(f"{source} must be a mapping of profile names")
+    profiles: dict[str, OverflowProfile] = {}
+    for name, profile_raw in raw_profiles.items():
+        if not isinstance(profile_raw, dict):
+            raise ValueError(f"{source}.{name} must be a mapping")
+        profiles[str(name)] = _parse_overflow_profile(_resolve_env_vars(profile_raw, quiet=True))
+    return profiles
+
+
+def load_profiles(repo_root: Path | str) -> dict[str, OverflowProfile]:
+    repo_root = Path(repo_root)
+    profiles_path = repo_root / ".nightshift" / "profiles.yaml"
+    if not profiles_path.exists():
+        return {}
+    try:
+        raw = yaml.safe_load(profiles_path.read_text())
+    except yaml.YAMLError as e:
+        raise ValueError(f"{profiles_path} YAML parse error: {e}")
+    if raw is None:
+        return {}
+    return _parse_overflow_profiles(raw, str(profiles_path))
+
+
 def resolve_overflow_config(config: WorkflowConfig,
-                            profile_name: str | None = None) -> OverflowConfig:
+                            profile_name: str | None = None,
+                            repo_root: Path | str | None = None) -> OverflowConfig:
     """Return the active overflow config, optionally overriding the profile name."""
     selected_profile = profile_name or config.overflow.profile_name
     if not selected_profile:
         return config.overflow
-    profile = config.overflow.profiles.get(selected_profile)
+    profiles = dict(config.overflow.profiles)
+    profile = profiles.get(selected_profile)
+    if profile is None and repo_root is not None:
+        profiles = {**load_profiles(repo_root), **profiles}
+        profile = profiles.get(selected_profile)
     if profile is None:
-        raise ValueError(f"Unknown overflow profile '{selected_profile}'")
+        source = "workflow overflow_profiles"
+        if repo_root is not None:
+            source = f"{source} or {Path(repo_root) / '.nightshift' / 'profiles.yaml'}"
+        raise ValueError(f"Unknown overflow profile '{selected_profile}' in {source}")
     return OverflowConfig(
         extra_args=list(profile.extra_args),
         env=dict(profile.env),
@@ -203,20 +238,16 @@ def resolve_overflow_config(config: WorkflowConfig,
         pricing=profile.pricing,
         agent_kind=profile.agent_kind,
         profile_name=selected_profile,
-        profiles=dict(config.overflow.profiles),
+        profiles=profiles,
     )
 
 
-def _parse_overflow(raw: dict, config: WorkflowConfig):
+def _parse_overflow(raw: dict, config: WorkflowConfig, repo_root: Path | None = None):
     profiles: dict[str, OverflowProfile] = {}
+    if repo_root is not None:
+        profiles = load_profiles(repo_root)
     if "overflow_profiles" in raw:
-        raw_profiles = raw["overflow_profiles"]
-        if not isinstance(raw_profiles, dict):
-            raise ValueError("overflow_profiles must be a mapping of profile names")
-        for name, profile_raw in raw_profiles.items():
-            if not isinstance(profile_raw, dict):
-                raise ValueError(f"overflow_profiles.{name} must be a mapping")
-            profiles[str(name)] = _parse_overflow_profile(profile_raw)
+        profiles = {**profiles, **_parse_overflow_profiles(raw["overflow_profiles"], "overflow_profiles")}
 
     if "overflow" not in raw:
         if profiles:
@@ -225,7 +256,7 @@ def _parse_overflow(raw: dict, config: WorkflowConfig):
     o = raw["overflow"]
     if isinstance(o, str):
         config.overflow = OverflowConfig(profile_name=o, profiles=profiles)
-        config.overflow = resolve_overflow_config(config)
+        config.overflow = resolve_overflow_config(config, repo_root=repo_root)
         return
     if not isinstance(o, dict):
         raise ValueError("overflow must be a mapping or profile name")
