@@ -104,7 +104,7 @@ def _validate_usage(usage: object) -> tuple[dict, list[str]]:
     return validated, warnings
 
 
-def _validate_checkpoints(checkpoints: object) -> tuple[list[dict], list[str]]:
+def _validate_checkpoints(checkpoints: object) -> tuple[list, list[str]]:
     """Validate checkpoints as a list of mapping entries.
 
     We keep checkpoint dicts intact because host callers only rely on the
@@ -114,7 +114,6 @@ def _validate_checkpoints(checkpoints: object) -> tuple[list[dict], list[str]]:
     if not isinstance(checkpoints, list):
         return [], [f"invalid checkpoints {type(checkpoints).__name__}; defaulting to []"]
 
-    validated: list[dict] = []
     for idx, checkpoint in enumerate(checkpoints):
         if not isinstance(checkpoint, dict):
             warnings.append(
@@ -130,7 +129,7 @@ def _validate_checkpoints(checkpoints: object) -> tuple[list[dict], list[str]]:
             continue
         if not _is_non_negative_int(checkpoint["step"]):
             warnings.append(
-                f"checkpoints[{idx}]: invalid step {checkpoint['step']!r}; skipping"
+                f"checkpoints[{idx}]: invalid step {checkpoint['step']!r}"
             )
             continue
         invalid_text_fields = [
@@ -143,8 +142,21 @@ def _validate_checkpoints(checkpoints: object) -> tuple[list[dict], list[str]]:
             )
             warnings.append(f"checkpoints[{idx}]: invalid field types: {details}")
             continue
-        validated.append(dict(checkpoint))
-    return validated, warnings
+        timestamp = checkpoint["timestamp"].strip()
+        if not timestamp:
+            warnings.append(f"checkpoints[{idx}]: empty timestamp")
+            continue
+        try:
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            warnings.append(
+                f"checkpoints[{idx}]: invalid timestamp format {checkpoint['timestamp']!r}"
+            )
+            continue
+        if not checkpoint["commit"].strip():
+            warnings.append(f"checkpoints[{idx}]: empty commit")
+            continue
+    return checkpoints, warnings
 
 
 def _validate_state(
@@ -215,9 +227,9 @@ def _validate_state(
             state["orphan_resumes"] = STATE_DEFAULTS["orphan_resumes"]
         elif max_orphan_resumes is not None and orphan_resumes > max_orphan_resumes:
             warnings.append(
-                f"orphan_resumes {orphan_resumes} exceeds max {max_orphan_resumes}; clamping"
+                f"orphan_resumes {orphan_resumes} exceeds max {max_orphan_resumes}; defaulting to {STATE_DEFAULTS['orphan_resumes']!r}"
             )
-            state["orphan_resumes"] = max_orphan_resumes
+            state["orphan_resumes"] = STATE_DEFAULTS["orphan_resumes"]
 
     if "completed_at" in state and not isinstance(state["completed_at"], str):
         warnings.append(

@@ -58,7 +58,10 @@ class TestReadState:
             read_state(tmp_path)
 
     def test_reads_nested_structure(self, tmp_path):
-        state = {"status": "done", "metadata": {"turns": 5, "checkpoints": ["a", "b"]}}
+        state = {
+            "status": "done",
+            "metadata": {"turns": 5, "checkpoints": ["a", "b"]},
+        }
         (tmp_path / "state.json").write_text(json.dumps(state))
         assert read_state(tmp_path) == state
 
@@ -145,7 +148,7 @@ class TestReadState:
         with caplog.at_level("WARNING", logger="host.session_utils"):
             result = read_state(tmp_path)
 
-        assert result["checkpoints"] == [state["checkpoints"][0]]
+        assert result["checkpoints"] == state["checkpoints"]
         assert "checkpoints[1]" in caplog.text
 
     def test_read_state_rejects_invalid_orphan_resumes(self, tmp_path, caplog):
@@ -158,8 +161,28 @@ class TestReadState:
         with caplog.at_level("WARNING", logger="host.session_utils"):
             result = read_state(tmp_path)
 
-        assert result["orphan_resumes"] == MAX_ORPHAN_RESUMES
+        assert result["orphan_resumes"] == 0
         assert "orphan_resumes" in caplog.text
+
+    def test_read_state_rejects_invalid_checkpoint_timestamp(self, tmp_path, caplog):
+        state = {
+            "status": "working",
+            "checkpoints": [
+                {
+                    "step": 1,
+                    "description": "Initial pass",
+                    "timestamp": "not-a-timestamp",
+                    "commit": "abc1234",
+                }
+            ],
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["checkpoints"] == state["checkpoints"]
+        assert "timestamp" in caplog.text
 
     def test_read_state_handles_extra_fields(self, tmp_path):
         state = {
@@ -797,7 +820,7 @@ class TestLockedStateOperations:
 
         state = read_state(tmp_path)
         assert state["status"] == "suspended:unexpected"
-        assert state["orphan_resumes"] == MAX_ORPHAN_RESUMES
+        assert state["orphan_resumes"] == 0
         assert state["other"] == "value"
 
     def test_update_state_fields_creates_lock_file(self, tmp_path):

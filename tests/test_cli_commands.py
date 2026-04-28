@@ -1685,7 +1685,7 @@ def test_reject_suspended_session(tmp_path, capsys, monkeypatch):
     """cmd_reject should succeed from suspended:max-resumes (and other suspended states)."""
     repo, _ = _init_repo(tmp_path)
     sid = "suspendedreject"
-    env = os.environ.copy()
+    env = _clean_git_env()
     env["GIT_AUTHOR_NAME"] = "Test"
     env["GIT_AUTHOR_EMAIL"] = "test@test.com"
     env["GIT_COMMITTER_NAME"] = "Test"
