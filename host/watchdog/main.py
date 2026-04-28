@@ -1,5 +1,7 @@
 """Global watchdog entry point."""
 
+from __future__ import annotations
+
 import argparse
 import logging
 import signal
@@ -11,6 +13,9 @@ from host.watchdog.scanner import scan_registrations, cleanup_stale, WatcherStat
 from host.watchdog.log_monitor import LogMonitor
 from host.watchdog.alerter import Alerter, AlertConfig
 from host.watchdog.session_checker import find_stuck_sessions, STUCK_THRESHOLD_MINUTES
+from host.watchdog.config import load_config, WatchdogConfig
+from host.watchdog import rules, llm, notify
+from host.watchdog.scanner import discover_projects, read_log_tail
 
 log = logging.getLogger("watchdog")
 
@@ -90,20 +95,48 @@ def check_once(alerter: Alerter, log_monitor: LogMonitor, do_alerts: bool = True
     return issues
 
 
-def run_daemon(config: AlertConfig, shutdown_event: threading.Event) -> None:
-    """Run the watchdog daemon loop."""
-    alerter = Alerter(config=config)
-    log_monitor = LogMonitor()
+def run_once(config: WatchdogConfig, *, send_notifications: bool = True) -> int:
+    """Run one watchdog pass using the new multi-project config."""
+    issues = 0
 
-    log.info("Watchdog daemon started, polling every %ds", config.poll_interval_s)
+    for status in discover_projects(clean_stale=True):
+        log_lines = read_log_tail(status.log_path, config.watch.log_lines)
+        anomalies = []
+        anomalies.extend(rules.check_stale(status.log_path, config.watch.watcher_stale_s))
+        anomalies.extend(rules.check_errors(log_lines, config.rules.error_threshold))
+        anomalies.extend(rules.check_repeated(log_lines, config.rules.repeat_threshold))
+
+        if not anomalies:
+            continue
+
+        issues += len(anomalies)
+        snippet = "\n".join(log_lines[-config.watch.log_lines :])
+        llm_summary = ""
+        if config.llm.provider != "none":
+            llm_summary = llm.analyze(
+                snippet,
+                provider=config.llm.provider,
+                model=config.llm.model,
+                api_key=config.llm.api_key,
+                base_url=config.llm.base_url,
+            )
+        if send_notifications:
+            notify.send_alert(status.project, anomalies, llm_summary, config)
+
+    return issues
+
+
+def run_daemon(config: WatchdogConfig, shutdown_event: threading.Event) -> None:
+    """Run the watchdog daemon loop."""
+    log.info("Watchdog daemon started, polling every %ds", config.watch.interval_s)
 
     while not shutdown_event.is_set():
         try:
-            check_once(alerter, log_monitor)
+            run_once(config)
         except Exception as e:
             log.error("Check failed: %s", e)
 
-        shutdown_event.wait(timeout=config.poll_interval_s)
+        shutdown_event.wait(timeout=config.watch.interval_s)
 
     log.info("Watchdog daemon stopped")
 
@@ -119,15 +152,13 @@ def main(args: list[str] | None = None) -> int:
     parsed = parser.parse_args(args)
 
     setup_logging(parsed.verbose)
-    config = AlertConfig.load(parsed.config)
+    config = load_config(parsed.config)
 
     if parsed.list:
         return list_watchers()
 
     if parsed.check:
-        alerter = Alerter(config=config)
-        log_monitor = LogMonitor()
-        issues = check_once(alerter, log_monitor, do_alerts=not parsed.no_alerts)
+        issues = run_once(config, send_notifications=not parsed.no_alerts)
         if issues:
             print(f"Found {issues} issue(s)")
             return 1

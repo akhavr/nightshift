@@ -1,7 +1,10 @@
 """Scan registered watchers and check their health."""
 
+from __future__ import annotations
+
 import logging
 import os
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -26,6 +29,11 @@ class WatcherStatus:
     started: datetime
     alive: bool
     registration_file: Path
+
+    @property
+    def name(self) -> str:
+        """Alias used by the newer watchdog tests."""
+        return self.project
 
     @property
     def is_stale(self) -> bool:
@@ -77,16 +85,35 @@ def parse_registration(reg_file: Path) -> WatcherStatus | None:
         return None
 
 
-def scan_registrations(projects_d: Path | None = None) -> Iterator[WatcherStatus]:
-    """Scan all registration files and yield WatcherStatus objects."""
+def _remove_registration(reg_file: Path) -> bool:
+    try:
+        reg_file.unlink()
+        log.info("Removed registration: %s", reg_file)
+        return True
+    except OSError as e:
+        log.warning("Failed to remove registration %s: %s", reg_file, e)
+        return False
+
+
+def discover_projects(projects_d: Path | None = None, clean_stale: bool = False) -> Iterator[WatcherStatus]:
+    """Find all watcher registration files in projects.d."""
     base = projects_d or PROJECTS_D
     if not base.exists():
         return
 
     for reg_file in sorted(base.glob("*.yaml")):
         status = parse_registration(reg_file)
-        if status:
-            yield status
+        if not status:
+            continue
+        if clean_stale and not status.alive:
+            _remove_registration(reg_file)
+            continue
+        yield status
+
+
+def scan_registrations(projects_d: Path | None = None) -> Iterator[WatcherStatus]:
+    """Backward-compatible alias for discover_projects()."""
+    yield from discover_projects(projects_d)
 
 
 def cleanup_stale(status: WatcherStatus) -> bool:
@@ -100,3 +127,17 @@ def cleanup_stale(status: WatcherStatus) -> bool:
     except OSError as e:
         log.warning("Failed to remove stale registration %s: %s", status.registration_file, e)
         return False
+
+
+def read_log_tail(path: Path, lines: int = 100) -> list[str]:
+    """Read the tail of a log file."""
+    if not path.exists():
+        return []
+
+    try:
+        with path.open("r", errors="replace") as fh:
+            tail = deque(fh, maxlen=lines)
+        return [line.rstrip("\n") for line in tail]
+    except OSError as e:
+        log.warning("Failed to read log tail %s: %s", path, e)
+        return []
