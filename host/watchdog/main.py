@@ -9,6 +9,7 @@ import sys
 import threading
 from pathlib import Path
 
+from host.env import load_dotenv
 from host.watchdog.scanner import scan_registrations, cleanup_stale, WatcherStatus, PROJECTS_D
 from host.watchdog.log_monitor import LogMonitor
 from host.watchdog.alerter import Alerter, AlertConfig
@@ -152,6 +153,8 @@ def run_daemon(config: WatchdogConfig, shutdown_event: threading.Event) -> None:
 
 def main(args: list[str] | None = None) -> int:
     """Main entry point."""
+    load_dotenv(Path.cwd() / ".env")
+
     parser = argparse.ArgumentParser(description="Monitor nightshift watchers")
     parser.add_argument("--list", action="store_true", help="List registered watchers")
     parser.add_argument("--check", action="store_true", help="One-shot health check")
