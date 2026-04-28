@@ -73,6 +73,7 @@ The system has a strict three-layer split:
 - `UsageData` — dataclass for accumulated token usage and cost per session (input_tokens, output_tokens, cost_usd, model)
 
 Key core modules:
+- `agent_events.py` — Single source of truth for `AgentEventType` enum and `AgentEvent` dataclass. Defines the unified event stream for all agent adapters (REQ-030). Event types: STARTED, TEXT, TOOL_CALL, TOOL_RESULT, QUESTION, CHECKPOINT, DONE, ERROR, AUTH_FAILURE, SYSTEM, PROCESS_EXIT, STALL, PROVIDER_OVERLOAD, UNKNOWN. Provides `to_dict()` and `from_dict()` serialization methods. Re-exported by `protocols.py` for backward compatibility.
 - `config/` — Package: `models.py` (typed dataclasses), `loader.py` (YAML front matter parsing, env var resolution), `factories.py` (adapter registries and dynamic instantiation). `__init__.py` re-exports all public symbols for backward compatibility (`from core.config import load_workflow` still works).
 - `session.py` — `SessionRunner`: the main event loop. Streams agent events, handles markers (`@@LOG@@`, `@@CHECKPOINT@@`, `@@QUESTION@@`, `@@WAITING@@`, `@@DONE@@`), manages auto-resume on context limits/stalls. Delegates Q&A to `qa_flow.py`, post-run lifecycle to `post_run.py`, and hook execution to `hooks.py`.
 - `hooks.py` — Hook execution for workspace lifecycle events (after_create, before_run, after_run). Extracted from SessionRunner.
