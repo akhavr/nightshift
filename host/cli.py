@@ -1189,13 +1189,14 @@ def cmd_revise(a):
     state = read_state(sd)
     status = state.get("status")
     inline = a.message if hasattr(a, "message") and a.message else None
+    is_suspended = isinstance(status, str) and status.startswith("suspended:")
 
     if status in WORKING_STATUSES:
         if not inline:
             print("A message is required when revising a working session.",
                   file=sys.stderr)
             sys.exit(1)
-    elif status not in REVIEW_STATUSES:
+    elif status not in REVIEW_STATUSES and not is_suspended:
         print(f"Session {sid} is not revisable "
               f"(status: {status})", file=sys.stderr)
         sys.exit(1)

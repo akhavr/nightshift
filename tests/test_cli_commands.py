@@ -812,6 +812,48 @@ def test_cmd_revise_accepts_waiting_human_review(tmp_path, capsys):
     assert state["status"] == "working"
 
 
+def test_cmd_revise_suspended_session(tmp_path):
+    """revise accepts suspended sessions and relaunches with feedback."""
+    repo, run = _init_repo(tmp_path)
+    sd = repo / ".nightshift" / "sessions" / "suspend12345"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(
+        json.dumps({"status": "suspended:max-resumes", "step": 4, "checkpoints": []})
+    )
+
+    (repo / "WORKFLOW.md").write_text(
+        "---\n"
+        "agent:\n  kind: claude-code\n"
+        "tracker:\n  kind: git-bug\n"
+        "workspace:\n  kind: worktree\n  base_branch: main\n  root: .worktrees\n"
+        "---\nPrompt\n"
+    )
+
+    mock_tracker = MagicMock()
+    mock_tracker.get_comments.return_value = []
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="suspend12345"), \
+         patch("host.cli.get_tracker_with_fallback", return_value=mock_tracker), \
+         patch("subprocess.run") as mock_subproc:
+        cmd_revise(_make_args(
+            issue_id="suspend12345",
+            workflow=str(repo / "WORKFLOW.md"),
+            message="Resume with the new plan.",
+        ))
+
+    resume_prompt = sd / "resume-prompt.md"
+    assert resume_prompt.exists()
+    assert "Resume with the new plan." in resume_prompt.read_text()
+
+    state = json.loads((sd / "state.json").read_text())
+    assert state["status"] == "working"
+
+    launch_call = mock_subproc.call_args_list[-1]
+    cmd_args = launch_call[0][0]
+    assert "--resume" in cmd_args
+
+
 def test_cmd_revise_working_session_stops_and_relaunches(tmp_path, capsys):
     """revise on a working session stops the container, writes prompt, relaunches."""
     repo, run = _init_repo(tmp_path)
