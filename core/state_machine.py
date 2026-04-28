@@ -70,6 +70,8 @@ TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     # starting -> done (immediate completion in tests/edge cases)
     ("starting", "done:pending-review"),
     ("starting", "waiting:review"),
+    # starting -> rejected (discard stuck session)
+    ("starting", "rejected"),
     # working -> waiting states
     ("working", "waiting:question"),
     ("working", "waiting:review"),
