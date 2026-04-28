@@ -137,7 +137,10 @@ def test_llm_provider_ollama(monkeypatch):
 def test_llm_provider_openrouter(monkeypatch):
     from host.watchdog import llm
 
-    response = SimpleNamespace(json=lambda: {"choices": [{"message": {"content": "analysis"}}]})
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {"choices": [{"message": {"content": "analysis"}}]},
+    )
     post = MagicMock(return_value=response)
     monkeypatch.setattr(llm.requests, "post", post)
 
@@ -192,14 +195,15 @@ def test_llm_openrouter_failure_returns_empty(monkeypatch):
 
 
 def test_notify_telegram(monkeypatch):
+    from host.watchdog import config as watchdog_config
     from host.watchdog import notify
 
     post = MagicMock(return_value=SimpleNamespace(json=lambda: {"ok": True}))
     monkeypatch.setattr(notify.requests, "post", post)
 
-    config = notify.WatchdogConfig(
-        notify=notify.NotifyConfig(
-            telegram=notify.TelegramNotifyConfig(token="tok", chat_id="42")
+    config = watchdog_config.WatchdogConfig(
+        notify=watchdog_config.NotifyConfig(
+            telegram=watchdog_config.TelegramNotifyConfig(token="tok", chat_id="42")
         )
     )
 
@@ -212,6 +216,7 @@ def test_notify_telegram(monkeypatch):
 
 
 def test_notify_failure_returns_false(monkeypatch):
+    from host.watchdog import config as watchdog_config
     from host.watchdog import notify
 
     def boom(*args, **kwargs):
@@ -219,9 +224,9 @@ def test_notify_failure_returns_false(monkeypatch):
 
     monkeypatch.setattr(notify.requests, "post", boom)
 
-    config = notify.WatchdogConfig(
-        notify=notify.NotifyConfig(
-            telegram=notify.TelegramNotifyConfig(token="tok", chat_id="42")
+    config = watchdog_config.WatchdogConfig(
+        notify=watchdog_config.NotifyConfig(
+            telegram=watchdog_config.TelegramNotifyConfig(token="tok", chat_id="42")
         )
     )
 
