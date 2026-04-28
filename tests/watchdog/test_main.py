@@ -90,6 +90,31 @@ started: {now.isoformat()}
     assert "Alive: 1" in captured.out
 
 
+def test_list_watchers_skips_dead_entries(tmp_path, capsys):
+    """List watchers should omit dead registrations and clean them up."""
+    projects_d = tmp_path / "projects.d"
+    projects_d.mkdir()
+
+    now = datetime.now(timezone.utc)
+    dead_reg = projects_d / "project-dead.yaml"
+    dead_reg.write_text(f"""\
+path: /home/user/src/project-dead
+log: /home/user/src/project-dead/.nightshift/watcher.log
+pid: 999999999
+started: {now.isoformat()}
+""")
+
+    with patch("host.watchdog.main.PROJECTS_D", projects_d):
+        with patch("host.watchdog.scanner.PROJECTS_D", projects_d):
+            result = list_watchers()
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert "project-dead" not in captured.out
+    assert "No watchers registered" in captured.out
+    assert not dead_reg.exists()
+
+
 def test_check_once_detects_crash(tmp_path):
     """Check once should detect crashed watchers."""
     projects_d = tmp_path / "projects.d"

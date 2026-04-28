@@ -33,14 +33,21 @@ def test_discover_projects_from_projects_d(tmp_path, monkeypatch):
     project_a.mkdir()
     project_b.mkdir()
     _write_registration(projects_d, "project-a", path=project_a, log=project_a / "watcher.log", pid=os.getpid())
-    _write_registration(projects_d, "project-b", path=project_b, log=project_b / "watcher.log", pid=999999999)
+    dead_reg = _write_registration(
+        projects_d,
+        "project-b",
+        path=project_b,
+        log=project_b / "watcher.log",
+        pid=999999999,
+    )
     (projects_d / "ignore.txt").write_text("nope")
 
     monkeypatch.setattr(scanner, "PROJECTS_D", projects_d)
 
     projects = list(scanner.discover_projects())
 
-    assert {project.name for project in projects} == {"project-a", "project-b"}
+    assert {project.name for project in projects} == {"project-a"}
+    assert not dead_reg.exists()
 
 
 def test_cleans_stale_registrations(tmp_path, monkeypatch):
@@ -54,7 +61,7 @@ def test_cleans_stale_registrations(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scanner, "PROJECTS_D", projects_d)
 
-    projects = list(scanner.discover_projects(clean_stale=True))
+    projects = list(scanner.discover_projects())
 
     assert projects == []
     assert not reg.exists()

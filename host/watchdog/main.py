@@ -41,7 +41,7 @@ def format_status_line(status: WatcherStatus) -> str:
 
 def list_watchers() -> int:
     """List all registered watchers and their status."""
-    watchers = list(scan_registrations())
+    watchers = list(discover_projects())
     if not watchers:
         print(f"No watchers registered in {PROJECTS_D}")
         return 0
@@ -99,7 +99,7 @@ def run_once(config: WatchdogConfig, *, send_notifications: bool = True) -> int:
     """Run one watchdog pass using the new multi-project config."""
     issues = 0
 
-    for status in discover_projects(clean_stale=True):
+    for status in discover_projects():
         try:
             log_lines = read_log_tail(status.log_path, config.watch.log_lines)
             anomalies = []

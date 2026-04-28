@@ -95,25 +95,32 @@ def _remove_registration(reg_file: Path) -> bool:
         return False
 
 
-def discover_projects(projects_d: Path | None = None, clean_stale: bool = False) -> Iterator[WatcherStatus]:
-    """Find all watcher registration files in projects.d."""
+def _iter_registrations(projects_d: Path | None = None) -> Iterator[WatcherStatus]:
+    """Yield parsed registrations without filtering."""
     base = projects_d or PROJECTS_D
     if not base.exists():
         return
 
     for reg_file in sorted(base.glob("*.yaml")):
         status = parse_registration(reg_file)
-        if not status:
-            continue
+        if status:
+            yield status
+
+
+def discover_projects(projects_d: Path | None = None, clean_stale: bool = True) -> Iterator[WatcherStatus]:
+    """Find watcher registrations and yield only live projects by default."""
+    for status in _iter_registrations(projects_d):
         if clean_stale and not status.alive:
-            _remove_registration(reg_file)
+            _remove_registration(status.registration_file)
+            continue
+        if not status.alive:
             continue
         yield status
 
 
 def scan_registrations(projects_d: Path | None = None) -> Iterator[WatcherStatus]:
-    """Backward-compatible alias for discover_projects()."""
-    yield from discover_projects(projects_d)
+    """Backward-compatible legacy scan that still reports dead registrations."""
+    yield from _iter_registrations(projects_d)
 
 
 def cleanup_stale(status: WatcherStatus) -> bool:
