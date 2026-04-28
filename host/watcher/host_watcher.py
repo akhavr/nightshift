@@ -530,6 +530,7 @@ class HostWatcher:
             self._sync_issue_data()
             self.check_background_launches()
             self.monitor.check_orphaned_sessions()
+            self.monitor.check_runaway_sessions()
             self.monitor.check_auth_failures()
             self.monitor.check_provider_outages()
             self.monitor.check_zombie_containers()

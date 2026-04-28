@@ -17,6 +17,7 @@ from host.constants import (
     ZOMBIE_CHECK_INTERVAL_S, ZOMBIE_TIMEOUT_MULTIPLIER, DEFAULT_STALL_TIMEOUT_S,
     SESSION_SIZE_CHECK_INTERVAL_S, SIZE_WARNING_THRESHOLD_MB,
     SIZE_CRITICAL_THRESHOLD_MB, BLOCKED_LABEL_PREFIX, REVISE_PENDING_FILENAME,
+    RUNAWAY_RESUME_WARNING_THRESHOLD,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -157,6 +158,7 @@ class SessionMonitor:
         self._last_review_cleanup_check = 0.0
         self._alerted_zombies: set[str] = set()  # Avoid duplicate alerts
         self._alerted_large_sessions: set[str] = set()  # Avoid duplicate alerts
+        self._alerted_runaway_sessions: set[str] = set()  # Avoid duplicate alerts
 
     def cleanup_stale_review_sessions(self):
         """Clean up review sessions with completed_at set but not yet cleaned up.
@@ -289,6 +291,50 @@ class SessionMonitor:
         if now - self._last_review_cleanup_check >= REVIEW_POLL_INTERVAL_S:
             self._last_review_cleanup_check = now
             self.cleanup_completed_review_sessions()
+
+    def check_runaway_sessions(self):
+        """Warn when active sessions are approaching the orphan-resume limit."""
+        if not self.sessions_dir.exists():
+            return
+
+        now = time.time()
+        for session_dir, state in self.iter_session_states():
+            sid = session_dir.name
+            if state.get("status") not in ("working", "starting"):
+                self._alerted_runaway_sessions.discard(sid)
+                continue
+            self._check_session_for_runaway(session_dir, sid, state, now)
+
+    def _check_session_for_runaway(self, session_dir: Path, sid: str, state: dict, now: float):
+        """Check a single session for runaway orphan-resume behavior."""
+        try:
+            raw_state = json.loads((session_dir / "state.json").read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"[{sid}] Failed to read state for runaway check: {e}")
+            raw_state = state
+
+        if raw_state.get("status") not in ("working", "starting"):
+            self._alerted_runaway_sessions.discard(sid)
+            return
+
+        orphan_resumes = raw_state.get("orphan_resumes", 0)
+        if orphan_resumes < RUNAWAY_RESUME_WARNING_THRESHOLD:
+            self._alerted_runaway_sessions.discard(sid)
+            return
+
+        if sid in self._alerted_runaway_sessions:
+            return
+        self._alerted_runaway_sessions.add(sid)
+
+        log.warning(
+            f"[{sid}] Runaway resume pattern detected: orphan_resumes={orphan_resumes} "
+            f"(threshold: {RUNAWAY_RESUME_WARNING_THRESHOLD})"
+        )
+        self.telegram.notify(
+            f"⚠️ `{sid}` has resumed {orphan_resumes} times without a live container. "
+            f"This may be a runaway loop; check signal method and resume behavior.",
+            level=NotificationLevel.ACTIONS,
+        )
 
     def maybe_resume_orphan(self, session_dir: Path, sid: str, now: float):
         """Check a single session and auto-resume if orphaned."""
