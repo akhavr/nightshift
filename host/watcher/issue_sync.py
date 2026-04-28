@@ -31,7 +31,7 @@ _LEGACY_OP_ALIASES = {
     "label_add": "add_label",
     "label_rm": "remove_label",
 }
-ISSUE_ID_PATTERN = re.compile(r"^[a-f0-9]{8,40}$")
+ISSUE_ID_PATTERN = re.compile(r"^[a-f0-9]{8,64}$")
 
 _WORKING_STATUSES = ("working", "starting", "waiting:answer")
 
