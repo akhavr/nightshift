@@ -10,6 +10,8 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Protocol, Optional, Iterator, Any, runtime_checkable
 
+from core.agent_events import AgentEvent, AgentEventType
+
 
 SHORT_ID_LEN = 12   # default truncation length for issue IDs
 
@@ -70,30 +72,8 @@ class IssueTracker(Protocol):
 
 
 # ── Coding Agent ──────────────────────────────────────────
-
-class AgentEventType(Enum):
-    STARTED = auto()
-    TEXT = auto()
-    TOOL_CALL = auto()
-    TOOL_RESULT = auto()
-    QUESTION = auto()
-    CHECKPOINT = auto()
-    DONE = auto()
-    ERROR = auto()
-    SYSTEM = auto()
-    PROCESS_EXIT = auto()
-    STALL = auto()
-    AUTH_FAILURE = auto()
-    PROVIDER_OVERLOAD = auto()
-    UNKNOWN = auto()
-
-
-@dataclass
-class AgentEvent:
-    type: AgentEventType
-    content: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-    raw: str = ""
+# AgentEventType and AgentEvent are imported from core.agent_events
+# (single source of truth for the unified event stream)
 
 
 @runtime_checkable
