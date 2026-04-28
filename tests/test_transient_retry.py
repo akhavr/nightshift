@@ -62,6 +62,11 @@ class TestIsTransientError:
         assert not HeadlessAgentBase._is_transient_error("Invalid API key")
         assert not HeadlessAgentBase._is_transient_error("authentication_error")
 
+    def test_is_transient_error_detects_usage_limit(self):
+        """Usage limit messages are detected as transient."""
+        assert HeadlessAgentBase._is_transient_error("usage limit")
+        assert HeadlessAgentBase._is_transient_error("You've hit your usage limit")
+
     def test_is_transient_error_ignores_normal_output(self):
         """Normal output is not detected as transient error."""
         assert not HeadlessAgentBase._is_transient_error("Successfully completed task")
