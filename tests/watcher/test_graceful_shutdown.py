@@ -1,6 +1,7 @@
 """Tests for watcher graceful shutdown on SIGTERM/SIGINT."""
 
 import json
+import importlib
 import signal
 import subprocess
 import sys
@@ -22,6 +23,8 @@ from host.watcher.tracker_writer import TrackerSocketServer, TrackerWriter
 from adapters.trackers.git_bug import GitBugTracker, _graceful_kill
 
 from tests.watcher.conftest import _make_watcher, _make_session
+
+watcher_main = importlib.import_module("host.watcher.main")
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +140,36 @@ class TestWatcherShutdown:
 
         w.run(shutdown_event=ev)
         mock_tracker.terminate_current.assert_called_once()
+
+    def test_main_terminates_tracker_on_watcher_crash(self, tmp_path, monkeypatch):
+        """main() terminates the git-bug webui if watcher.run() raises."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+
+        tracker = MagicMock()
+        watcher = MagicMock()
+        watcher.run.side_effect = RuntimeError("boom")
+        watcher._gitbug_tracker.return_value = tracker
+
+        monkeypatch.setattr(watcher_main, "get_repo_root", lambda: repo)
+        monkeypatch.setattr(watcher_main, "load_all_dotenv", lambda _path: None)
+        monkeypatch.setattr(watcher_main, "HostWatcher", MagicMock(return_value=watcher))
+        monkeypatch.setattr(watcher_main, "register", MagicMock())
+        monkeypatch.setattr(watcher_main, "unregister", MagicMock())
+        monkeypatch.setattr(watcher_main.signal, "signal", lambda *args, **kwargs: None)
+        monkeypatch.setattr("sys.argv", [
+            "watcher",
+            "--sessions-dir",
+            str(sessions),
+        ])
+
+        with pytest.raises(RuntimeError, match="boom"):
+            watcher_main.main()
+
+        tracker.terminate.assert_called_once()
+        watcher_main.unregister.assert_called_once_with(repo.name)
 
 
 # ---------------------------------------------------------------------------
