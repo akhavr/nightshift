@@ -14,6 +14,164 @@ from core.state_machine import SessionStateMachine, STATES
 
 logger = logging.getLogger(__name__)
 
+STATE_DEFAULTS = {
+    "status": "starting",
+    "step": 0,
+    "orphan_resumes": 0,
+    "overload_resumes": 0,
+    "auth_retries": 0,
+    "completed_at": "",
+    "checkpoints": [],
+    "human_answers": [],
+    "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "model": "",
+    },
+}
+
+STATE_SCHEMA = {
+    "status": {"type": str, "allowed": STATES},
+    "step": {"type": int, "min": 0},
+    "orphan_resumes": {"type": int, "min": 0},
+    "overload_resumes": {"type": int, "min": 0},
+    "auth_retries": {"type": int, "min": 0},
+    "completed_at": {"type": str},
+    "checkpoints": {"type": list},
+    "human_answers": {"type": list},
+    "usage": {"type": dict},
+}
+
+
+def _is_non_negative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _validate_usage(usage: dict) -> dict:
+    """Validate usage fields and normalize numeric values."""
+    validated = dict(usage)
+
+    for field_name in ("input_tokens", "output_tokens"):
+        if field_name in validated and not _is_non_negative_int(validated[field_name]):
+            raise ValueError(
+                f"Invalid usage.{field_name}: {validated[field_name]!r}"
+            )
+        if field_name in validated:
+            validated[field_name] = int(validated[field_name])
+
+    if "cost_usd" in validated:
+        cost_usd = validated["cost_usd"]
+        if isinstance(cost_usd, bool) or not isinstance(cost_usd, (int, float)):
+            raise ValueError(f"Invalid usage.cost_usd: {cost_usd!r}")
+        if cost_usd < 0:
+            raise ValueError(f"Invalid usage.cost_usd: {cost_usd!r}")
+        validated["cost_usd"] = float(cost_usd)
+
+    if "model" in validated and not isinstance(validated["model"], str):
+        validated["model"] = str(validated["model"])
+
+    return validated
+
+
+def _validate_checkpoint(entry: object) -> tuple[dict | None, str | None]:
+    """Validate a checkpoint entry and return a normalized copy or a warning."""
+    if not isinstance(entry, dict):
+        return None, f"invalid checkpoint entry type: {type(entry).__name__}"
+
+    required_fields = ("step", "description", "timestamp", "commit")
+    for field_name in required_fields:
+        if field_name not in entry:
+            return None, f"checkpoint missing {field_name}"
+
+    step = entry["step"]
+    if not _is_non_negative_int(step):
+        return None, f"checkpoint has invalid step: {step!r}"
+
+    for field_name in ("description", "timestamp", "commit"):
+        if not isinstance(entry[field_name], str):
+            return None, f"checkpoint has invalid {field_name}: {entry[field_name]!r}"
+
+    return dict(entry), None
+
+
+def _validate_state(
+    data: dict,
+    *,
+    max_orphan_resumes: int | None = None,
+) -> tuple[dict, list[str]]:
+    """Validate and partially normalize state.json data.
+
+    Unknown fields are preserved for forward compatibility.
+    """
+    state = dict(data)
+    warnings: list[str] = []
+
+    if "status" in state:
+        status = state["status"]
+        if not isinstance(status, str) or status not in STATES:
+            warnings.append(f"invalid status {status!r}; defaulting to {STATE_DEFAULTS['status']!r}")
+            state["status"] = STATE_DEFAULTS["status"]
+
+    for field_name in ("step", "overload_resumes", "auth_retries"):
+        if field_name in state:
+            value = state[field_name]
+            if not _is_non_negative_int(value):
+                warnings.append(
+                    f"invalid {field_name} {value!r}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+                )
+                state[field_name] = STATE_DEFAULTS[field_name]
+
+    if "orphan_resumes" in state:
+        orphan_resumes = state["orphan_resumes"]
+        if not _is_non_negative_int(orphan_resumes):
+            warnings.append(
+                f"invalid orphan_resumes {orphan_resumes!r}; defaulting to {STATE_DEFAULTS['orphan_resumes']!r}"
+            )
+            state["orphan_resumes"] = STATE_DEFAULTS["orphan_resumes"]
+        elif max_orphan_resumes is not None and orphan_resumes > max_orphan_resumes:
+            warnings.append(
+                f"orphan_resumes {orphan_resumes} exceeds max {max_orphan_resumes}; clamping"
+            )
+            state["orphan_resumes"] = max_orphan_resumes
+
+    if "completed_at" in state and not isinstance(state["completed_at"], str):
+        warnings.append(
+            f"invalid completed_at {state['completed_at']!r}; defaulting to {STATE_DEFAULTS['completed_at']!r}"
+        )
+        state["completed_at"] = STATE_DEFAULTS["completed_at"]
+
+    if "checkpoints" in state:
+        checkpoints = state["checkpoints"]
+        if not isinstance(checkpoints, list):
+            warnings.append(
+                f"invalid checkpoints {type(checkpoints).__name__}; defaulting to []"
+            )
+            state["checkpoints"] = []
+        else:
+            validated_checkpoints: list[dict] = []
+            for idx, checkpoint in enumerate(checkpoints):
+                validated_checkpoint, warning = _validate_checkpoint(checkpoint)
+                if warning is not None:
+                    warnings.append(f"checkpoints[{idx}]: {warning}")
+                    continue
+                validated_checkpoints.append(validated_checkpoint)
+            state["checkpoints"] = validated_checkpoints
+
+    if "human_answers" in state and not isinstance(state["human_answers"], list):
+        warnings.append(
+            f"invalid human_answers {type(state['human_answers']).__name__}; defaulting to []"
+        )
+        state["human_answers"] = []
+
+    if "usage" in state:
+        usage = state["usage"]
+        if not isinstance(usage, dict):
+            raise ValueError(f"usage must be an object, got {type(usage).__name__}")
+        state["usage"] = _validate_usage(usage)
+
+    return state, warnings
+
 
 @contextmanager
 def state_lock(session_dir: Path) -> Generator[None, None, None]:

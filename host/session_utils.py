@@ -10,9 +10,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from core.state import state_lock
+from core.state import _validate_state, state_lock
 from core.state_machine import SessionStateMachine
-from host.constants import ARCHIVE_DIR
+from host.constants import ARCHIVE_DIR, MAX_ORPHAN_RESUMES
 from host.rebase import CONTAINER_GIT_PATH, _fix_container_gitdir
 
 log = logging.getLogger(__name__)
@@ -81,7 +81,15 @@ def sessions_dir(repo: Path | None = None) -> Path:
 
 def read_state(session_dir: Path) -> dict:
     """Read and parse state.json from a session directory."""
-    return json.loads((session_dir / "state.json").read_text())
+    raw_state = json.loads((session_dir / "state.json").read_text())
+    state, warnings = _validate_state(raw_state, max_orphan_resumes=MAX_ORPHAN_RESUMES)
+    if warnings:
+        log.warning(
+            "Validated state.json in %s with issues: %s",
+            session_dir,
+            "; ".join(warnings),
+        )
+    return state
 
 
 def write_state(session_dir: Path, state: dict) -> None:

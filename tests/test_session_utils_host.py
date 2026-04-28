@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from host.constants import MAX_ORPHAN_RESUMES
 from host.session_utils import (
     ARCHIVE_FILES,
     _git_repo_root,
@@ -60,6 +61,74 @@ class TestReadState:
         state = {"status": "done", "metadata": {"turns": 5, "checkpoints": ["a", "b"]}}
         (tmp_path / "state.json").write_text(json.dumps(state))
         assert read_state(tmp_path) == state
+
+    def test_read_state_validates_schema(self, tmp_path):
+        state = {
+            "status": "working",
+            "issue_id": "abc123",
+            "branch": "agent/abc123",
+            "step": 3,
+            "orphan_resumes": 1,
+            "checkpoints": [
+                {
+                    "step": 1,
+                    "description": "Initial pass",
+                    "timestamp": "2026-04-28T00:00:00+00:00",
+                    "commit": "abc1234",
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cost_usd": 0.25,
+                "model": "gpt-4.1",
+            },
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        result = read_state(tmp_path)
+
+        assert result == state
+
+    @pytest.mark.parametrize("cost_usd", [-1, "not-a-number"])
+    def test_read_state_rejects_invalid_usage(self, tmp_path, cost_usd):
+        state = {
+            "status": "working",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cost_usd": cost_usd,
+            },
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with pytest.raises(ValueError):
+            read_state(tmp_path)
+
+    def test_read_state_rejects_invalid_orphan_resumes(self, tmp_path, caplog):
+        state = {
+            "status": "working",
+            "orphan_resumes": MAX_ORPHAN_RESUMES + 5,
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["orphan_resumes"] == MAX_ORPHAN_RESUMES
+        assert "orphan_resumes" in caplog.text
+
+    def test_read_state_handles_extra_fields(self, tmp_path):
+        state = {
+            "status": "working",
+            "issue_id": "abc123",
+            "future_field": {"enabled": True},
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        result = read_state(tmp_path)
+
+        assert result["future_field"] == {"enabled": True}
 
 
 class TestWriteState:

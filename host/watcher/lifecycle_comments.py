@@ -10,10 +10,11 @@ callers must track which events have already been posted to avoid
 duplicates (see ``posted_events`` sets in the calling modules).
 """
 
-import json
 import logging
 from pathlib import Path
 from typing import Callable
+
+from host.session_utils import read_state
 
 log = logging.getLogger("watcher")
 
@@ -103,8 +104,8 @@ def post_revise(get_tracker: Callable, issue_id: str, sid: str,
 def read_checkpoint_count(session_dir: Path) -> int:
     """Read checkpoint count from state.json, returning 0 on failure."""
     try:
-        state = json.loads((session_dir / "state.json").read_text())
+        state = read_state(session_dir)
         return len(state.get("checkpoints", []))
-    except (json.JSONDecodeError, OSError, KeyError) as e:
+    except (OSError, KeyError, ValueError) as e:
         log.debug(f"Could not read checkpoint count from {session_dir}: {e}")
         return 0

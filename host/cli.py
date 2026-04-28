@@ -409,7 +409,7 @@ def _read_issue_title(session_dir: Path, state: dict | None = None) -> str:
     """Read issue title from state dict/state.json or fall back to issue.json."""
     if state is None:
         try:
-            state = json.loads((session_dir / "state.json").read_text())
+            state = read_state(session_dir)
         except Exception as e:
             logging.debug("Failed to read state.json for title in %s: %s", session_dir, e)
             state = {}
