@@ -106,6 +106,26 @@ class TestSessionStateMachine:
         ssm.transition("waiting:review")
         assert ssm.state == "waiting:review"
 
+    def test_revise_from_suspended_max_resumes(self):
+        """suspended:max-resumes -> working should be allowed for revise."""
+        ssm = SessionStateMachine(initial_state="suspended:max-resumes")
+        ssm.transition("working")
+        assert ssm.state == "working"
+
+    def test_revise_from_suspended_auth_failure(self):
+        """suspended:auth-failure -> working should be allowed for revise."""
+        ssm = SessionStateMachine(initial_state="suspended:auth-failure")
+        ssm.transition("working")
+        assert ssm.state == "working"
+
+    def test_all_suspended_states_can_transition_to_working(self):
+        """Every suspended:* state should be revisable back to working."""
+        for state in sorted(s for s in STATES if s.startswith("suspended:")):
+            ssm = SessionStateMachine(initial_state=state)
+            assert ssm.can_transition("working"), state
+            ssm.transition("working")
+            assert ssm.state == "working"
+
 
 class TestStateCategories:
     """Tests for TERMINAL_STATES and COMPLETION_STATES (SSM-11)."""
