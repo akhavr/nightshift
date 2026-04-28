@@ -183,6 +183,7 @@ def _parse_overflow_profile(raw_profile: dict[str, Any]) -> OverflowProfile:
     return OverflowProfile(
         extra_args=raw_profile.get("extra_args", []),
         env=raw_profile.get("env", {}),
+        prompt_snippet=raw_profile.get("prompt_snippet"),
         litellm_config=raw_profile.get("litellm_config"),
         pricing=pricing,
         agent_kind=raw_profile.get("agent_kind"),
@@ -234,6 +235,7 @@ def resolve_overflow_config(config: WorkflowConfig,
     return OverflowConfig(
         extra_args=list(profile.extra_args),
         env=dict(profile.env),
+        prompt_snippet=profile.prompt_snippet,
         litellm_config=profile.litellm_config,
         pricing=profile.pricing,
         agent_kind=profile.agent_kind,
@@ -264,6 +266,7 @@ def _parse_overflow(raw: dict, config: WorkflowConfig, repo_root: Path | None = 
     config.overflow = OverflowConfig(
         extra_args=profile.extra_args,
         env=profile.env,
+        prompt_snippet=profile.prompt_snippet,
         litellm_config=profile.litellm_config,
         pricing=profile.pricing,
         agent_kind=profile.agent_kind,

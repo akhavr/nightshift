@@ -19,6 +19,9 @@ opencode-gpt54mini:
   extra_args: ["-m", "openai/gpt-5.4-mini"]
   env:
     OPENAI_API_KEY: $OPENAI_API_KEY
+  prompt_snippet: |
+    ## Signal Protocol
+    Run `touch /session/signal/done` when finished.
 """)
 
     profiles = load_profiles(tmp_path)
@@ -27,6 +30,9 @@ opencode-gpt54mini:
     assert profiles["codex-gpt54"].env["CODEX_MODEL"] == "gpt-5.4"
     assert profiles["opencode-gpt54mini"].extra_args == ["-m", "openai/gpt-5.4-mini"]
     assert profiles["opencode-gpt54mini"].env["OPENAI_API_KEY"] == "sk-openai"
+    assert profiles["opencode-gpt54mini"].prompt_snippet == (
+        "## Signal Protocol\nRun `touch /session/signal/done` when finished.\n"
+    )
 
 
 def test_profiles_file_overridden_by_workflow(tmp_path):
@@ -108,3 +114,11 @@ Prompt.
     assert config.overflow.profile_name == "codex-gpt54"
     assert config.overflow.agent_kind == "codex"
     assert config.overflow.env["CODEX_MODEL"] == "gpt-5.4"
+
+
+def test_prompt_snippet_empty_by_default():
+    from core.config.models import OverflowProfile
+
+    profile = OverflowProfile()
+
+    assert profile.prompt_snippet is None

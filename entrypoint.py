@@ -158,8 +158,16 @@ def cleanup_workspace(worktree_path: Path | None = None) -> int:
 
 
 def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
-                  issue_id, resume, step):
+                  issue_id, resume, step, overflow_config: OverflowConfig | None = None):
     """Build or load the agent prompt."""
+    def append_overflow_snippet(prompt: str) -> str:
+        if not overflow_config or not overflow_config.prompt_snippet:
+            return prompt
+        snippet = overflow_config.prompt_snippet.strip()
+        if not snippet:
+            return prompt
+        return f"{prompt.rstrip()}\n\n{snippet}"
+
     if resume and (p := state_mgr.read_resume_prompt()):
         tracker.add_comment(issue_id, f"🤖 Resuming from step {state_mgr.load_state().step}...")
         state_mgr.update_status("working")
@@ -167,7 +175,7 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
         merge_instructions = _read_merge_instructions("/session")
         if merge_instructions:
             p = merge_instructions + "\n---\n\n" + p
-        return p
+        return append_overflow_snippet(p)
 
     # On resume without a resume-prompt, still check for merge instructions
     if resume:
@@ -186,7 +194,7 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
                 )
             else:
                 base_prompt = build_initial_prompt(issue.title, issue.body, related)
-            return merge_instructions + "\n---\n\n" + base_prompt
+            return append_overflow_snippet(merge_instructions + "\n---\n\n" + base_prompt)
 
     tracker.add_label(issue_id, "agent-in-progress")
     tracker.add_comment(issue_id, f"🤖 Starting on {issue.identifier}")
@@ -202,12 +210,12 @@ def _build_prompt(config, issue, related, workspace, state_mgr, tracker,
             extra_vars["diff"] = _read_diff()
             extra_vars["base_branch"] = os.environ.get("BASE_BRANCH", "master")
             extra_vars["agent_branch"] = workspace.branch
-        return render_template(
+        return append_overflow_snippet(render_template(
             config.prompt_template, issue=issue,
             related_context=related, attempt=None,
             **extra_vars,
-        )
-    return build_initial_prompt(issue.title, issue.body, related)
+        ))
+    return append_overflow_snippet(build_initial_prompt(issue.title, issue.body, related))
 
 
 def _create_adapters(config, overflow: OverflowConfig | None = None):
@@ -267,7 +275,7 @@ def main():
 
     related = search_related_issues(issue, tracker.list_issues(), tracker)
     prompt = _build_prompt(config, issue, related, workspace, state_mgr,
-                           tracker, issue_id, resume, step)
+                           tracker, issue_id, resume, step, overflow_config)
 
     runner = SessionRunner(
         agent=agent, tracker=tracker, notifier=notifier,
