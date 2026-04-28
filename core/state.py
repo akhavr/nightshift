@@ -1,5 +1,6 @@
 """Atomic session state with file locking."""
 
+import copy
 import fcntl
 import json
 import logging
@@ -13,6 +14,244 @@ from core.protocols import UsageData
 from core.state_machine import SessionStateMachine, STATES
 
 logger = logging.getLogger(__name__)
+
+STATE_DEFAULTS = {
+    "status": "starting",
+    "step": 0,
+    "orphan_resumes": 0,
+    "overload_resumes": 0,
+    "auth_retries": 0,
+    "completed_at": "",
+    "checkpoints": [],
+    "human_answers": [],
+    "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
+        "model": "",
+    },
+}
+
+STATE_SCHEMA = {
+    "status": {"type": str, "allowed": STATES},
+    "step": {"type": int, "min": 0},
+    "orphan_resumes": {"type": int, "min": 0},
+    "overload_resumes": {"type": int, "min": 0},
+    "auth_retries": {"type": int, "min": 0},
+    "completed_at": {"type": str},
+    "checkpoints": {"type": list},
+    "human_answers": {"type": list},
+    "usage": {"type": dict},
+}
+
+
+def _is_non_negative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _default_usage() -> dict:
+    return dict(STATE_DEFAULTS["usage"])
+
+
+def _validate_usage(usage: object) -> tuple[dict, list[str]]:
+    """Validate usage fields and normalize numeric values."""
+    warnings: list[str] = []
+    if not isinstance(usage, dict):
+        warnings.append(
+            f"invalid usage {type(usage).__name__}; defaulting to {STATE_DEFAULTS['usage']!r}"
+        )
+        return _default_usage(), warnings
+
+    validated = _default_usage()
+    for key, value in usage.items():
+        if key not in validated:
+            validated[key] = value
+
+    for field_name in ("input_tokens", "output_tokens"):
+        if field_name not in usage:
+            continue
+        value = usage[field_name]
+        if not _is_non_negative_int(value):
+            warnings.append(
+                f"invalid usage.{field_name} {value!r}; defaulting to {STATE_DEFAULTS['usage'][field_name]!r}"
+            )
+            validated[field_name] = STATE_DEFAULTS["usage"][field_name]
+            continue
+        validated[field_name] = int(value)
+
+    if "cost_usd" in usage:
+        cost_usd = usage["cost_usd"]
+        if isinstance(cost_usd, bool) or not isinstance(cost_usd, (int, float)):
+            warnings.append(
+                f"invalid usage.cost_usd {cost_usd!r}; defaulting to {STATE_DEFAULTS['usage']['cost_usd']!r}"
+            )
+            validated["cost_usd"] = STATE_DEFAULTS["usage"]["cost_usd"]
+        elif cost_usd < 0:
+            warnings.append(
+                f"invalid usage.cost_usd {cost_usd!r}; defaulting to {STATE_DEFAULTS['usage']['cost_usd']!r}"
+            )
+            validated["cost_usd"] = STATE_DEFAULTS["usage"]["cost_usd"]
+        else:
+            validated["cost_usd"] = float(cost_usd)
+
+    if "model" in usage:
+        model = usage["model"]
+        if not isinstance(model, str):
+            validated["model"] = str(model)
+        else:
+            validated["model"] = model
+
+    return validated, warnings
+
+
+def _validate_checkpoints(checkpoints: object) -> tuple[list, list[str]]:
+    """Validate checkpoints as a list of mapping entries.
+
+    We keep checkpoint dicts intact because host callers only rely on the
+    container-side format being a mapping, not on every field being present.
+    """
+    warnings: list[str] = []
+    if not isinstance(checkpoints, list):
+        return [], [f"invalid checkpoints {type(checkpoints).__name__}; defaulting to []"]
+
+    for idx, checkpoint in enumerate(checkpoints):
+        if not isinstance(checkpoint, dict):
+            warnings.append(
+                f"checkpoints[{idx}]: invalid checkpoint entry type: {type(checkpoint).__name__}"
+            )
+            continue
+        missing_fields = [field for field in ("step", "description", "timestamp", "commit")
+                          if field not in checkpoint]
+        if missing_fields:
+            warnings.append(
+                f"checkpoints[{idx}]: missing required fields: {', '.join(missing_fields)}"
+            )
+            continue
+        if not _is_non_negative_int(checkpoint["step"]):
+            warnings.append(
+                f"checkpoints[{idx}]: invalid step {checkpoint['step']!r}"
+            )
+            continue
+        invalid_text_fields = [
+            field for field in ("description", "timestamp", "commit")
+            if not isinstance(checkpoint[field], str)
+        ]
+        if invalid_text_fields:
+            details = ", ".join(
+                f"{field}={checkpoint[field]!r}" for field in invalid_text_fields
+            )
+            warnings.append(f"checkpoints[{idx}]: invalid field types: {details}")
+            continue
+        timestamp = checkpoint["timestamp"].strip()
+        if not timestamp:
+            warnings.append(f"checkpoints[{idx}]: empty timestamp")
+            continue
+        try:
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            warnings.append(
+                f"checkpoints[{idx}]: invalid timestamp format {checkpoint['timestamp']!r}"
+            )
+            continue
+        if not checkpoint["commit"].strip():
+            warnings.append(f"checkpoints[{idx}]: empty commit")
+            continue
+    return checkpoints, warnings
+
+
+def _validate_state(
+    data: object,
+    *,
+    max_orphan_resumes: int | None = None,
+) -> tuple[dict, list[str]]:
+    """Validate and partially normalize state.json data.
+
+    Unknown fields are preserved for forward compatibility.
+    """
+    if not isinstance(data, dict):
+        warnings = [
+            f"invalid state type {type(data).__name__}; defaulting to {STATE_DEFAULTS!r}"
+        ]
+        return copy.deepcopy(STATE_DEFAULTS), warnings
+
+    state = dict(data)
+    warnings: list[str] = []
+
+    for field_name, rules in STATE_SCHEMA.items():
+        if field_name not in state:
+            continue
+        value = state[field_name]
+        expected_type = rules["type"]
+        if expected_type is int:
+            if not _is_non_negative_int(value):
+                warnings.append(
+                    f"invalid {field_name} {value!r}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+                )
+                state[field_name] = STATE_DEFAULTS[field_name]
+                continue
+            state[field_name] = int(value)
+            continue
+        if expected_type is str:
+            if not isinstance(value, str):
+                warnings.append(
+                    f"invalid {field_name} {value!r}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+                )
+                state[field_name] = STATE_DEFAULTS[field_name]
+                continue
+            if "allowed" in rules and value not in rules["allowed"]:
+                warnings.append(
+                    f"invalid {field_name} {value!r}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+                )
+                state[field_name] = STATE_DEFAULTS[field_name]
+                continue
+            continue
+        if expected_type is list and not isinstance(value, list):
+            warnings.append(
+                f"invalid {field_name} {type(value).__name__}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+            )
+            state[field_name] = copy.deepcopy(STATE_DEFAULTS[field_name])
+            continue
+        if expected_type is dict and not isinstance(value, dict):
+            warnings.append(
+                f"invalid {field_name} {type(value).__name__}; defaulting to {STATE_DEFAULTS[field_name]!r}"
+            )
+            state[field_name] = STATE_DEFAULTS[field_name]
+            continue
+
+    if "orphan_resumes" in state:
+        orphan_resumes = state["orphan_resumes"]
+        if not _is_non_negative_int(orphan_resumes):
+            warnings.append(
+                f"invalid orphan_resumes {orphan_resumes!r}; defaulting to {STATE_DEFAULTS['orphan_resumes']!r}"
+            )
+            state["orphan_resumes"] = STATE_DEFAULTS["orphan_resumes"]
+        elif max_orphan_resumes is not None and orphan_resumes > max_orphan_resumes:
+            warnings.append(
+                f"orphan_resumes {orphan_resumes} exceeds max {max_orphan_resumes}; defaulting to {STATE_DEFAULTS['orphan_resumes']!r}"
+            )
+            state["orphan_resumes"] = STATE_DEFAULTS["orphan_resumes"]
+
+    if "completed_at" in state and not isinstance(state["completed_at"], str):
+        warnings.append(
+            f"invalid completed_at {state['completed_at']!r}; defaulting to {STATE_DEFAULTS['completed_at']!r}"
+        )
+        state["completed_at"] = STATE_DEFAULTS["completed_at"]
+
+    if "checkpoints" in state:
+        state["checkpoints"], checkpoint_warnings = _validate_checkpoints(state["checkpoints"])
+        warnings.extend(checkpoint_warnings)
+
+    if "human_answers" in state and not isinstance(state["human_answers"], list):
+        warnings.append(
+            f"invalid human_answers {type(state['human_answers']).__name__}; defaulting to []"
+        )
+        state["human_answers"] = []
+
+    if "usage" in state:
+        state["usage"], usage_warnings = _validate_usage(state["usage"])
+        warnings.extend(usage_warnings)
+
+    return state, warnings
 
 
 @contextmanager

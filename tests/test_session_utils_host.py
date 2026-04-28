@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from host.constants import MAX_ORPHAN_RESUMES
 from host.session_utils import (
     ARCHIVE_FILES,
     _git_repo_root,
@@ -57,9 +58,143 @@ class TestReadState:
             read_state(tmp_path)
 
     def test_reads_nested_structure(self, tmp_path):
-        state = {"status": "done", "metadata": {"turns": 5, "checkpoints": ["a", "b"]}}
+        state = {
+            "status": "done",
+            "metadata": {"turns": 5, "checkpoints": ["a", "b"]},
+        }
         (tmp_path / "state.json").write_text(json.dumps(state))
         assert read_state(tmp_path) == state
+
+    def test_read_state_validates_schema(self, tmp_path):
+        state = {
+            "status": "working",
+            "issue_id": "abc123",
+            "branch": "agent/abc123",
+            "step": 3,
+            "orphan_resumes": 1,
+            "checkpoints": [
+                {
+                    "step": 1,
+                    "description": "Initial pass",
+                    "timestamp": "2026-04-28T00:00:00+00:00",
+                    "commit": "abc1234",
+                }
+            ],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cost_usd": 0.25,
+                "model": "gpt-4.1",
+            },
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        result = read_state(tmp_path)
+
+        assert result == state
+
+    def test_read_state_defaults_invalid_status(self, tmp_path, caplog):
+        state = {
+            "status": "not-a-real-status",
+            "issue_id": "abc123",
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["status"] == "starting"
+        assert "status" in caplog.text
+
+    @pytest.mark.parametrize("cost_usd", [-1, "not-a-number"])
+    def test_read_state_defaults_invalid_usage(self, tmp_path, caplog, cost_usd):
+        state = {
+            "status": "working",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cost_usd": cost_usd,
+            },
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["usage"]["input_tokens"] == 10
+        assert result["usage"]["output_tokens"] == 20
+        assert result["usage"]["cost_usd"] == 0.0
+        assert "usage.cost_usd" in caplog.text
+
+    def test_read_state_defaults_invalid_checkpoints(self, tmp_path, caplog):
+        state = {
+            "status": "working",
+            "checkpoints": [
+                {
+                    "step": 1,
+                    "description": "Initial pass",
+                    "timestamp": "2026-04-28T00:00:00+00:00",
+                    "commit": "abc1234",
+                },
+                {
+                    "step": 2,
+                    "timestamp": "2026-04-28T00:01:00+00:00",
+                    "commit": "abc1234",
+                },
+            ],
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["checkpoints"] == state["checkpoints"]
+        assert "checkpoints[1]" in caplog.text
+
+    def test_read_state_rejects_invalid_orphan_resumes(self, tmp_path, caplog):
+        state = {
+            "status": "working",
+            "orphan_resumes": MAX_ORPHAN_RESUMES + 5,
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["orphan_resumes"] == 0
+        assert "orphan_resumes" in caplog.text
+
+    def test_read_state_rejects_invalid_checkpoint_timestamp(self, tmp_path, caplog):
+        state = {
+            "status": "working",
+            "checkpoints": [
+                {
+                    "step": 1,
+                    "description": "Initial pass",
+                    "timestamp": "not-a-timestamp",
+                    "commit": "abc1234",
+                }
+            ],
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        with caplog.at_level("WARNING", logger="host.session_utils"):
+            result = read_state(tmp_path)
+
+        assert result["checkpoints"] == state["checkpoints"]
+        assert "timestamp" in caplog.text
+
+    def test_read_state_handles_extra_fields(self, tmp_path):
+        state = {
+            "status": "working",
+            "issue_id": "abc123",
+            "future_field": {"enabled": True},
+        }
+        (tmp_path / "state.json").write_text(json.dumps(state))
+
+        result = read_state(tmp_path)
+
+        assert result["future_field"] == {"enabled": True}
 
 
 class TestWriteState:
@@ -685,7 +820,7 @@ class TestLockedStateOperations:
 
         state = read_state(tmp_path)
         assert state["status"] == "suspended:unexpected"
-        assert state["orphan_resumes"] == 5
+        assert state["orphan_resumes"] == 0
         assert state["other"] == "value"
 
     def test_update_state_fields_creates_lock_file(self, tmp_path):
