@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 import socket
 import subprocess
@@ -63,11 +64,12 @@ class GitBugGraphQLTracker:
         self.graphql_url = f"http://{_BIND_HOST}:{self.port}{_GRAPHQL_PATH}"
         self.request_timeout_s = _REQUEST_TIMEOUT_S
         self._proc = self._start_webui()
+        atexit.register(self.terminate)
         try:
             self._wait_until_ready()
         except Exception as e:
             log.warning("Failed to start git-bug GraphQL tracker for %s: %s", self.cwd, e)
-            self.shutdown()
+            self.terminate()
             raise
 
     def _start_webui(self) -> subprocess.Popen:
@@ -390,23 +392,27 @@ class GitBugGraphQLTracker:
 
     def restart_webui(self) -> None:
         """Restart the git-bug webui process in place."""
-        self.shutdown()
+        self.terminate()
         self._proc = self._start_webui()
         self._wait_until_ready()
 
-    def shutdown(self) -> None:
-        if self._proc.poll() is not None:
+    def terminate(self) -> None:
+        proc = getattr(self, "_proc", None)
+        if proc is None or proc.poll() is not None:
             return
-        self._proc.terminate()
+        proc.terminate()
         try:
-            self._proc.wait(timeout=_SHUTDOWN_TIMEOUT_S)
+            proc.wait(timeout=_SHUTDOWN_TIMEOUT_S)
         except subprocess.TimeoutExpired as e:
             log.warning("git-bug webui did not terminate gracefully: %s", e)
-            self._proc.kill()
-            self._proc.wait()
+            proc.kill()
+            proc.wait()
+
+    def shutdown(self) -> None:
+        self.terminate()
 
     def terminate_current(self) -> None:
-        self.shutdown()
+        self.terminate()
 
     @staticmethod
     def _short(issue_id: str) -> str:

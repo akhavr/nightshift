@@ -34,6 +34,27 @@ def _handle_reload(signum, frame):
     gitbug_cache_clear_event.set()
 
 
+def _terminate_tracker(watcher: HostWatcher) -> None:
+    """Terminate the active tracker process if one is running."""
+    try:
+        tracker = watcher._gitbug_tracker()
+    except Exception as e:
+        log.warning("Failed to resolve tracker for shutdown cleanup: %s", e)
+        return
+    if tracker is None:
+        return
+    try:
+        terminate = getattr(tracker, "terminate", None)
+        if callable(terminate):
+            terminate()
+            return
+        terminate_current = getattr(tracker, "terminate_current", None)
+        if callable(terminate_current):
+            terminate_current()
+    except Exception as e:
+        log.warning("Failed to terminate tracker during shutdown: %s", e)
+
+
 def main():
     p = argparse.ArgumentParser(description="Host watcher -- pause/unpause, review monitor")
     p.add_argument("--sessions-dir", required=True, help=".nightshift/sessions path")
@@ -78,7 +99,10 @@ def main():
     register(project_name, repo, log_path)
 
     try:
-        watcher.run(shutdown_event=shutdown_event, reload_event=reload_event,
-                    cache_clear_event=gitbug_cache_clear_event)
+        try:
+            watcher.run(shutdown_event=shutdown_event, reload_event=reload_event,
+                        cache_clear_event=gitbug_cache_clear_event)
+        finally:
+            _terminate_tracker(watcher)
     finally:
         unregister(project_name)

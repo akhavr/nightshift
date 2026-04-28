@@ -230,7 +230,16 @@ def test_set_status_closed(graphql_tracker, monkeypatch):
     tracker.shutdown()
 
 
-def test_shutdown_terminates_webui(graphql_tracker):
+def test_terminate_terminates_webui(graphql_tracker):
+    tracker, _popen, proc = graphql_tracker
+
+    tracker.terminate()
+
+    assert proc.terminated is True
+    assert proc.wait_calls == 1
+
+
+def test_shutdown_aliases_terminate(graphql_tracker):
     tracker, _popen, proc = graphql_tracker
 
     tracker.shutdown()
