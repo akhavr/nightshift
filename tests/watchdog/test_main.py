@@ -12,10 +12,12 @@ from host.watchdog.main import (
     check_once,
     format_status_line,
     REPEATED_ERROR_THRESHOLD,
+    main,
 )
 from host.watchdog.scanner import WatcherStatus
 from host.watchdog.log_monitor import LogMonitor
 from host.watchdog.alerter import Alerter, AlertConfig
+from host.watchdog.config import WatchdogConfig
 
 
 def test_format_status_line_alive():
@@ -194,3 +196,19 @@ started: {now.isoformat()}
 
     assert issues == 0
     mock_send.assert_not_called()
+
+
+def test_main_loads_dotenv(tmp_path, monkeypatch):
+    """Main should load .env before config loading."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    (tmp_path / ".env").write_text("TELEGRAM_BOT_TOKEN=from-dotenv\n")
+
+    def fake_load_config(path=None):
+        assert os.environ.get("TELEGRAM_BOT_TOKEN") == "from-dotenv"
+        return WatchdogConfig()
+
+    monkeypatch.setattr("host.watchdog.main.load_config", fake_load_config)
+    monkeypatch.setattr("host.watchdog.main.run_once", lambda config, send_notifications=True: 0)
+
+    assert main(["--check"]) == 0
