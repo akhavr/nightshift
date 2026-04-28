@@ -1866,6 +1866,112 @@ class TestSessionSizeMonitoring:
 
 
 # ---------------------------------------------------------------------------
+# Runaway resume monitoring tests
+# ---------------------------------------------------------------------------
+
+class TestRunawayResumeMonitoring:
+    """Warn before sessions hit the hard orphan-resume limit."""
+
+    def test_detect_runaway_resumes_warns_at_threshold(self, tmp_path, caplog):
+        """Sessions at the warning threshold should log and notify once."""
+        import logging
+        from host.constants import RUNAWAY_RESUME_WARNING_THRESHOLD
+
+        caplog.set_level(logging.WARNING)
+        assert RUNAWAY_RESUME_WARNING_THRESHOLD == 5
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["orphan_resumes"] = RUNAWAY_RESUME_WARNING_THRESHOLD
+        (sd / "state.json").write_text(json.dumps(state))
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        w.monitor.check_runaway_sessions()
+
+        assert any(
+            record.name == "watcher"
+            and "runaway" in record.message.lower()
+            and "abc" in record.message
+            for record in caplog.records
+        )
+        assert any("abc" in msg for msg in notified)
+
+    def test_detect_runaway_no_alert_below_threshold(self, tmp_path, caplog):
+        """Sessions below the warning threshold should not alert."""
+        import logging
+        from host.constants import RUNAWAY_RESUME_WARNING_THRESHOLD
+
+        caplog.set_level(logging.WARNING)
+        assert RUNAWAY_RESUME_WARNING_THRESHOLD == 5
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["orphan_resumes"] = RUNAWAY_RESUME_WARNING_THRESHOLD - 1
+        (sd / "state.json").write_text(json.dumps(state))
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        w.monitor.check_runaway_sessions()
+
+        assert not any(
+            record.name == "watcher"
+            and "runaway" in record.message.lower()
+            and "abc" in record.message
+            for record in caplog.records
+        )
+        assert notified == []
+
+    def test_detect_runaway_handles_malformed_orphan_resumes(self, tmp_path, caplog):
+        """Malformed orphan_resumes values should be normalized safely."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        sd = _make_session(w.sessions_dir, "abc", status="working", issue_id="issue-abc")
+        state = json.loads((sd / "state.json").read_text())
+        state["orphan_resumes"] = "not-an-int"
+        (sd / "state.json").write_text(json.dumps(state))
+
+        notified = []
+        w.telegram.notify = lambda msg, **kw: notified.append(msg)
+
+        w.monitor.check_runaway_sessions()
+
+        assert not any(
+            record.name == "watcher"
+            and "runaway" in record.message.lower()
+            and "abc" in record.message
+            for record in caplog.records
+        )
+        assert notified == []
+
+    def test_detect_runaway_checks_all_sessions(self, tmp_path, monkeypatch):
+        """check_runaway_sessions should inspect every active session."""
+        w = _make_watcher(tmp_path, tg_enabled=True)
+        checked = []
+
+        sessions = [
+            (w.sessions_dir / "abc", {"status": "working", "orphan_resumes": 5}),
+            (w.sessions_dir / "def", {"status": "starting", "orphan_resumes": 6}),
+            (w.sessions_dir / "ghi", {"status": "waiting:review", "orphan_resumes": 7}),
+        ]
+
+        monkeypatch.setattr(w.monitor, "_iter_runaway_session_states", lambda: sessions)
+
+        def fake_check(sid, state):
+            checked.append(sid)
+
+        monkeypatch.setattr(w.monitor, "_check_session_for_runaway", fake_check, raising=False)
+
+        w.monitor.check_runaway_sessions()
+
+        assert checked == ["abc", "def"]
+
+
+# ---------------------------------------------------------------------------
 # Missing session directory handling tests
 # ---------------------------------------------------------------------------
 

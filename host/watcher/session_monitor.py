@@ -17,6 +17,7 @@ from host.constants import (
     ZOMBIE_CHECK_INTERVAL_S, ZOMBIE_TIMEOUT_MULTIPLIER, DEFAULT_STALL_TIMEOUT_S,
     SESSION_SIZE_CHECK_INTERVAL_S, SIZE_WARNING_THRESHOLD_MB,
     SIZE_CRITICAL_THRESHOLD_MB, BLOCKED_LABEL_PREFIX, REVISE_PENDING_FILENAME,
+    RUNAWAY_RESUME_WARNING_THRESHOLD,
 )
 from core.protocols import NotificationLevel
 from core.constants import TITLE_TRUNCATE_LEN
@@ -33,7 +34,8 @@ from host.watcher.issue_sync import process_outbox
 
 log = logging.getLogger("watcher")
 
-_ACTIVE_STATUSES = ("working", "starting", "waiting:answer")
+_ACTIVE_STATUSES = ("working", "starting", "running", "waiting:answer")
+_ACTIVE_ORPHAN_STATUSES = ("working", "starting", "running")
 
 # Directory containing the host package (host/)
 _HOST_DIR = Path(__file__).resolve().parent.parent
@@ -157,6 +159,7 @@ class SessionMonitor:
         self._last_review_cleanup_check = 0.0
         self._alerted_zombies: set[str] = set()  # Avoid duplicate alerts
         self._alerted_large_sessions: set[str] = set()  # Avoid duplicate alerts
+        self._alerted_runaway_sessions: set[str] = set()  # Avoid duplicate alerts
 
     def cleanup_stale_review_sessions(self):
         """Clean up review sessions with completed_at set but not yet cleaned up.
@@ -290,6 +293,62 @@ class SessionMonitor:
             self._last_review_cleanup_check = now
             self.cleanup_completed_review_sessions()
 
+    def check_runaway_sessions(self):
+        """Warn when active sessions are approaching the orphan-resume limit."""
+        if not self.sessions_dir.exists():
+            return
+
+        for session_dir, state in self._iter_runaway_session_states():
+            sid = session_dir.name
+            if state.get("status") not in _ACTIVE_ORPHAN_STATUSES:
+                self._alerted_runaway_sessions.discard(sid)
+                continue
+            self._check_session_for_runaway(sid, state)
+
+    def _iter_runaway_session_states(self) -> list[tuple[Path, dict]]:
+        """Read raw state.json files for runaway-resume detection."""
+        results: list[tuple[Path, dict]] = []
+        if not self.sessions_dir.exists():
+            return results
+
+        for session_dir in self.sessions_dir.iterdir():
+            if not session_dir.is_dir():
+                continue
+            state_path = session_dir / "state.json"
+            if not state_path.exists():
+                continue
+
+            try:
+                state = read_state(session_dir, max_orphan_resumes=None)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning(f"[{session_dir.name}] Failed to read state for runaway check: {e}")
+                continue
+
+            results.append((session_dir, state))
+
+        return results
+
+    def _check_session_for_runaway(self, sid: str, state: dict):
+        """Check a single session for runaway orphan-resume behavior."""
+        orphan_resumes = state.get("orphan_resumes", 0)
+        if orphan_resumes < RUNAWAY_RESUME_WARNING_THRESHOLD:
+            self._alerted_runaway_sessions.discard(sid)
+            return
+
+        if sid in self._alerted_runaway_sessions:
+            return
+        self._alerted_runaway_sessions.add(sid)
+
+        log.warning(
+            f"[{sid}] Runaway resume pattern detected: orphan_resumes={orphan_resumes} "
+            f"(threshold: {RUNAWAY_RESUME_WARNING_THRESHOLD})"
+        )
+        self.telegram.notify(
+            f"⚠️ `{sid}` has resumed {orphan_resumes} times without a live container. "
+            f"This may be a runaway loop; check signal method and resume behavior.",
+            level=NotificationLevel.ACTIONS,
+        )
+
     def maybe_resume_orphan(self, session_dir: Path, sid: str, now: float):
         """Check a single session and auto-resume if orphaned."""
         try:
@@ -344,7 +403,7 @@ class SessionMonitor:
                         f"reverting to 'waiting:review'")
             update_status(session_dir, "waiting:review")
             return
-        elif status not in ("working", "starting") and not review_waiting_for_container:
+        elif status not in _ACTIVE_ORPHAN_STATUSES and not review_waiting_for_container:
             return
 
         # Skip if recently launched (give it time to start)
@@ -758,7 +817,7 @@ class SessionMonitor:
             return
 
         status = state_mgr.status
-        if status not in ("working", "starting"):
+        if status not in _ACTIVE_ORPHAN_STATUSES:
             # Only check sessions that should be actively producing events
             return
 
