@@ -91,7 +91,7 @@ def post_run_action(
         commit_wip_fn("max-turns")
         return _handle_review_max_turns(
             state_mgr, workspace_mgr, workspace, tracker, notifier,
-            issue, st, build_resume_fn)
+            issue, st, build_resume_fn, base_branch=base_branch)
     if st.status == "working":
         commit_wip_fn("max-turns")
         return prepare_resume(
@@ -115,6 +115,7 @@ def _handle_review_max_turns(
     issue: TrackerIssue,
     st,
     build_resume_fn,
+    base_branch: str = "master",
 ) -> None:
     """Handle a review session that hit max-turns without @@DONE@@.
 
@@ -125,7 +126,10 @@ def _handle_review_max_turns(
     verdict = scan_conversation_for_verdict(state_mgr)
     if verdict:
         log.info(f"Review hit max-turns but verdict '{verdict}' found — treating as done")
-        notify_done(state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st)
+        notify_done(
+            state_mgr, workspace_mgr, workspace, tracker, notifier, issue, st,
+            base_branch=base_branch,
+        )
         return None
     log.warning("Review hit max-turns with no verdict — falling back to human review")
     state_mgr.update_status("suspended:review-no-verdict")

@@ -450,6 +450,20 @@ class TestReviewMaxTurns:
         assert sm.load_state().status == "waiting:review"
         assert "max-turns" in commits
 
+    def test_review_max_turns_forwards_base_branch_to_done(self, tmp_path):
+        """Review completion must preserve the configured base branch."""
+        agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
+        sm.update_status("working")
+        sm.append_conversation("assistant", "All tests pass. @nightshift approve")
+        with patch("core.post_run.notify_done") as mock_notify_done:
+            result = post_run_action(
+                sm, ws_mgr, ws, tracker, notifier, issue, agent,
+                lambda **kw: None, lambda r: None,
+                base_branch="agent/base", is_review=True)
+        assert result is None
+        mock_notify_done.assert_called_once()
+        assert mock_notify_done.call_args.kwargs["base_branch"] == "agent/base"
+
     def test_review_max_turns_without_verdict_falls_back(self, tmp_path):
         """When review hits max-turns with no verdict, set suspended:review-no-verdict."""
         agent, tracker, notifier, ws_mgr, sm, ws, issue = _setup(tmp_path)
