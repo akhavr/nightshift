@@ -198,7 +198,12 @@ def test_notify_telegram(monkeypatch):
     from host.watchdog import config as watchdog_config
     from host.watchdog import notify
 
-    post = MagicMock(return_value=SimpleNamespace(json=lambda: {"ok": True}))
+    post = MagicMock(
+        return_value=SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"ok": True},
+        )
+    )
     monkeypatch.setattr(notify.requests, "post", post)
 
     config = watchdog_config.WatchdogConfig(
