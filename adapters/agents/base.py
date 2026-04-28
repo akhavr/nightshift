@@ -59,10 +59,12 @@ class HeadlessAgentBase:
         command: str,
         stall_timeout_s: float = STALL_TIMEOUT_S,
         extra_args: list[str] | None = None,
+        signal_method: str = "auto",
     ):
         self.command = command
         self.stall_timeout_s = stall_timeout_s
         self.extra_args = extra_args or []
+        self.signal_method = signal_method
         self._pid: int | None = None
         self._process: subprocess.Popen | None = None
         self._last_event: float = 0
@@ -100,6 +102,7 @@ class HeadlessAgentBase:
                     if restart_needed:
                         break
                     self._on_process_exit()
+                    yield from self._drain_extra()
                     yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
                     return
 
@@ -108,6 +111,7 @@ class HeadlessAgentBase:
                     line = stdout.readline()
                     if not line:
                         self._on_process_exit()
+                        yield from self._drain_extra()
                         yield AgentEvent(type=AgentEventType.PROCESS_EXIT)
                         return
                     self._last_event = time.monotonic()
@@ -222,6 +226,47 @@ class HeadlessAgentBase:
         self._last_prompt = prompt
         self._last_workspace = workspace
         self._last_max_turns = max_turns
+
+    def _write_done_signal_file(self) -> None:
+        """Write the file-based completion signal expected by SessionRunner."""
+        done_path = Path("/session/signal/done")
+        try:
+            done_path.parent.mkdir(parents=True, exist_ok=True)
+            done_path.touch(exist_ok=True)
+        except OSError as e:
+            log.warning(f"Failed to write done signal file {done_path}: {e}")
+
+    def _build_done_signal_events(
+        self,
+        raw: str,
+        metadata: dict | None = None,
+    ) -> list[AgentEvent]:
+        """Build completion events for the configured signal method."""
+        if self.signal_method in ("file", "auto"):
+            self._write_done_signal_file()
+
+        if metadata is None:
+            metadata = {}
+
+        events: list[AgentEvent] = []
+        if self.signal_method in ("text", "auto"):
+            events.append(
+                AgentEvent(
+                    type=AgentEventType.TEXT,
+                    content="@@DONE@@",
+                    metadata=metadata,
+                    raw=raw,
+                )
+            )
+        if self.signal_method in ("mcp", "auto"):
+            events.append(
+                AgentEvent(
+                    type=AgentEventType.DONE,
+                    metadata=metadata,
+                    raw=raw,
+                )
+            )
+        return events
 
     def _restart(self) -> None:
         """Terminate and restart the agent with previously stored parameters."""

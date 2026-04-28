@@ -1,5 +1,6 @@
 """Tests for ClaudeCodeAgent prompt file handling."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -7,6 +8,7 @@ import pytest
 
 from adapters.agents.claude_code import ClaudeCodeAgent
 from core.constants import PROMPT_FILE_THRESHOLD, PROMPT_FILE_NAME
+from core.protocols import AgentEventType
 
 
 class TestLargePromptHandling:
@@ -155,6 +157,61 @@ class TestLargePromptHandling:
         """Can pass custom session_dir."""
         agent = ClaudeCodeAgent(session_dir=tmp_path)
         assert agent._session_dir == tmp_path
+
+
+class TestSignalMethodOutput:
+    def test_signal_method_file_writes_file_signal(self):
+        done_file = Path("/session/signal/done")
+        done_file.unlink(missing_ok=True)
+
+        agent = ClaudeCodeAgent(signal_method="file")
+        raw = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "mcp__nightshift-signals__nightshift_done",
+                        "input": {"summary": "Task complete"},
+                    }
+                ]
+            },
+        })
+
+        ev = agent._parse(raw)
+
+        assert ev is None
+        assert done_file.exists()
+        done_file.unlink(missing_ok=True)
+
+    def test_signal_method_auto_emits_text_and_done(self):
+        done_file = Path("/session/signal/done")
+        done_file.unlink(missing_ok=True)
+
+        agent = ClaudeCodeAgent(signal_method="auto")
+        raw = json.dumps({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "mcp__nightshift-signals__nightshift_done",
+                        "input": {"summary": "Task complete"},
+                    }
+                ]
+            },
+        })
+
+        ev = agent._parse(raw)
+        extras = list(agent._drain_extra())
+
+        assert ev is not None
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@DONE@@"
+        assert len(extras) == 1
+        assert extras[0].type == AgentEventType.DONE
+        assert done_file.exists()
+        done_file.unlink(missing_ok=True)
 
 
 class TestPromptFileThreshold:

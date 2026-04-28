@@ -59,6 +59,77 @@ class TestConstructor:
         assert agent.stall_timeout_s == 120
 
 
+class TestSignalMethodOutput:
+    def _done_file(self) -> Path:
+        return Path("/session/signal/done")
+
+    def test_signal_method_file_writes_file_signal(self):
+        done_file = self._done_file()
+        done_file.unlink(missing_ok=True)
+
+        agent = CodexAgent(signal_method="file")
+        raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_done",
+            arguments={"summary": "Task complete"},
+        )
+
+        ev = agent._parse(raw)
+
+        assert ev is None
+        assert done_file.exists()
+        done_file.unlink(missing_ok=True)
+
+    def test_signal_method_text_emits_marker(self):
+        done_file = self._done_file()
+        done_file.unlink(missing_ok=True)
+
+        agent = CodexAgent(signal_method="text")
+        raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_done",
+            arguments={"summary": "Task complete"},
+        )
+
+        assert agent._parse(raw) is None
+
+        turn_raw = _ev("turn.completed", usage={
+            "input_tokens": 20000, "output_tokens": 80,
+        })
+        ev = agent._parse(turn_raw)
+
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@DONE@@"
+        assert not done_file.exists()
+
+    def test_signal_method_auto_emits_text_and_done(self):
+        done_file = self._done_file()
+        done_file.unlink(missing_ok=True)
+
+        agent = CodexAgent(signal_method="auto")
+        raw = _item_ev(
+            "item.completed", "mcp_tool_call",
+            server="nightshift-signals", tool="nightshift_done",
+            arguments={"summary": "Task complete"},
+        )
+
+        assert agent._parse(raw) is None
+
+        turn_raw = _ev("turn.completed", usage={
+            "input_tokens": 20000, "output_tokens": 80,
+        })
+        ev = agent._parse(turn_raw)
+        extras = list(agent._drain_extra())
+
+        assert ev.type == AgentEventType.TEXT
+        assert ev.content == "@@DONE@@"
+        assert len(extras) == 1
+        assert extras[0].type == AgentEventType.DONE
+        assert extras[0].raw == raw
+        assert done_file.exists()
+        done_file.unlink(missing_ok=True)
+
+
 # ── start() ───────────────────────────────────────────────
 
 

@@ -48,8 +48,9 @@ class CodexAgent(HeadlessAgentBase):
         command: str = "codex",
         stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
+        signal_method: str = "auto",
     ):
-        super().__init__(command, stall_timeout_s, extra_args)
+        super().__init__(command, stall_timeout_s, extra_args, signal_method=signal_method)
         self._extra_events: list[AgentEvent] = []
         # Buffer @@DONE@@ until turn.completed arrives with usage data
         self._pending_done_raw: str | None = None
@@ -131,16 +132,15 @@ class CodexAgent(HeadlessAgentBase):
                     "output_tokens": usage.get("output_tokens", 0),
                     "cost_usd": usage.get("cost_usd", 0.0),
                     "model": usage.get("model", ev.get("model", "")),
-                }
+            }
             # Use buffered raw if @@DONE@@ was emitted via MCP/text marker
             event_raw = self._pending_done_raw if self._pending_done_raw else raw
             self._pending_done_raw = None
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content="@@DONE@@",
-                raw=event_raw,
-                metadata=metadata,
-            )
+            done_events = self._build_done_signal_events(event_raw, metadata)
+            if done_events:
+                self._extra_events.extend(done_events[1:])
+                return done_events[0]
+            return None
 
         if event_type == "turn.failed":
             error = ev.get("error", {})
@@ -243,6 +243,10 @@ class CodexAgent(HeadlessAgentBase):
             args = {}
 
         if tool == "nightshift_done":
+            if self.signal_method in ("file", "auto"):
+                self._write_done_signal_file()
+            if self.signal_method == "file":
+                return None
             # Buffer @@DONE@@ until turn.completed arrives with usage data
             self._pending_done_raw = raw
             return None
@@ -330,11 +334,6 @@ class CodexAgent(HeadlessAgentBase):
     def _on_process_exit(self) -> None:
         """Emit buffered @@DONE@@ if stream ends before turn.completed."""
         if self._pending_done_raw:
-            self._extra_events.append(
-                AgentEvent(
-                    type=AgentEventType.TEXT,
-                    content="@@DONE@@",
-                    raw=self._pending_done_raw,
-                )
-            )
+            done_events = self._build_done_signal_events(self._pending_done_raw)
+            self._extra_events.extend(done_events)
             self._pending_done_raw = None

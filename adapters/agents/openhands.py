@@ -49,8 +49,9 @@ class OpenHandsAgent(HeadlessAgentBase):
         command: str = "openhands",
         stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
+        signal_method: str = "auto",
     ):
-        super().__init__(command, stall_timeout_s, extra_args)
+        super().__init__(command, stall_timeout_s, extra_args, signal_method=signal_method)
 
     def start(self, prompt: str, workspace: Path, max_turns: int = 50) -> None:
         self._store_start_params(prompt, workspace, max_turns)
@@ -104,7 +105,7 @@ class OpenHandsAgent(HeadlessAgentBase):
             return AgentEvent(type=AgentEventType.TEXT, content=raw, raw=raw)
         return self._parse_event(ev, raw)
 
-    def _parse_event(self, ev: dict, raw: str) -> AgentEvent:
+    def _parse_event(self, ev: dict, raw: str) -> Optional[AgentEvent]:
         """Dispatch a decoded OpenHands event."""
         kind = ev.get("kind", "")
         metadata = self._metadata(ev)
@@ -154,17 +155,16 @@ class OpenHandsAgent(HeadlessAgentBase):
 
     def _parse_unified_action(
         self, action: dict, raw: str, metadata: dict,
-    ) -> AgentEvent:
+    ) -> Optional[AgentEvent]:
         """Parse a unified ActionEvent payload into an AgentEvent."""
         action_kind = str(action.get("kind", ""))
 
         if action_kind == "FinishAction":
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content="@@DONE@@",
-                metadata=metadata,
-                raw=raw,
-            )
+            done_events = self._build_done_signal_events(raw, metadata)
+            if done_events:
+                self._extra_events.extend(done_events[1:])
+                return done_events[0]
+            return None
 
         content = self._action_preview(action_kind, action)
         return AgentEvent(
@@ -211,17 +211,16 @@ class OpenHandsAgent(HeadlessAgentBase):
             raw=raw,
         )
 
-    def _parse_action(self, ev: dict, raw: str, metadata: dict) -> AgentEvent:
+    def _parse_action(self, ev: dict, raw: str, metadata: dict) -> Optional[AgentEvent]:
         """Parse an ActionEvent into the appropriate AgentEvent."""
         action_type = ev.get("action_type", "")
 
         if action_type == "FinishAction":
-            return AgentEvent(
-                type=AgentEventType.TEXT,
-                content="@@DONE@@",
-                metadata=metadata,
-                raw=raw,
-            )
+            done_events = self._build_done_signal_events(raw, metadata)
+            if done_events:
+                self._extra_events.extend(done_events[1:])
+                return done_events[0]
+            return None
 
         if action_type == "FileEditorAction":
             summary = ev.get("summary", "file edit")

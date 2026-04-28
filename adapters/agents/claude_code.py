@@ -46,8 +46,9 @@ class ClaudeCodeAgent(HeadlessAgentBase):
         stall_timeout_s: float = 300.0,
         extra_args: list[str] | None = None,
         session_dir: Path | None = None,
+        signal_method: str = "auto",
     ):
-        super().__init__(command, stall_timeout_s, extra_args)
+        super().__init__(command, stall_timeout_s, extra_args, signal_method=signal_method)
         self._extra_events: list[AgentEvent] = []
         self._session_dir = session_dir or Path("/session")
         self._prompt_file: Path | None = None
@@ -164,8 +165,9 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                 return AgentEvent(type=AgentEventType.AUTH_FAILURE,
                                   content=result_text, raw=raw)
             if ev.get("subtype") == "success" and not ev.get("is_error"):
-                self._extra_events.append(AgentEvent(
-                    type=AgentEventType.TEXT, content="@@DONE@@", raw=raw))
+                done_events = self._build_done_signal_events(raw)
+                if done_events:
+                    self._extra_events.extend(done_events)
             metadata = {}
             usage_obj = ev.get("usage", {})
             cost = ev.get("total_cost_usd", ev.get("cost_usd", 0.0))
@@ -233,9 +235,10 @@ class ClaudeCodeAgent(HeadlessAgentBase):
                     signal = name[len(MCP_SIGNAL_SERVER_PREFIX):]
                     inp_data = part.get("input", {})
                     if signal == "nightshift_done":
-                        yield AgentEvent(
-                            type=AgentEventType.TEXT,
-                            content="@@DONE@@", raw=raw)
+                        done_events = self._build_done_signal_events(raw)
+                        if done_events:
+                            yield done_events[0]
+                            yield from done_events[1:]
                     elif signal == "nightshift_checkpoint":
                         desc = inp_data.get("description", "") if isinstance(inp_data, dict) else ""
                         yield AgentEvent(
