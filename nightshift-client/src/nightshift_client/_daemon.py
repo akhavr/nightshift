@@ -124,12 +124,14 @@ class _GitBugTrackerAdapter:
         try:
             return _issue_from_dict(self._gitbug.show(issue_id))
         except Exception:
+            log.exception("git-bug show failed for %s", issue_id)
             return None
 
     def list_issues(self, status=None) -> list[TrackerIssue]:
         try:
             issues = [_issue_from_dict(item) for item in self._gitbug.list()]
         except Exception:
+            log.exception("git-bug list failed")
             return []
         if status is None:
             return issues

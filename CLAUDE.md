@@ -27,6 +27,9 @@ nightshift cleanup <issue-id>            # remove worktree (optionally keep sess
 nightshift upgrade                       # show prompt updates from canonical template (--apply to patch)
 nightshift upstream                      # propose local prompt improvements to canonical (--dry-run to preview)
 nightshift issue <args...>               # pass args to tracker CLI with lock retry
+nightshift-client daemon start           # start client-side tracker daemon in background
+nightshift-client daemon stop            # stop client-side tracker daemon
+nightshift-client daemon status          # show client-side tracker daemon status
 nightshift watcher                       # start host watcher (pause/unpause, Telegram)
 nightshift watchdog                       # start global watchdog daemon
 nightshift watchdog --list               # list registered watchers and status
@@ -111,6 +114,8 @@ Key core modules:
 - `rebase.py` — Host-side pre-review rebase: fetch latest base branch, rebase agent worktree, run tests. Called by `review_orchestrator.py` before launching review. Runs on host (not in container) to avoid bind-mount issues with git operations.
 - `env.py` — Shared `.env` file loader used by cli.py, launch.py, and watcher.
 - `config_discovery.py` — Workflow file discovery: CLI flag > `.nightshift.yaml` pointer > `WORKFLOW.md` default. Also writes `.nightshift.yaml` for `init --workflow-path`.
+
+**`nightshift-client/`** — Client-side tracker daemon and CLI used to serialize git-bug operations over `.nightshift-client/tracker.sock`. `_daemon.py` owns the writer queue, Unix socket server, and PID-file helpers; `cli.py` exposes `daemon start|stop|status|run`.
 
 **`entrypoint.py`** — Container entrypoint. Reads WORKFLOW.md, uses `StaticTracker` for issue data, instantiates other adapters via config factories, wraps the run in `WorkspaceTransaction`, and exposes `--cleanup` for EXIT-trap pointer restoration plus `core.worktree` sanitization.
 

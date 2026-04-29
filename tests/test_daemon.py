@@ -1,10 +1,7 @@
 """Tests for nightshift_client._daemon and cli daemon commands."""
 
-import json
-import os
-import signal
+import logging
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -16,7 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.protocols import TrackerIssue
 from core.tracker_ipc import TrackerRequest, TrackerResponse
-from nightshift_client._daemon import TrackerWriterDaemon, socket_path_for, pidfile_path_for
+from nightshift_client._daemon import (
+    TrackerWriterDaemon,
+    _GitBugTrackerAdapter,
+    pidfile_path_for,
+    socket_path_for,
+)
 from nightshift_client import cli
 
 
@@ -26,6 +28,14 @@ class _FakeProc:
 
     def poll(self):
         return None
+
+
+class _FailingGitBug:
+    def show(self, issue_id: str):
+        raise RuntimeError(f"show failed for {issue_id}")
+
+    def list(self):
+        raise RuntimeError("list failed")
 
 
 class _SerialTracker:
@@ -121,6 +131,20 @@ def _make_daemon(tmp_path, tracker=None):
     return repo, daemon
 
 
+def test_tracker_adapter_logs_backend_failures(tmp_path, caplog):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with patch("nightshift_client._daemon.GitBug", return_value=_FailingGitBug()):
+        adapter = _GitBugTrackerAdapter(repo)
+        with caplog.at_level(logging.ERROR):
+            assert adapter.get_issue("abc") is None
+            assert adapter.list_issues() == []
+
+    assert "git-bug show failed for abc" in caplog.text
+    assert "git-bug list failed" in caplog.text
+
+
 def test_daemon_serializes_operations(tmp_path):
     repo, daemon = _make_daemon(tmp_path)
     daemon.start()
@@ -180,7 +204,18 @@ def test_daemon_start_stop(tmp_path):
         alive[pid] = False
         return None
 
-    with patch("nightshift_client.cli.subprocess.Popen", return_value=_FakeProc(4321)), \
+    def fake_popen(cmd, start_new_session):
+        def bootstrap():
+            time.sleep(0.05)
+            pidfile.parent.mkdir(parents=True, exist_ok=True)
+            pidfile.write_text("4321\n")
+            socket_path.parent.mkdir(parents=True, exist_ok=True)
+            socket_path.write_text("")
+
+        threading.Thread(target=bootstrap, daemon=True).start()
+        return _FakeProc(4321)
+
+    with patch("nightshift_client.cli.subprocess.Popen", side_effect=fake_popen), \
          patch("nightshift_client.cli.os.kill", side_effect=fake_kill):
         rc = cli.main(["daemon", "start", "--repo", str(repo)])
         assert rc == 0

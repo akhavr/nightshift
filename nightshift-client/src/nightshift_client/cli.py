@@ -18,15 +18,36 @@ from nightshift_client._daemon import (
     run_foreground,
     socket_path_for,
     read_pidfile,
-    write_pidfile,
 )
+
+
+def _wait_for_daemon_ready(
+    proc: subprocess.Popen[object],
+    pidfile: Path,
+    socket_path: Path,
+    timeout: float = 5.0,
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return False
+        if pidfile.exists() and socket_path.exists() and read_pidfile(pidfile) == proc.pid:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _start_daemon(repo_path: Path) -> int:
     pidfile = pidfile_path_for(repo_path)
+    socket_path = socket_path_for(repo_path)
     if pidfile_running(pidfile):
         print(f"nightshift-client daemon already running ({read_pidfile(pidfile)})")
         return 0
+
+    if pidfile.exists():
+        remove_pidfile(pidfile)
+    if socket_path.exists():
+        remove_socket(socket_path)
 
     cmd = [
         sys.executable,
@@ -38,7 +59,15 @@ def _start_daemon(repo_path: Path) -> int:
         str(repo_path),
     ]
     proc = subprocess.Popen(cmd, start_new_session=True)
-    write_pidfile(pidfile, proc.pid)
+    if not _wait_for_daemon_ready(proc, pidfile, socket_path):
+        try:
+            os.kill(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        remove_socket(socket_path)
+        remove_pidfile(pidfile)
+        print("nightshift-client daemon failed to start")
+        return 1
     print(f"nightshift-client daemon started ({proc.pid})")
     return 0
 
@@ -137,4 +166,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
