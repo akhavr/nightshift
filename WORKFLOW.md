@@ -44,13 +44,20 @@ terminal_statuses:
   - closed
 
 overflow:
-  profile: codex
+  profile: codex-gpt54mini
 
 overflow_profiles:
   codex:
     agent_kind: codex
     env:
       CODEX_MODEL: gpt-5.4-mini
+  codex-gpt54mini:
+    agent_kind: codex
+    skip_oauth: true
+    signal_method: file
+    env:
+      CODEX_MODEL: gpt-5.4-mini
+      CODEX_API_KEY: $OPENAI_API_KEY
   codex-gpt54:
     agent_kind: codex
     env:
