@@ -1213,13 +1213,12 @@ class TestVerdictRecovery:
 class TestStaleReviewSessionCleanup:
     """Startup cleanup for review sessions with completed_at set but not yet cleaned up."""
 
-    def test_startup_cleans_stale_review_sessions(self, tmp_path):
-        """On startup, review sessions with completed_at set should be cleaned up.
+    def test_startup_cleans_stale_review_sessions_with_verdict(self, tmp_path):
+        """On startup, review sessions with completed_at AND verdict are cleaned up.
 
         This is the fix for the race condition where the watcher restarts after
         a review container exits but before cleanup_review_session() is called.
-        Without this fix, the watcher loops trying to launch a new review and
-        fails with 'session already exists'.
+        Cleanup only happens after the verdict is recovered and processed.
         """
         w = _make_watcher(tmp_path)
         coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
@@ -1231,8 +1230,11 @@ class TestStaleReviewSessionCleanup:
         state = json.loads((review_sd / "state.json").read_text())
         state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
         (review_sd / "state.json").write_text(json.dumps(state))
+        # Add verdict to conversation log - cleanup only happens after verdict processing
+        (review_sd / "conversation.jsonl").write_text(
+            '{"role":"assistant","content":"@@NIGHTSHIFT approve"}\n')
 
-        # The review session should be cleaned up on startup
+        # The review session should be cleaned up on startup after verdict recovery
         with patch("core.config.load_workflow") as mock_lw, \
              patch("host.watcher.remove_worktree"), \
              patch("host.watcher.shutil.rmtree") as mock_rmtree:
@@ -1242,9 +1244,12 @@ class TestStaleReviewSessionCleanup:
 
             w.monitor.cleanup_stale_review_sessions()
 
-        # Review session should be removed
+        # Review session should be removed (verdict was recovered)
         mock_rmtree.assert_called()
         assert any(str(review_sd) in str(call) for call in mock_rmtree.call_args_list)
+        # Coder should be transitioned to waiting:human-review (approve verdict)
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "waiting:human-review"
 
     def test_startup_does_not_clean_incomplete_review_sessions(self, tmp_path):
         """Review sessions without completed_at should NOT be cleaned up on startup."""

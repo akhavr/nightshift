@@ -970,6 +970,9 @@ class TestStaleReviewCleanupBeforeLaunch:
         state = json.loads((review_sd / "state.json").read_text())
         state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
         (review_sd / "state.json").write_text(json.dumps(state))
+        # Add verdict to conversation log - cleanup only happens after verdict processing
+        (review_sd / "conversation.jsonl").write_text(
+            '{"role":"assistant","content":"@@NIGHTSHIFT approve"}\n')
 
         launched = []
         w.reviews._launch_background = lambda cmd, sid: launched.append(sid) or True
@@ -985,10 +988,13 @@ class TestStaleReviewCleanupBeforeLaunch:
             w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
                                           w.repo_dir / "REVIEW.md")
 
-        # Stale review session should be cleaned up first
+        # Stale review session should be cleaned up after verdict processed
         assert any("review-abc" in str(call) for call in mock_rmtree.call_args_list)
-        # New review should be launched
-        assert "review-abc" in launched
+        # Coder should transition to waiting:human-review (approve verdict)
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "waiting:human-review"
+        # No new review launched - verdict was processed
+        assert "review-abc" not in launched
 
     def test_launch_review_does_not_clean_incomplete_session(self, tmp_path):
         """maybe_launch_review() does NOT clean up review sessions without completed_at."""
@@ -1206,8 +1212,17 @@ class TestStaleCleanupProcessesVerdictFirst:
         assert "abc" in launched, "Coder should be relaunched after revise verdict"
         assert "review-abc" not in launched, "New review should NOT be launched"
 
-    def test_stale_cleanup_no_verdict_still_cleans_up(self, tmp_path):
-        """If stale review has no verdict in log, it's still cleaned up and review relaunches."""
+    def test_stale_cleanup_no_verdict_blocks_until_verdict(self, tmp_path):
+        """If stale review has no verdict, cleanup is blocked and review does NOT relaunch.
+
+        This prevents the race condition where:
+        1. Review finishes but verdict extraction fails (wrong format)
+        2. Cleanup happens anyway (old buggy behavior)
+        3. Coder stuck in reviewing/waiting:review forever
+
+        Fix: Leave stale review intact until verdict is found. check_reviewer_done()
+        can retry verdict extraction later.
+        """
         w = _make_watcher(tmp_path)
         (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
 
@@ -1229,7 +1244,7 @@ class TestStaleCleanupProcessesVerdictFirst:
         w._tracker.get_comments.return_value = []
 
         with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree"), \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
              patch("host.watcher.shutil.rmtree") as mock_rmtree:
             cfg = MagicMock()
             cfg.workspace.root = ".worktrees"
@@ -1239,10 +1254,16 @@ class TestStaleCleanupProcessesVerdictFirst:
             w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
                                           w.repo_dir / "REVIEW.md")
 
-        # With no verdict, stale session should still be cleaned up
-        # and a new review should be launched
-        assert any("review-abc" in str(call) for call in mock_rmtree.call_args_list)
-        assert "review-abc" in launched
+        # No verdict found - cleanup should NOT happen
+        mock_rmtree.assert_not_called()
+        mock_remove_worktree.assert_not_called()
+        # Review session should still exist (not cleaned up)
+        assert review_sd.exists()
+        # No new review launched - stale one still blocking
+        assert "review-abc" not in launched
+        # Coder should stay in waiting:review (not moved to reviewing)
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "waiting:review"
 
 
 # ---------------------------------------------------------------------------

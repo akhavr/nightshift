@@ -212,21 +212,11 @@ class SessionMonitor:
                 if self._try_recover_review_verdict(coder_sid, coder_dir, sid):
                     continue  # Verdict processed and session cleaned up
 
-            # No verdict found - check if safe to cleanup
-            # If coder is still in "reviewing", do NOT archive - they'd be stuck forever
-            if coder_dir.exists():
-                try:
-                    coder_state = read_state(coder_dir)
-                    if coder_state.get("status") == "reviewing":
-                        log.warning(f"[{sid}] Not archiving: coder still reviewing, verdict not recovered")
-                        continue
-                except (json.JSONDecodeError, OSError) as e:
-                    log.warning(f"[{coder_sid}] Failed to read coder state in stale cleanup: {e}")
-                    continue
-
-            # Coder doesn't exist or has moved past "reviewing" - safe to cleanup
-            if self._review_orchestrator:
-                self._review_orchestrator.cleanup_review_session(sid, session_dir)
+            # No verdict found - do NOT cleanup. Leave the review session intact
+            # so check_reviewer_done() can retry verdict extraction later, or so
+            # human intervention can occur. Cleaning up without a verdict leaves
+            # the coder stuck in "reviewing" forever.
+            log.warning(f"[{sid}] Not archiving: no verdict recovered from stale review")
 
     def cleanup_stale_blocked_labels(self):
         """Remove blocked:<id> labels where the blocking issue is already closed.
