@@ -305,6 +305,11 @@ def main():
         overflow.agent_kind if overflow and overflow.agent_kind else config.agent.kind
     )
     git_mount_path = _setup_git_overlay(repo, session_dir)
+    if not (git_mount_path / "HEAD").exists():
+        raise RuntimeError(
+            f"Git overlay appears empty or invalid: {git_mount_path} "
+            "(missing HEAD file). This may indicate a race condition or failed copy."
+        )
     try:
         returncode = run_container(
             repo, workspace_mount, session_dir, names, args.issue_id,

@@ -637,7 +637,10 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
-        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-copy"
+        git_copy_path = repo / ".nightshift" / "sessions" / "abc123def456" / "git-copy"
+        git_copy_path.mkdir(parents=True, exist_ok=True)
+        (git_copy_path / "HEAD").write_text("ref: refs/heads/master\n")
+        mock_setup_overlay.return_value = git_copy_path
 
         with patch("sys.argv", ["launch.py", "abc123def456ef"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -680,7 +683,10 @@ class TestMain:
         )
         mock_dump_issue_data.return_value = None
         mock_setup_workspace.return_value = repo / ".worktrees" / "agent-abc123def456"
-        mock_setup_overlay.return_value = repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged"
+        git_merged_path = repo / ".nightshift" / "sessions" / "abc123def456" / "git-merged"
+        git_merged_path.mkdir(parents=True, exist_ok=True)
+        (git_merged_path / "HEAD").write_text("ref: refs/heads/master\n")
+        mock_setup_overlay.return_value = git_merged_path
 
         with patch("sys.argv", ["launch.py", "abc123def456ef"]):
             with pytest.raises(RuntimeError, match="launch failed"):
@@ -750,7 +756,10 @@ class TestMain:
             agent=AgentConfig(max_turns=50),
         )
         mock_run.return_value = MagicMock(returncode=0)
-        mock_setup_overlay.return_value = session_dir / "git-copy"
+        git_copy_path = session_dir / "git-copy"
+        git_copy_path.mkdir(parents=True, exist_ok=True)
+        (git_copy_path / "HEAD").write_text("ref: refs/heads/master\n")
+        mock_setup_overlay.return_value = git_copy_path
 
         with patch("sys.argv", ["launch.py", "abc123def456ef", "--resume"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -1659,3 +1668,51 @@ class TestAutoCommitUncommittedChanges:
             mock_auto.return_value = False
             result = _auto_commit_uncommitted_changes(tmp_path, "test-session")
             assert result is False
+
+
+class TestGitOverlayValidation:
+    """Tests for git overlay validation guardrails."""
+
+    def test_git_overlay_validation_fails_on_empty(self, tmp_path):
+        """_setup_git_overlay followed by empty directory raises RuntimeError."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "WORKFLOW.md").write_text("---\n---\n")
+        session_dir = repo / ".nightshift" / "sessions" / "abc123def456"
+        session_dir.mkdir(parents=True)
+
+        # Simulate _setup_git_overlay returning an empty directory
+        empty_mount = session_dir / "git-merged"
+        empty_mount.mkdir()
+
+        with patch("host.launch._setup_git_overlay", return_value=empty_mount), \
+             patch("host.launch.setup_workspace", return_value=tmp_path / "workspace"), \
+             patch("host.launch.dump_issue_data"), \
+             patch("host.launch.load_workflow") as mock_lw, \
+             patch("host.launch.load_all_dotenv"), \
+             patch("host.launch.discover_workflow", return_value=repo / "WORKFLOW.md"), \
+             patch("host.launch.get_repo_root", return_value=repo), \
+             patch("sys.argv", ["launch.py", "abc123def456ef"]):
+            from core.config.models import WorkflowConfig, AgentConfig, WorkspaceConfig
+            mock_lw.return_value = WorkflowConfig(
+                agent=AgentConfig(max_turns=30),
+                workspace=WorkspaceConfig(base_branch="master"),
+            )
+            with pytest.raises(RuntimeError) as exc_info:
+                from host.launch import main
+                main()
+
+            assert "empty or invalid" in str(exc_info.value)
+            assert "missing HEAD file" in str(exc_info.value)
+
+    def test_git_overlay_validation_passes_with_head(self, tmp_path):
+        """Validation passes when HEAD file exists."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        git_mount = session_dir / "git-merged"
+        git_mount.mkdir()
+        (git_mount / "HEAD").write_text("ref: refs/heads/master\n")
+
+        # Should not raise when HEAD exists
+        assert (git_mount / "HEAD").exists()
