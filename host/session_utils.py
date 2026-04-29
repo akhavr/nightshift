@@ -121,18 +121,19 @@ def update_status(session_dir: Path, status: str) -> None:
 
 
 def force_update_status(session_dir: Path, status: str) -> None:
-    """Force-update status field, bypassing SSM validation (locked).
+    """Force-update status field, bypassing SSM transition validation (locked).
 
     Used for manual recovery when sessions are stuck in invalid states.
-    Validates that status is a known state but does not check transitions.
+    Uses SSM.force_state() which validates that status is a known state
+    but does not check transitions.
     Raises ValueError if status is not a recognized state.
     """
-    from core.state_machine import STATES
-    if status not in STATES:
-        raise ValueError(f"unknown status: {status}")
+    from core.state_machine import SessionStateMachine
     with state_lock(session_dir):
         state = read_state(session_dir)
-        state["status"] = status
+        ssm = SessionStateMachine(state.get("status", "starting"))
+        ssm.force_state(status)
+        state["status"] = ssm.state
         write_state(session_dir, state)
 
 

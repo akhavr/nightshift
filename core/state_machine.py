@@ -239,3 +239,17 @@ class SessionStateMachine:
         self._state = to_state
         for hook in self._hooks[to_state]["enter"]:
             hook(ctx)
+
+    def force_state(self, to_state: str) -> None:
+        """Force-set state without transition validation.
+
+        Used for manual recovery when sessions are stuck in invalid states.
+        Only validates that the target state is known; does NOT validate
+        that the transition is allowed.
+
+        Raises:
+            ValueError: if to_state is not a known state
+        """
+        if to_state not in STATES:
+            raise ValueError(f"unknown state: {to_state}")
+        self._state = to_state
