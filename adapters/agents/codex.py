@@ -41,6 +41,7 @@ class CodexAgent(HeadlessAgentBase):
         "authentication_error",
         "insufficient_quota",
         "missing authentication",
+        "missing environment variable",
     )
 
     def __init__(
