@@ -77,20 +77,6 @@ client.cancel(issue_id)  # adds status:cancelled label + comment
 client.push()
 ```
 
-### 6. Batch monitoring
-
-Check multiple repos/issues efficiently (for applications tracking many tasks).
-
-```python
-from nightshift_client import monitor_all
-
-updates = monitor_all([
-    {"repo_path": "/path/to/repo-a", "issue_id": "abc123"},
-    {"repo_path": "/path/to/repo-b", "issue_id": "def456"},
-])
-# [{"issue_id": "abc123", "state": "completed"}, {"issue_id": "def456", "state": "running"}]
-```
-
 ## git-bug Label Protocol
 
 The client maps nightshift states to git-bug labels:
@@ -132,27 +118,6 @@ gb.pull()
 issues = gb.list(labels=["needs-human-input"])
 ```
 
-## Gitolite Admin Helpers (optional module)
-
-For applications that auto-provision task repos. Wraps gitolite-admin operations
-with validation guardrails.
-
-```python
-from nightshift_client.gitolite import GitoliteAdmin
-
-admin = GitoliteAdmin(admin_repo_path="/path/to/gitolite-admin")
-admin.add_repo("tasks/trading", owner="app")
-errors = admin.validate()  # parse gitolite.conf, check syntax
-if not errors:
-    admin.push()  # safe push after validation
-```
-
-Guardrails:
-- Validate gitolite.conf syntax before every push
-- Dry-run mode (validate without pushing)
-- Backup current conf before modifying
-- If provisioning logic grows complex, use a state machine
-
 ## What the Library Does NOT Include
 
 - **WORKFLOW.md templates** — project-specific, owned by the consuming application
@@ -181,10 +146,9 @@ nightshift only does this for questions (`needs-human-input`). Needed:
 agent-worker/
   nightshift-client/           # subdirectory, pip-installable
     src/nightshift_client/
-      __init__.py              # NightshiftClient, monitor_all
+      __init__.py              # NightshiftClient
       _gitbug.py               # git-bug CLI wrapper
       _state.py                # label-to-state mapping, state detection
-      gitolite.py              # optional: gitolite admin helpers
     tests/
     pyproject.toml
 ```
@@ -218,12 +182,6 @@ and nightshift is required.
    - Answer detection: `comment.author != BOT_IDENTITY`
    
    **Benefits:** No prefix convention, natural UX, clear audit trail.
-
-### Deferred (to be discussed)
-
-2. **Gitolite helpers scope**: The optional `GitoliteAdmin` class handles repo
-   provisioning. Is auto-provisioning task repos actually needed by consuming
-   applications, or is this speculative?
 
 ### Design decisions needed
 
