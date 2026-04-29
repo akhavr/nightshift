@@ -71,6 +71,63 @@ def test_codex_oauth_mount_added(tmp_path):
     assert "/codex-auth:ro" in " ".join(cmd)
 
 
+def test_profiles_yaml_mounted_when_exists(tmp_path, monkeypatch):
+    """repo/.nightshift/profiles.yaml is mounted into the container when present."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+
+    nightshift_dir = tmp_path / ".nightshift"
+    nightshift_dir.mkdir()
+    profiles_yaml = nightshift_dir / "profiles.yaml"
+    profiles_yaml.write_text("profiles: []\n")
+
+    from host.docker_cmd import build_docker_cmd
+
+    cmd = build_docker_cmd(
+        repo=tmp_path,
+        workspace_mount=str(tmp_path / "ws"),
+        session_dir=tmp_path / "session",
+        container_name="test",
+        worktree_name="test-worktree",
+        issue_id="test-123",
+        short_id="t123",
+        max_turns=10,
+        step="coder",
+        is_resume=False,
+        workflow_path=str(tmp_path / "WORKFLOW.md"),
+        image="nightshift:latest",
+    )
+
+    cmd_str = " ".join(cmd)
+    assert (
+        f"{profiles_yaml.resolve()}:/workspace/.nightshift/profiles.yaml:ro" in cmd_str
+    )
+
+
+def test_profiles_yaml_not_mounted_when_missing(tmp_path, monkeypatch):
+    """repo/.nightshift/profiles.yaml is not mounted when the file is absent."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+
+    from host.docker_cmd import build_docker_cmd
+
+    cmd = build_docker_cmd(
+        repo=tmp_path,
+        workspace_mount=str(tmp_path / "ws"),
+        session_dir=tmp_path / "session",
+        container_name="test",
+        worktree_name="test-worktree",
+        issue_id="test-123",
+        short_id="t123",
+        max_turns=10,
+        step="coder",
+        is_resume=False,
+        workflow_path=str(tmp_path / "WORKFLOW.md"),
+        image="nightshift:latest",
+    )
+
+    cmd_str = " ".join(cmd)
+    assert "/workspace/.nightshift/profiles.yaml:ro" not in cmd_str
+
+
 def test_overflow_profile_env_var_passed(tmp_path, monkeypatch):
     """OVERFLOW_PROFILE env var is included when overflow has a profile_name."""
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
