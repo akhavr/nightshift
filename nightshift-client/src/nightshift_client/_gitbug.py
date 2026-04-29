@@ -1,5 +1,6 @@
 """Git-bug CLI wrapper with lock retry."""
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -140,3 +141,44 @@ class GitBug:
             TrackerError: If adding label fails (except 'already set').
         """
         self._run("bug", "label", "new", issue_id, label_name, ignore_rc={1})
+
+    def push(self) -> None:
+        """Push git-bug data to remote.
+
+        Raises:
+            TrackerError: If push fails.
+        """
+        self._run("push")
+
+    def pull(self) -> None:
+        """Pull git-bug data from remote.
+
+        Raises:
+            TrackerError: If pull fails.
+        """
+        self._run("pull")
+
+    def list(self, labels: Optional[list[str]] = None) -> list[dict]:
+        """List issues, optionally filtered by labels.
+
+        Args:
+            labels: Optional list of labels to filter by.
+
+        Returns:
+            List of issue dicts with id, title, etc.
+
+        Raises:
+            TrackerError: If listing fails or output cannot be parsed.
+        """
+        args = ["bug", "-f", "json"]
+        for label in labels or []:
+            args.append(f"label:{label}")
+
+        output = self._run(*args)
+        if not output:
+            return []
+
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError as e:
+            raise TrackerError(f"Failed to parse git-bug output: {e}") from e
