@@ -14,7 +14,7 @@ from host.constants import (
     REVIEW_SESSION_PREFIX,
 )
 from core.protocols import NotificationLevel
-from host.session_utils import read_state, update_status as _update_status
+from host.session_utils import read_state, update_status as _update_status, archive_session
 from core.config import load_workflow
 from core.post_run import check_empty_session
 from core.review import parse_nightshift_command
@@ -238,19 +238,18 @@ class ReviewOrchestrator:
             level=NotificationLevel.ACTIONS)
 
     def _maybe_cleanup_stale_review(self, review_sid: str) -> bool:
-        """Clean up a stale review session if it exists with completed_at set.
+        """Handle a stale review session if it exists with completed_at set.
 
         This handles the race condition where the watcher restarts after a review
         container exits (setting completed_at) but before cleanup_review_session()
-        is called. Without this cleanup, launching a new review fails with
-        'session already exists'.
+        is called.
 
-        IMPORTANT: Before cleanup, this method extracts and processes the verdict
-        from the review session to ensure the coder session state is updated.
-        Otherwise, the coder remains in waiting:review status, triggering an
-        infinite relaunch cycle.
+        If a verdict is found, it's processed and the review is cleaned up.
+        If no verdict is found, the review is left intact for check_reviewer_done()
+        to retry verdict extraction later.
 
-        Returns True if a verdict was processed (caller should not launch review).
+        Returns True if a stale review exists (caller should not launch new review).
+        Returns False if no stale review exists (caller can proceed with launch).
         """
         review_dir = self.sessions_dir / review_sid
         if not review_dir.exists() or not (review_dir / "state.json").exists():
@@ -262,18 +261,19 @@ class ReviewOrchestrator:
             log.warning(f"[{review_sid}] Failed to read state for stale check: {e}")
             return False
 
-        # Only clean up if completed_at is set (review finished normally)
+        # Only handle if completed_at is set (review finished normally)
         if not state.get("completed_at"):
             return False
 
-        log.info(f"[{review_sid}] Cleaning up stale review session before relaunch")
+        # Stale review exists - block new launch regardless of verdict result
+        log.info(f"[{review_sid}] Found stale review session (completed_at set)")
 
         # Extract coder session info
         coder_sid = review_sid[len(REVIEW_SESSION_PREFIX):]
         coder_dir = self.sessions_dir / coder_sid
         issue_id = state.get("issue_id", "")
 
-        # Process verdict BEFORE cleanup to prevent infinite relaunch loop
+        # Try to extract and process verdict
         verdict_processed = False
         if coder_dir.exists() and issue_id:
             conv_log = review_dir / "conversation.jsonl"
@@ -289,8 +289,16 @@ class ReviewOrchestrator:
                         coder_sid, coder_dir, issue_id, review_dir)
                     verdict_processed = True
 
-        self.cleanup_review_session(review_sid, review_dir)
-        return verdict_processed
+        # Only cleanup if verdict was processed. If no verdict found, leave the
+        # review session intact so check_reviewer_done() can retry.
+        if verdict_processed:
+            self.cleanup_review_session(review_sid, review_dir)
+        else:
+            log.warning(f"[{review_sid}] No verdict found in stale review - "
+                        f"leaving intact for retry")
+
+        # Return True to block new launch - stale review exists
+        return True
 
     def check_reviewer_done(self):
         """Check if reviewer sessions have finished, handle verdict."""
@@ -387,6 +395,7 @@ class ReviewOrchestrator:
             wt = self.repo_dir / config.workspace.root / f"{REVIEW_SESSION_PREFIX}{coder_sid}"
             branch = f"review/{coder_sid}"
 
+            archive_session(review_dir, self.repo_dir)
             _pkg().remove_worktree(self.repo_dir, wt, branch)
             _pkg().shutil.rmtree(review_dir, ignore_errors=True)
 
