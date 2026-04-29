@@ -212,3 +212,102 @@ class TestGitBugTimeout:
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git-bug", 30)):
             with pytest.raises(TrackerError, match="timed out"):
                 gb.add("Title", "Body")
+
+
+class TestGitBugSync:
+    """Tests for push/pull sync operations."""
+
+    def test_gitbug_push_syncs(self):
+        """push() runs git-bug push."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            gb.push()
+
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["git-bug", "push"]
+        assert mock_run.call_args[1]["cwd"] == "/repo"
+
+    def test_gitbug_pull_fetches(self):
+        """pull() runs git-bug pull."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            gb.pull()
+
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["git-bug", "pull"]
+        assert mock_run.call_args[1]["cwd"] == "/repo"
+
+
+class TestGitBugList:
+    """Tests for listing issues."""
+
+    def test_gitbug_list_returns_issues(self):
+        """list() returns parsed issue dicts from git-bug bug ls."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = '[{"id": "abc123", "title": "Bug one"}, {"id": "def456", "title": "Bug two"}]'
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            issues = gb.list()
+
+        assert len(issues) == 2
+        assert issues[0]["id"] == "abc123"
+        assert issues[1]["title"] == "Bug two"
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["git-bug", "bug", "-f", "json"]
+
+    def test_gitbug_list_with_label_filter(self):
+        """list(labels=["foo"]) passes label filter to git-bug."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = '[{"id": "abc123", "title": "Labeled bug"}]'
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            issues = gb.list(labels=["nightshift", "urgent"])
+
+        assert len(issues) == 1
+        cmd = mock_run.call_args[0][0]
+        assert "git-bug" in cmd
+        assert "label:nightshift" in cmd
+        assert "label:urgent" in cmd
+
+    def test_gitbug_list_empty_returns_empty_list(self):
+        """list() returns empty list when no issues."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            issues = gb.list()
+
+        assert issues == []
+
+    def test_gitbug_list_handles_invalid_json(self):
+        """list() raises TrackerError on invalid JSON output."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "not valid json"
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            with pytest.raises(TrackerError, match="parse"):
+                gb.list()
