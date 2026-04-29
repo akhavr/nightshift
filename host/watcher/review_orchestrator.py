@@ -245,8 +245,9 @@ class ReviewOrchestrator:
         is called.
 
         If a verdict is found, it's processed and the review is cleaned up.
-        If no verdict is found, the review is left intact for check_reviewer_done()
-        to retry verdict extraction later.
+        If no verdict is found, the review is cleaned up and the coder is
+        transitioned to waiting:human-review so the session can be handled
+        manually.
 
         Returns True if a stale review exists (caller should not launch new review).
         Returns False if no stale review exists (caller can proceed with launch).
@@ -289,13 +290,14 @@ class ReviewOrchestrator:
                         coder_sid, coder_dir, issue_id, review_dir)
                     verdict_processed = True
 
-        # Only cleanup if verdict was processed. If no verdict found, leave the
-        # review session intact so check_reviewer_done() can retry.
+        # Cleanup even when no verdict was found. The fallback transition to
+        # waiting:human-review happens inside cleanup_review_session().
         if verdict_processed:
             self.cleanup_review_session(review_sid, review_dir)
         else:
             log.warning(f"[{review_sid}] No verdict found in stale review - "
-                        f"leaving intact for retry")
+                        f"falling back to human review")
+            self.cleanup_review_session(review_sid, review_dir)
 
         # Return True to block new launch - stale review exists
         return True
@@ -342,6 +344,10 @@ class ReviewOrchestrator:
         conv_log = session_dir / "conversation.jsonl"
         verdict = self.verdicts.extract_reviewer_verdict(conv_log, issue_id)
         if not verdict:
+            if state.get("completed_at"):
+                log.info(f"[{sid}] Reviewer completed without a verdict - "
+                         f"falling back to human review")
+                self.cleanup_review_session(sid, session_dir)
             return
 
         log.info(f"[{sid}] Reviewer verdict: {verdict}")
@@ -388,6 +394,19 @@ class ReviewOrchestrator:
         """Clean up a reviewer session (worktree, branch, session dir)."""
         try:
             coder_sid = review_sid[len(REVIEW_SESSION_PREFIX):]
+            coder_dir = self.sessions_dir / coder_sid
+
+            # If the review completed without a verdict and the coder is still
+            # paused in reviewing, fall back to human review before archiving.
+            if coder_dir.exists() and (coder_dir / "state.json").exists():
+                try:
+                    coder_state = read_state(coder_dir)
+                except (json.JSONDecodeError, OSError) as e:
+                    log.warning(f"[{coder_sid}] Failed to read coder state during cleanup: {e}")
+                else:
+                    if coder_state.get("status") in ("reviewing", "waiting:review"):
+                        _update_status(coder_dir, "waiting:human-review")
+                        log.info(f"[{coder_sid}] Review completed without verdict -> waiting:human-review")
 
             review_md = self.repo_dir / "REVIEW.md"
             config = load_workflow(review_md) if review_md.exists() else load_workflow(self.workflow_path)

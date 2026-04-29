@@ -494,6 +494,27 @@ class TestCleanupReviewSession:
         assert "review-abc" not in w._recently_launched
         assert "review-abc" not in w.reviews._comment_counts
 
+    def test_no_verdict_falls_back_to_human_review(self, tmp_path):
+        w = _make_watcher(tmp_path)
+        coder_dir = _make_session(w.sessions_dir, "abc", status="reviewing", issue_id="issue-abc")
+        review_dir = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                   issue_id="issue-abc")
+        state = json.loads((review_dir / "state.json").read_text())
+        state["completed_at"] = "2026-04-21T16:15:19.552265+00:00"
+        (review_dir / "state.json").write_text(json.dumps(state))
+        (review_dir / "conversation.jsonl").write_text("")
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"):
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+            w.reviews.cleanup_review_session("review-abc", review_dir)
+
+        coder_state = json.loads((coder_dir / "state.json").read_text())
+        assert coder_state["status"] == "waiting:human-review"
+        assert not review_dir.exists()
+
     def test_cleanup_failure_does_not_raise(self, tmp_path):
         w = _make_watcher(tmp_path)
         review_dir = w.sessions_dir / "review-abc"
@@ -1212,17 +1233,8 @@ class TestStaleCleanupProcessesVerdictFirst:
         assert "abc" in launched, "Coder should be relaunched after revise verdict"
         assert "review-abc" not in launched, "New review should NOT be launched"
 
-    def test_stale_cleanup_no_verdict_blocks_until_verdict(self, tmp_path):
-        """If stale review has no verdict, cleanup is blocked and review does NOT relaunch.
-
-        This prevents the race condition where:
-        1. Review finishes but verdict extraction fails (wrong format)
-        2. Cleanup happens anyway (old buggy behavior)
-        3. Coder stuck in reviewing/waiting:review forever
-
-        Fix: Leave stale review intact until verdict is found. check_reviewer_done()
-        can retry verdict extraction later.
-        """
+    def test_stale_cleanup_no_verdict_transitions_to_human_review(self, tmp_path):
+        """If stale review has no verdict, cleanup falls back to human review."""
         w = _make_watcher(tmp_path)
         (w.repo_dir / "REVIEW.md").write_text("---\nreview:\n  max_rounds: 3\n---\n")
 
@@ -1244,8 +1256,7 @@ class TestStaleCleanupProcessesVerdictFirst:
         w._tracker.get_comments.return_value = []
 
         with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
-             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+             patch("host.watcher.remove_worktree") as mock_remove_worktree:
             cfg = MagicMock()
             cfg.workspace.root = ".worktrees"
             cfg.review.max_rounds = 3
@@ -1254,16 +1265,14 @@ class TestStaleCleanupProcessesVerdictFirst:
             w.reviews.maybe_launch_review("abc", coder_sd, "issue-abc",
                                           w.repo_dir / "REVIEW.md")
 
-        # No verdict found - cleanup should NOT happen
-        mock_rmtree.assert_not_called()
-        mock_remove_worktree.assert_not_called()
-        # Review session should still exist (not cleaned up)
-        assert review_sd.exists()
-        # No new review launched - stale one still blocking
+        # No verdict found - cleanup should now fall back to human review
+        mock_remove_worktree.assert_called_once()
+        # Review session should be cleaned up
+        assert not review_sd.exists()
+        # No new review launched - coder is no longer waiting:review
         assert "review-abc" not in launched
-        # Coder should stay in waiting:review (not moved to reviewing)
         coder_state = json.loads((coder_sd / "state.json").read_text())
-        assert coder_state["status"] == "waiting:review"
+        assert coder_state["status"] == "waiting:human-review"
 
 
 # ---------------------------------------------------------------------------
@@ -1323,21 +1332,17 @@ class TestMissingSessionDirHandled:
 # ---------------------------------------------------------------------------
 
 class TestNoArchiveWithoutVerdictProcessing:
-    """Review sessions must NOT be archived until verdict is processed.
-
-    With Option A (REQ-033), cleanup only happens via check_reviewer_done()
-    after a verdict is extracted and processed. No periodic cleanup path exists.
-    """
+    """Completed reviews with no verdict fall back to human review."""
 
     def _completed_at(self, seconds_ago: int) -> str:
         from datetime import datetime, timezone, timedelta
         return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
 
     def test_no_archive_without_verdict_processing(self, tmp_path):
-        """Review with completed_at but no processed verdict is NOT archived.
+        """Review with completed_at but no verdict is archived after fallback.
 
-        When verdict extraction fails, cleanup_review_session() is NOT called,
-        so the review session remains for retry or manual intervention.
+        When verdict extraction fails, cleanup_review_session() still runs so
+        the coder can be moved to human review.
         """
         w = _make_watcher(tmp_path)
         # Coder is still in 'reviewing' - verdict NOT yet processed
@@ -1355,16 +1360,16 @@ class TestNoArchiveWithoutVerdictProcessing:
         # Simulate check_reviewer_done() failing to find verdict
         w._tracker = MagicMock()
         w._tracker.get_comments.return_value = []
-        w.reviews.cleanup_review_session = MagicMock()
 
-        w.reviews.check_reviewer_done()
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree"):
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
 
-        # Verdict extraction should fail (no verdict in conversation or tracker)
-        # So cleanup should NOT be called - review session preserved
-        w.reviews.cleanup_review_session.assert_not_called()
+            w.reviews.check_reviewer_done()
 
-        # Review session should still exist (not archived)
-        assert review_sd.exists()
-        # Coder should still be in 'reviewing' (unchanged)
+        # Review session should be cleaned up and coder should move to human review
+        assert not review_sd.exists()
         coder_state = json.loads((coder_sd / "state.json").read_text())
-        assert coder_state["status"] == "reviewing"
+        assert coder_state["status"] == "waiting:human-review"
