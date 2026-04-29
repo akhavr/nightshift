@@ -1153,8 +1153,8 @@ class TestVerdictRecovery:
         assert state["status"] == "reviewing"  # unchanged
         assert launched == []
 
-    def test_reviewing_no_verdict_reverts_to_waiting_review(self, tmp_path):
-        """When review completed but has no verdict, fall back to reverting."""
+    def test_reviewing_no_verdict_transitions_to_human_review(self, tmp_path):
+        """When review completed but has no verdict, fall back to human review."""
         w = _make_watcher(tmp_path)
         w.monitor._last_orphan_check = 0.0
         coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
@@ -1183,8 +1183,9 @@ class TestVerdictRecovery:
             w.monitor.check_orphaned_sessions()
 
         state = json.loads((coder_sd / "state.json").read_text())
-        # No verdict found -> falls back to reverting
-        assert state["status"] == "waiting:review"
+        # No verdict found -> falls back to human review
+        assert state["status"] == "waiting:human-review"
+        assert not review_dir.exists()
         assert launched == []
 
     def test_reviewing_review_not_completed_no_review_session_reverts(self, tmp_path):
