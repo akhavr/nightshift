@@ -105,7 +105,11 @@ def cleanup_completed_review_session(review_dir: Path, coder_dir: Path | None = 
         log.warning(f"[{coder_sid}] Failed to read coder state for review cleanup: {e}")
         return False
 
-    if coder_state.get("status") == "waiting:review":
+    # Block cleanup when coder is waiting:review OR reviewing.
+    # "reviewing" means the review is in progress but verdict not yet processed.
+    # If we archive the review while coder is still "reviewing", the coder gets
+    # stuck forever because there's no review session to extract the verdict from.
+    if coder_state.get("status") in ("waiting:review", "reviewing"):
         return False
 
     if repo_dir is None:

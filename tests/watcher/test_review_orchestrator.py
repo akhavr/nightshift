@@ -1295,3 +1295,75 @@ class TestMissingSessionDirHandled:
 
         # Should still send notification (no session dir update needed)
         w.telegram.notify.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Review cleanup race condition tests (REQ-033)
+# ---------------------------------------------------------------------------
+
+class TestNoArchiveWithoutVerdictProcessing:
+    """Review sessions must NOT be archived until verdict is processed.
+
+    Bug scenario:
+    1. Review container finishes, sets completed_at
+    2. check_reviewer_done() runs, verdict extraction fails (wrong format)
+    3. cleanup_completed_review_sessions() runs, archives the review
+    4. Coder is stuck in 'reviewing' forever - no review session to extract verdict from
+
+    Fix: cleanup_completed_review_session() must block when coder is 'reviewing'.
+    """
+
+    def _completed_at(self, seconds_ago: int) -> str:
+        from datetime import datetime, timezone, timedelta
+        return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+
+    def test_no_archive_without_verdict_processing(self, tmp_path):
+        """Review with completed_at but no processed verdict is NOT archived.
+
+        This simulates the race condition where:
+        - Review completes (completed_at set)
+        - Verdict extraction fails (coder still in 'reviewing')
+        - Periodic cleanup should NOT archive the review
+        """
+        w = _make_watcher(tmp_path)
+        # Coder is still in 'reviewing' - verdict NOT yet processed
+        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                 issue_id="issue-abc")
+        # Review finished (completed_at set) but verdict extraction failed
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)
+        (review_sd / "state.json").write_text(json.dumps(state))
+        # Empty conversation - no verdict to extract
+        (review_sd / "conversation.jsonl").write_text("")
+
+        # Simulate check_reviewer_done() failing to find verdict
+        w._tracker = MagicMock()
+        w._tracker.get_comments.return_value = []
+        w.reviews.cleanup_review_session = MagicMock()
+
+        w.reviews.check_reviewer_done()
+
+        # Verdict extraction should fail (no verdict in conversation or tracker)
+        # So cleanup should NOT be called
+        w.reviews.cleanup_review_session.assert_not_called()
+
+        # Now simulate periodic cleanup running via SessionMonitor
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        # Must NOT archive - coder still in 'reviewing', verdict not processed
+        assert cleaned is False
+        assert review_sd.exists()
+        mock_remove_worktree.assert_not_called()
+        mock_rmtree.assert_not_called()
+        # Coder should still be in 'reviewing' (unchanged)
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "reviewing"

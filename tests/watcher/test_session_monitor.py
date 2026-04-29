@@ -1392,6 +1392,48 @@ class TestCompletedReviewCleanupAfterVerdict:
         assert not review_sd.exists()
         mock_remove_worktree.assert_called_once()
 
+    def test_cleanup_blocked_when_coder_reviewing(self, tmp_path):
+        """cleanup_completed_review_session() blocks when coder is 'reviewing'.
+
+        Bug scenario: Two cleanup paths race with each other:
+        1. check_reviewer_done() extracts verdict, processes it, cleans up
+        2. cleanup_completed_review_sessions() assumes verdict processed, archives
+
+        If verdict extraction fails (reviewer used wrong format), path 1 returns
+        early without cleanup. Path 2 then archives the review, leaving coder
+        stuck in 'reviewing' forever because the verdict was never processed.
+
+        Fix: Block cleanup when coder is 'reviewing' (meaning verdict not yet
+        processed).
+        """
+        w = _make_watcher(tmp_path)
+        # Coder is in 'reviewing' - review running, verdict NOT yet processed
+        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
+                                 issue_id="issue-abc")
+        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
+                                  issue_id="issue-abc")
+        state = json.loads((review_sd / "state.json").read_text())
+        state["completed_at"] = self._completed_at(120)  # Review finished
+        (review_sd / "state.json").write_text(json.dumps(state))
+
+        with patch("core.config.load_workflow") as mock_lw, \
+             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
+             patch("host.watcher.shutil.rmtree") as mock_rmtree:
+            cfg = MagicMock()
+            cfg.workspace.root = ".worktrees"
+            mock_lw.return_value = cfg
+
+            cleaned = w.monitor.cleanup_completed_review_sessions()
+
+        # Must NOT cleanup - coder still in 'reviewing', verdict not processed
+        assert cleaned is False
+        assert review_sd.exists()
+        mock_remove_worktree.assert_not_called()
+        mock_rmtree.assert_not_called()
+        # Coder should still be reviewing (no state change)
+        coder_state = json.loads((coder_sd / "state.json").read_text())
+        assert coder_state["status"] == "reviewing"
+
 
 # ---------------------------------------------------------------------------
 # Orphan with @@DONE@@ marker tests
