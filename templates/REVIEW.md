@@ -1,5 +1,5 @@
 ---
-template_version: 5
+template_version: 5.1
 agent:
   kind: claude-code
   max_turns: 30
@@ -115,17 +115,31 @@ verify current state before citing issues — do NOT assume the diff is current.
 
 ## Output Format
 
-After your review, output your verdict:
+After your review, output your verdict.
 
-- If issues found: list each issue with **exact file path, line number, and code quote**.
-  Before citing any issue:
-  1. Re-read the actual file to verify the line number is correct
-  2. Quote the offending code snippet (not from memory)
-  3. Explain why it violates the rules
-  
-  Then output `@nightshift revise` with your detailed findings.
+**CRITICAL: Use EXACTLY one of these commands on its own line:**
+```
+@nightshift approve
+@nightshift revise
+```
 
-- If all clean: confirm what you checked, then output `@nightshift approve`.
+**Do NOT use other formats.** The following will NOT work reliably:
+- `**APPROVE**` or `**REJECT**` (bold format)
+- `Verdict: APPROVE`
+- Just `APPROVE` or `REJECT` on a line
+
+**Verdict commands:**
+- `@nightshift approve` — code is ready for human review
+- `@nightshift revise` — issues found, coder must fix them
+
+**If issues found:**
+1. List each issue with **exact file path, line number, and code quote**
+2. Re-read the actual file to verify the line number is correct
+3. Quote the offending code snippet (not from memory)
+4. Explain why it violates the rules
+5. End with `@nightshift revise` and your detailed findings
+
+**If all clean:** Confirm what you checked, then output `@nightshift approve`.
 
 **Citation format for issues:**
 ```

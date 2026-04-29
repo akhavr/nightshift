@@ -250,3 +250,65 @@ class TestReviseResumesCoderSSM11:
             f"completed_at should be cleared on revise, but found: {state.get('completed_at')}"
         assert state["status"] == "working"
         assert "abc" in launched
+
+
+class TestFlexibleVerdictExtraction:
+    """Test that verdict extraction handles various formats (not just @nightshift)."""
+
+    def test_extracts_bold_verdict(self, tmp_path):
+        """Conversation with **APPROVE** (no @nightshift) extracts approve verdict."""
+        w = _make_watcher(tmp_path)
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir(parents=True)
+
+        # Reviewer used **APPROVE** instead of @nightshift approve
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "The code looks good.\n\n**APPROVE**"}) + "\n"
+        )
+
+        conv_log = review_dir / "conversation.jsonl"
+        verdict = w.reviews.verdicts.extract_reviewer_verdict(conv_log, "issue-abc")
+        assert verdict == "approve"
+
+    def test_extracts_bold_reject(self, tmp_path):
+        """Conversation with **REJECT** extracts reject verdict."""
+        w = _make_watcher(tmp_path)
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir(parents=True)
+
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "Issues found:\n- Missing tests\n\n**REJECT**"}) + "\n"
+        )
+
+        conv_log = review_dir / "conversation.jsonl"
+        verdict = w.reviews.verdicts.extract_reviewer_verdict(conv_log, "issue-abc")
+        assert verdict == "reject"
+
+    def test_extracts_verdict_heading_format(self, tmp_path):
+        """Conversation with 'Verdict: APPROVE' extracts approve verdict."""
+        w = _make_watcher(tmp_path)
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir(parents=True)
+
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "All tests pass.\n\nVerdict: APPROVE"}) + "\n"
+        )
+
+        conv_log = review_dir / "conversation.jsonl"
+        verdict = w.reviews.verdicts.extract_reviewer_verdict(conv_log, "issue-abc")
+        assert verdict == "approve"
+
+    def test_prefers_nightshift_command_over_bold(self, tmp_path):
+        """@nightshift command takes precedence when both are present."""
+        w = _make_watcher(tmp_path)
+        review_dir = w.sessions_dir / "review-abc"
+        review_dir.mkdir(parents=True)
+
+        # Both formats present - should prefer @nightshift
+        (review_dir / "conversation.jsonl").write_text(
+            json.dumps({"content": "**REJECT**\n\nActually: @nightshift approve"}) + "\n"
+        )
+
+        conv_log = review_dir / "conversation.jsonl"
+        verdict = w.reviews.verdicts.extract_reviewer_verdict(conv_log, "issue-abc")
+        assert verdict == "approve"

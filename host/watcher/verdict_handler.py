@@ -12,7 +12,7 @@ from host.session_utils import update_status as _update_status, clear_completed_
 from core.config import load_workflow
 from core.protocols import NotificationLevel
 from core.review import (
-    parse_nightshift_command, strip_nightshift_command,
+    parse_nightshift_command, parse_verdict, strip_nightshift_command,
     build_revise_prompt,
 )
 from host.watcher.session_monitor import cleanup_completed_review_session
@@ -53,30 +53,30 @@ class VerdictHandler:
         return self._verdict_from_tracker(issue_id)
 
     def _verdict_from_conversation(self, conv_log: Path) -> Optional[str]:
-        """Check conversation log for verdict."""
+        """Check conversation log for verdict using flexible pattern matching."""
         if not conv_log.exists():
             return None
         for line in reversed(conv_log.read_text().strip().splitlines()):
             try:
                 entry = json.loads(line)
                 text = entry.get("content", "")
-                cmd = parse_nightshift_command(text)
-                if cmd in ("approve", "revise"):
-                    return cmd
+                verdict = parse_verdict(text)
+                if verdict in ("approve", "revise", "reject"):
+                    return verdict
             except (json.JSONDecodeError, KeyError) as e:
                 log.debug(f"Failed to parse conversation log line: {e}")
                 continue
         return None
 
     def _verdict_from_tracker(self, issue_id: str) -> Optional[str]:
-        """Check tracker comments for verdict."""
+        """Check tracker comments for verdict using flexible pattern matching."""
         try:
             tracker = self._get_tracker()
             comments = tracker.get_comments(issue_id)
             for comment in reversed(comments[-5:] if len(comments) > 5 else comments):
-                cmd = parse_nightshift_command(comment.body)
-                if cmd in ("approve", "revise"):
-                    return cmd
+                verdict = parse_verdict(comment.body)
+                if verdict in ("approve", "revise", "reject"):
+                    return verdict
         except Exception as e:
             log.warning(f"Tracker poll for reviewer verdict failed: {e}")
         return None

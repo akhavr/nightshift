@@ -154,3 +154,68 @@ def test_build_prompt_combined():
     assert "alice" in prompt
     assert "Fix X" in prompt
     assert "Also fix Y" in prompt
+
+
+# --- Flexible verdict parsing ---
+
+from core.review import parse_verdict
+
+
+def test_parse_verdict_nightshift_command():
+    """Primary pattern: @nightshift command."""
+    assert parse_verdict("@nightshift approve") == "approve"
+    assert parse_verdict("@nightshift revise") == "revise"
+    assert parse_verdict("Issues found. @nightshift reject") == "reject"
+
+
+def test_parse_verdict_bold_format():
+    """Fallback: bold verdict (e.g., **APPROVE**)."""
+    assert parse_verdict("**APPROVE**") == "approve"
+    assert parse_verdict("**REJECT**") == "reject"
+    assert parse_verdict("The code looks good. **APPROVE**") == "approve"
+    assert parse_verdict("Issues found:\n- bug\n**REVISE**") == "revise"
+
+
+def test_parse_verdict_heading_format():
+    """Fallback: heading followed by verdict."""
+    assert parse_verdict("### Verdict\nAPPROVE") == "approve"
+    assert parse_verdict("## Verdict\nREJECT") == "reject"
+    assert parse_verdict("## Verdict:\nREVISE") == "revise"
+    assert parse_verdict("Verdict: APPROVE") == "approve"
+
+
+def test_parse_verdict_standalone_line():
+    """Fallback: verdict alone on its own line."""
+    assert parse_verdict("APPROVE") == "approve"
+    assert parse_verdict("some text\nREJECT\nmore text") == "reject"
+
+
+def test_parse_verdict_prefers_nightshift_command():
+    """@nightshift command takes precedence over other formats."""
+    # Both patterns present - prefer @nightshift
+    text = "**REJECT**\n\n@nightshift approve"
+    assert parse_verdict(text) == "approve"
+
+
+def test_parse_verdict_case_insensitive():
+    """Verdict parsing is case-insensitive."""
+    assert parse_verdict("**approve**") == "approve"
+    assert parse_verdict("**Reject**") == "reject"
+
+
+def test_parse_verdict_normalizes_reject_to_revise():
+    """REJECT is mapped to revise (only approve/revise are valid verdicts)."""
+    assert parse_verdict("**REJECT**") == "reject"
+    assert parse_verdict("@nightshift reject") == "reject"
+
+
+def test_parse_verdict_no_match():
+    """No verdict found returns None."""
+    assert parse_verdict("This is just commentary") is None
+    assert parse_verdict("The code is bad") is None
+
+
+def test_parse_verdict_ignores_code_blocks():
+    """Verdict inside code blocks is ignored."""
+    text = "```\n**APPROVE**\n```\nActual verdict: @nightshift revise"
+    assert parse_verdict(text) == "revise"
