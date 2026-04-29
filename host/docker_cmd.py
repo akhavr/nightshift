@@ -55,7 +55,7 @@ def _codex_oauth_present() -> bool:
         return False
 
 
-def _auth_mounts() -> list[str]:
+def _auth_mounts(skip_oauth: bool = False) -> list[str]:
     """Build -v flags for auth credentials (Claude + Codex)."""
     home = Path.home()
     mounts: list[str] = []
@@ -63,7 +63,7 @@ def _auth_mounts() -> list[str]:
         mounts += ["-v", f"{home / '.claude'}:/claude-auth:ro"]
     if (home / ".claude.json").exists():
         mounts += ["-v", f"{home / '.claude.json'}:/home/agent/.claude.json:ro"]
-    if (home / ".codex").is_dir():
+    if (home / ".codex").is_dir() and not skip_oauth:
         mounts += ["-v", f"{home / '.codex'}:/codex-auth:ro"]
     return mounts
 
@@ -128,8 +128,15 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
 
     workflow_mount_path = str(Path(workflow_path).resolve())
     git_mount_source = Path(git_mount_path) if git_mount_path is not None else repo / ".git"
+    profiles_yaml = repo / ".nightshift" / "profiles.yaml"
 
     git_mounts = ["-v", f"{git_mount_source}:/repo-git:rw"]
+    profiles_yaml_mounts: list[str] = []
+    if profiles_yaml.exists():
+        profiles_yaml_mounts = [
+            "-v",
+            f"{profiles_yaml.resolve()}:/workspace/.nightshift/profiles.yaml:ro",
+        ]
 
     cmd = [
         "docker", "run", "--rm",
@@ -141,7 +148,8 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
         "-v", f"{session_dir}:/session:rw",
         *git_mounts,
         "-v", f"{workflow_mount_path}:/workspace/WORKFLOW.md:ro",
-        *_auth_mounts(),
+        *_auth_mounts(skip_oauth=bool(overflow and overflow.skip_oauth)),
+        *profiles_yaml_mounts,
         "-e", f"ISSUE_ID={issue_id}",
         "-e", f"SHORT_ID={short_id}",
         "-e", f"WORKTREE_NAME={worktree_name}",
