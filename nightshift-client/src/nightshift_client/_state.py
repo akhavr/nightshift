@@ -29,13 +29,16 @@ def labels_to_state(labels: list[str]) -> str:
 
     Returns:
         Client state string. Returns "pending" if only "nightshift" label
-        is present, "unknown" if nightshift label is missing.
+        is present.
+
+    Raises:
+        ValueError: If the "nightshift" label is not present.
     """
     label_set = set(labels)
 
     # Must have nightshift label to be a nightshift issue
     if "nightshift" not in label_set:
-        return "unknown"
+        raise ValueError("Not a nightshift issue: missing 'nightshift' label")
 
     # Check labels in priority order (dict preserves insertion order)
     for label in STATE_LABEL_MAP:

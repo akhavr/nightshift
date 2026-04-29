@@ -1,5 +1,7 @@
 """Tests for state mapping module."""
 
+import pytest
+
 from nightshift_client._state import labels_to_state, STATE_LABEL_MAP
 
 
@@ -23,6 +25,21 @@ class TestLabelsToState:
         # needs-human-input takes priority over status:working
         labels = ["nightshift", "status:working", "needs-human-input"]
         assert labels_to_state(labels) == "question"
+
+    def test_suspended_auth_over_suspended(self):
+        """status:suspended-auth takes priority over status:suspended."""
+        labels = ["nightshift", "status:suspended", "status:suspended-auth"]
+        assert labels_to_state(labels) == "suspended_auth"
+
+    def test_suspended_max_resumes_over_suspended(self):
+        """status:suspended-max-resumes takes priority over status:suspended."""
+        labels = ["nightshift", "status:suspended", "status:suspended-max-resumes"]
+        assert labels_to_state(labels) == "suspended_max_resumes"
+
+    def test_waiting_human_review_over_waiting_review(self):
+        """status:waiting-human-review takes priority over status:waiting-review."""
+        labels = ["nightshift", "status:waiting-review", "status:waiting-human-review"]
+        assert labels_to_state(labels) == "waiting_human_review"
 
     def test_starting_state(self):
         """status:starting maps to 'starting'."""
@@ -64,13 +81,15 @@ class TestLabelsToState:
         """status:cancelled maps to 'cancelled'."""
         assert labels_to_state(["nightshift", "status:cancelled"]) == "cancelled"
 
-    def test_empty_labels(self):
-        """Empty labels list returns 'unknown'."""
-        assert labels_to_state([]) == "unknown"
+    def test_empty_labels_raises(self):
+        """Empty labels list raises ValueError."""
+        with pytest.raises(ValueError, match="missing 'nightshift' label"):
+            labels_to_state([])
 
-    def test_no_nightshift_label(self):
-        """Labels without nightshift returns 'unknown'."""
-        assert labels_to_state(["some-other-label"]) == "unknown"
+    def test_no_nightshift_label_raises(self):
+        """Labels without nightshift raises ValueError."""
+        with pytest.raises(ValueError, match="missing 'nightshift' label"):
+            labels_to_state(["some-other-label"])
 
     def test_state_label_map_contains_all_mappings(self):
         """STATE_LABEL_MAP contains all documented mappings."""
