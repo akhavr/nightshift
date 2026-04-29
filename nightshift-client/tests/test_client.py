@@ -272,6 +272,17 @@ class TestReadFile:
         with pytest.raises(FileNotFoundError):
             client.read_file("missing.txt")
 
+    def test_read_file_raises_on_escape_attempt(self, tmp_path):
+        """read_file() rejects paths outside repo_path."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        client = NightshiftClient(repo_path=repo, identity="user@example.com")
+
+        with pytest.raises(FileNotFoundError):
+            client.read_file("../outside.txt")
+
 
 class TestCancel:
     """Tests for NightshiftClient.cancel()."""

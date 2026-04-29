@@ -74,7 +74,12 @@ class NightshiftClient:
         Raises:
             FileNotFoundError: If the file does not exist.
         """
-        file_path = Path(self.repo_path) / path
+        repo_root = Path(self.repo_path).resolve()
+        file_path = (repo_root / path).resolve()
+
+        if repo_root != file_path and repo_root not in file_path.parents:
+            raise FileNotFoundError(path)
+
         if not file_path.is_file():
             raise FileNotFoundError(path)
         return file_path.read_text(encoding="utf-8")
