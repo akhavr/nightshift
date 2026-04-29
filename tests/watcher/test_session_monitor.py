@@ -1293,146 +1293,91 @@ class TestStaleReviewSessionCleanup:
 
 
 # ---------------------------------------------------------------------------
-# Completed review cleanup after verdict tests
+# Review cleanup blocking tests (REQ-033)
 # ---------------------------------------------------------------------------
 
-class TestCompletedReviewCleanupAfterVerdict:
-    """Auto-cleanup of completed review sessions after verdict processing."""
+class TestCleanupCompletedReviewSessionBlocking:
+    """Tests for cleanup_completed_review_session() standalone function.
+
+    With Option A (REQ-033), periodic cleanup is removed. The standalone
+    function is only called from cleanup_stale_review_sessions() for
+    watcher restart recovery. It must block when coder is in 'reviewing'
+    or 'waiting:review' status.
+    """
 
     def _completed_at(self, seconds_ago: int) -> str:
         return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
 
-    def test_cleanup_completed_review_after_verdict(self, tmp_path):
-        """Completed review sessions should be archived after the coder transitions."""
-        w = _make_watcher(tmp_path)
-        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:human-review",
-                                 issue_id="issue-abc")
-        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
-                                  issue_id="issue-abc")
-        state = json.loads((review_sd / "state.json").read_text())
-        state["completed_at"] = self._completed_at(120)
-        (review_sd / "state.json").write_text(json.dumps(state))
-
-        with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree") as mock_remove_worktree:
-            cfg = MagicMock()
-            cfg.workspace.root = ".worktrees"
-            mock_lw.return_value = cfg
-
-            cleaned = w.monitor.cleanup_completed_review_sessions()
-
-        assert cleaned is True
-        assert not review_sd.exists()
-        archive_dir = w.monitor.repo_dir / ".nightshift" / "archive" / "review-abc"
-        assert archive_dir.exists()
-        assert (archive_dir / "state.json").exists()
-        mock_remove_worktree.assert_called_once()
-        assert coder_sd.exists()
-
-    def test_no_cleanup_active_review(self, tmp_path):
-        """Active review sessions must not be cleaned up."""
-        w = _make_watcher(tmp_path)
-        _make_session(w.sessions_dir, "abc", status="waiting:review", issue_id="issue-abc")
-        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
-                                  issue_id="issue-abc")
-        state = json.loads((review_sd / "state.json").read_text())
-        state["completed_at"] = self._completed_at(120)
-        (review_sd / "state.json").write_text(json.dumps(state))
-
-        with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
-             patch("host.watcher.shutil.rmtree") as mock_rmtree:
-            cfg = MagicMock()
-            cfg.workspace.root = ".worktrees"
-            mock_lw.return_value = cfg
-
-            cleaned = w.monitor.cleanup_completed_review_sessions()
-
-        assert cleaned is False
-        assert review_sd.exists()
-        mock_remove_worktree.assert_not_called()
-        mock_rmtree.assert_not_called()
-
-    def test_cleanup_only_when_coder_transitioned(self, tmp_path):
-        """Completed review cleanup waits until the coder has left waiting:review."""
-        w = _make_watcher(tmp_path)
-        coder_sd = _make_session(w.sessions_dir, "abc", status="waiting:review",
-                                 issue_id="issue-abc")
-        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
-                                  issue_id="issue-abc")
-        state = json.loads((review_sd / "state.json").read_text())
-        state["completed_at"] = self._completed_at(120)
-        (review_sd / "state.json").write_text(json.dumps(state))
-
-        with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree") as mock_remove_worktree:
-            cfg = MagicMock()
-            cfg.workspace.root = ".worktrees"
-            mock_lw.return_value = cfg
-
-            cleaned = w.monitor.cleanup_completed_review_sessions()
-
-        assert cleaned is False
-        assert review_sd.exists()
-        mock_remove_worktree.assert_not_called()
-
-        state = json.loads((coder_sd / "state.json").read_text())
-        state["status"] = "working"
-        (coder_sd / "state.json").write_text(json.dumps(state))
-
-        with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree") as mock_remove_worktree:
-            cfg = MagicMock()
-            cfg.workspace.root = ".worktrees"
-            mock_lw.return_value = cfg
-
-            cleaned = w.monitor.cleanup_completed_review_sessions()
-
-        assert cleaned is True
-        assert not review_sd.exists()
-        mock_remove_worktree.assert_called_once()
-
     def test_cleanup_blocked_when_coder_reviewing(self, tmp_path):
-        """cleanup_completed_review_session() blocks when coder is 'reviewing'.
+        """cleanup_completed_review_session() returns False when coder is 'reviewing'.
 
-        Bug scenario: Two cleanup paths race with each other:
-        1. check_reviewer_done() extracts verdict, processes it, cleans up
-        2. cleanup_completed_review_sessions() assumes verdict processed, archives
-
-        If verdict extraction fails (reviewer used wrong format), path 1 returns
-        early without cleanup. Path 2 then archives the review, leaving coder
-        stuck in 'reviewing' forever because the verdict was never processed.
-
-        Fix: Block cleanup when coder is 'reviewing' (meaning verdict not yet
-        processed).
+        The 'reviewing' status means the review is in progress but verdict not
+        yet processed. Cleanup must be blocked to prevent archiving the review
+        before the verdict is extracted.
         """
-        w = _make_watcher(tmp_path)
-        # Coder is in 'reviewing' - review running, verdict NOT yet processed
-        coder_sd = _make_session(w.sessions_dir, "abc", status="reviewing",
-                                 issue_id="issue-abc")
-        review_sd = _make_session(w.sessions_dir, "review-abc", status="waiting:review",
-                                  issue_id="issue-abc")
-        state = json.loads((review_sd / "state.json").read_text())
-        state["completed_at"] = self._completed_at(120)  # Review finished
-        (review_sd / "state.json").write_text(json.dumps(state))
+        from host.watcher.session_monitor import cleanup_completed_review_session
 
-        with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
-             patch("host.watcher.shutil.rmtree") as mock_rmtree:
-            cfg = MagicMock()
-            cfg.workspace.root = ".worktrees"
-            mock_lw.return_value = cfg
+        sessions_dir = tmp_path / ".nightshift" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        repo_dir = tmp_path
 
-            cleaned = w.monitor.cleanup_completed_review_sessions()
+        # Coder is in 'reviewing' - verdict NOT yet processed
+        coder_sd = sessions_dir / "abc"
+        coder_sd.mkdir()
+        (coder_sd / "state.json").write_text(json.dumps({
+            "status": "reviewing",
+            "issue_id": "issue-abc"
+        }))
 
-        # Must NOT cleanup - coder still in 'reviewing', verdict not processed
-        assert cleaned is False
+        # Review finished (completed_at set)
+        review_sd = sessions_dir / "review-abc"
+        review_sd.mkdir()
+        (review_sd / "state.json").write_text(json.dumps({
+            "status": "waiting:review",
+            "issue_id": "issue-abc",
+            "completed_at": self._completed_at(120)
+        }))
+
+        # Call the standalone function directly
+        result = cleanup_completed_review_session(
+            review_sd, coder_sd, repo_dir=repo_dir
+        )
+
+        # Must return False - coder still in 'reviewing', verdict not processed
+        assert result is False
         assert review_sd.exists()
-        mock_remove_worktree.assert_not_called()
-        mock_rmtree.assert_not_called()
-        # Coder should still be reviewing (no state change)
-        coder_state = json.loads((coder_sd / "state.json").read_text())
-        assert coder_state["status"] == "reviewing"
+
+    def test_cleanup_blocked_when_coder_waiting_review(self, tmp_path):
+        """cleanup_completed_review_session() returns False when coder is 'waiting:review'."""
+        from host.watcher.session_monitor import cleanup_completed_review_session
+
+        sessions_dir = tmp_path / ".nightshift" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        repo_dir = tmp_path
+
+        # Coder is in 'waiting:review' - review not yet started
+        coder_sd = sessions_dir / "abc"
+        coder_sd.mkdir()
+        (coder_sd / "state.json").write_text(json.dumps({
+            "status": "waiting:review",
+            "issue_id": "issue-abc"
+        }))
+
+        # Review finished (completed_at set)
+        review_sd = sessions_dir / "review-abc"
+        review_sd.mkdir()
+        (review_sd / "state.json").write_text(json.dumps({
+            "status": "waiting:review",
+            "issue_id": "issue-abc",
+            "completed_at": self._completed_at(120)
+        }))
+
+        result = cleanup_completed_review_session(
+            review_sd, coder_sd, repo_dir=repo_dir
+        )
+
+        assert result is False
+        assert review_sd.exists()
 
 
 # ---------------------------------------------------------------------------

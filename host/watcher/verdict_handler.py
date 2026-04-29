@@ -15,7 +15,6 @@ from core.review import (
     parse_nightshift_command, parse_verdict, strip_nightshift_command,
     build_revise_prompt,
 )
-from host.watcher.session_monitor import cleanup_completed_review_session
 from host.watcher.lifecycle_comments import post_revise
 from host.watcher.telegram_relay import TelegramRelay
 
@@ -96,8 +95,6 @@ class VerdictHandler:
                 level=NotificationLevel.ACTIONS)
 
             self._post_approval_to_tracker(coder_sid, issue_id)
-            review_dir = coder_dir.parent / f"review-{coder_sid}"
-            cleanup_completed_review_session(review_dir, coder_dir, repo_dir=self.repo_dir)
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to handle reviewer approve: {e}")
 
@@ -186,7 +183,6 @@ class VerdictHandler:
             self.telegram.notify(f"\U0001f504 Reviewer requested revisions for `{coder_sid}`. Coder resuming.",
                                 level=NotificationLevel.ALL)
             post_revise(self._get_tracker, issue_id, coder_sid, reason)
-            cleanup_completed_review_session(review_dir, coder_dir, repo_dir=self.repo_dir)
         except Exception as e:
             log.error(f"[{coder_sid}] Failed to handle reviewer revise: {e}")
 

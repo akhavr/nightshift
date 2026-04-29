@@ -14,7 +14,7 @@ from host.constants import (
     REVIEW_SESSION_PREFIX,
 )
 from core.protocols import NotificationLevel
-from host.session_utils import read_state, update_status as _update_status
+from host.session_utils import read_state, update_status as _update_status, archive_session
 from core.config import load_workflow
 from core.post_run import check_empty_session
 from core.review import parse_nightshift_command
@@ -387,6 +387,7 @@ class ReviewOrchestrator:
             wt = self.repo_dir / config.workspace.root / f"{REVIEW_SESSION_PREFIX}{coder_sid}"
             branch = f"review/{coder_sid}"
 
+            archive_session(review_dir, self.repo_dir)
             _pkg().remove_worktree(self.repo_dir, wt, branch)
             _pkg().shutil.rmtree(review_dir, ignore_errors=True)
 

@@ -1304,13 +1304,8 @@ class TestMissingSessionDirHandled:
 class TestNoArchiveWithoutVerdictProcessing:
     """Review sessions must NOT be archived until verdict is processed.
 
-    Bug scenario:
-    1. Review container finishes, sets completed_at
-    2. check_reviewer_done() runs, verdict extraction fails (wrong format)
-    3. cleanup_completed_review_sessions() runs, archives the review
-    4. Coder is stuck in 'reviewing' forever - no review session to extract verdict from
-
-    Fix: cleanup_completed_review_session() must block when coder is 'reviewing'.
+    With Option A (REQ-033), cleanup only happens via check_reviewer_done()
+    after a verdict is extracted and processed. No periodic cleanup path exists.
     """
 
     def _completed_at(self, seconds_ago: int) -> str:
@@ -1320,10 +1315,8 @@ class TestNoArchiveWithoutVerdictProcessing:
     def test_no_archive_without_verdict_processing(self, tmp_path):
         """Review with completed_at but no processed verdict is NOT archived.
 
-        This simulates the race condition where:
-        - Review completes (completed_at set)
-        - Verdict extraction fails (coder still in 'reviewing')
-        - Periodic cleanup should NOT archive the review
+        When verdict extraction fails, cleanup_review_session() is NOT called,
+        so the review session remains for retry or manual intervention.
         """
         w = _make_watcher(tmp_path)
         # Coder is still in 'reviewing' - verdict NOT yet processed
@@ -1346,24 +1339,11 @@ class TestNoArchiveWithoutVerdictProcessing:
         w.reviews.check_reviewer_done()
 
         # Verdict extraction should fail (no verdict in conversation or tracker)
-        # So cleanup should NOT be called
+        # So cleanup should NOT be called - review session preserved
         w.reviews.cleanup_review_session.assert_not_called()
 
-        # Now simulate periodic cleanup running via SessionMonitor
-        with patch("core.config.load_workflow") as mock_lw, \
-             patch("host.watcher.remove_worktree") as mock_remove_worktree, \
-             patch("host.watcher.shutil.rmtree") as mock_rmtree:
-            cfg = MagicMock()
-            cfg.workspace.root = ".worktrees"
-            mock_lw.return_value = cfg
-
-            cleaned = w.monitor.cleanup_completed_review_sessions()
-
-        # Must NOT archive - coder still in 'reviewing', verdict not processed
-        assert cleaned is False
+        # Review session should still exist (not archived)
         assert review_sd.exists()
-        mock_remove_worktree.assert_not_called()
-        mock_rmtree.assert_not_called()
         # Coder should still be in 'reviewing' (unchanged)
         coder_state = json.loads((coder_sd / "state.json").read_text())
         assert coder_state["status"] == "reviewing"
