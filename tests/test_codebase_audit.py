@@ -15,6 +15,7 @@ def test_no_direct_status_writes():
     - st.status = self._ssm.state  (SSM-validated write in StateManager)
     - st.status = ssm.state  (SSM-validated write)
     - state["status"] = ssm.state  (SSM-validated write in host/session_utils.py)
+    - state["status"] = status in force_update_status (intentional bypass for recovery)
     - Reading status: if st.status == ..., state["status"], state.get("status")
     - update_state_fields(..., status=...)  (now SSM-validated)
     - fields["status"] = ssm.state  (SSM-validated intermediate in update_state_fields)
@@ -45,7 +46,14 @@ def test_no_direct_status_writes():
             if "test_" in py_file.name:
                 continue
 
+            # Track current function for allowed bypasses
+            current_func = None
             for line_no, line in enumerate(content.splitlines(), 1):
+                # Track function definitions
+                func_match = re.match(r'^def (\w+)\(', line)
+                if func_match:
+                    current_func = func_match.group(1)
+
                 # Skip comments
                 stripped = line.strip()
                 if stripped.startswith("#"):
@@ -64,9 +72,13 @@ def test_no_direct_status_writes():
                 # Pattern 2: state["status"] = ... (dict named 'state', not filters/etc)
                 # Must be assignment (=) not comparison (==)
                 # Allow: state["status"] = ssm.state (SSM-validated)
+                # Allow: force_update_status (intentional bypass for manual recovery)
                 if re.search(r'state\s*\[\s*["\']status["\']\s*\]\s*=(?!=)', line):
                     # Allow SSM-validated writes
                     if "ssm.state" in line:
+                        continue
+                    # Allow intentional bypass in force_update_status
+                    if current_func == "force_update_status":
                         continue
                     violations.append(f"{rel_path}:{line_no}: {stripped}")
 
