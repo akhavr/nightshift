@@ -1,5 +1,6 @@
 """Nightshift client library."""
 
+from nightshift_client._gitbug import GitBug
 from nightshift_client.exceptions import (
     AuthError,
     NetworkError,
@@ -10,6 +11,7 @@ from nightshift_client.exceptions import (
 
 __all__ = [
     "AuthError",
+    "GitBug",
     "NetworkError",
     "NightshiftError",
     "PushError",
