@@ -172,3 +172,65 @@ class TestGetIssueInfo:
             info = client.get_issue_info("abc123")
 
         assert info["last_comment"] == "Latest comment"
+
+
+class TestGetPendingQuestion:
+    """Tests for NightshiftClient.get_pending_question()."""
+
+    def test_get_pending_question_returns_text(self):
+        """get_pending_question() returns question text when needs-human-input label present."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        mock_issue = {
+            "id": "abc123",
+            "labels": ["nightshift", "needs-human-input"],
+            "comments": [
+                {"message": "First comment", "timestamp": "2026-04-29T10:00:00Z"},
+                {"message": "What is the API key?", "timestamp": "2026-04-29T12:00:00Z"},
+            ],
+        }
+        with patch.object(client._gitbug, "pull"), \
+             patch.object(client._gitbug, "show", return_value=mock_issue):
+            question = client.get_pending_question("abc123")
+
+        assert question == "What is the API key?"
+
+    def test_get_pending_question_none_if_no_question(self):
+        """get_pending_question() returns None when no needs-human-input label."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        mock_issue = {
+            "id": "abc123",
+            "labels": ["nightshift", "status:working"],
+            "comments": [
+                {"message": "Some comment", "timestamp": "2026-04-29T10:00:00Z"},
+            ],
+        }
+        with patch.object(client._gitbug, "pull"), \
+             patch.object(client._gitbug, "show", return_value=mock_issue):
+            question = client.get_pending_question("abc123")
+
+        assert question is None
+
+
+class TestPostAnswer:
+    """Tests for NightshiftClient.post_answer()."""
+
+    def test_post_answer_adds_comment(self):
+        """post_answer() adds comment via GitBug."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        with patch.object(client._gitbug, "comment") as mock_comment:
+            client.post_answer("abc123", "The API key is 12345")
+
+        mock_comment.assert_called_once_with("abc123", "The API key is 12345")
+
+    def test_post_answer_uses_identity(self):
+        """post_answer() uses the configured identity (no explicit identity param needed)."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        with patch.object(client._gitbug, "comment") as mock_comment:
+            client.post_answer("abc123", "Answer here")
+
+        mock_comment.assert_called_once()
+        assert client.identity == "user@example.com"
