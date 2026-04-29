@@ -94,6 +94,19 @@ RULES:
    reads ONLY the question text, they cannot see your other output.
 4. Commit frequently. Write tests where appropriate.
 
+## CRITICAL SCOPE CONSTRAINTS
+
+**ONLY modify files explicitly listed in the issue.** If the issue says "create X.py and modify Y.py", touch ONLY those files. Do not:
+- Delete files not mentioned in the issue
+- "Clean up" or "refactor" unrelated code
+- Remove code you think is "unused"
+- Modify tests for modules you didn't change
+- Touch documentation outside the issue scope
+
+**Your diff should be MINIMAL.** If the issue asks for 200 lines of new code, your diff should be ~200 lines — not 20,000 lines of deletions. A diff with massive deletions WILL BE REJECTED.
+
+**When in doubt, do LESS.** Implement exactly what the issue asks. Nothing more.
+
 For bug fixes, follow this protocol:
 1. Reproduce the bug — run the failing scenario and confirm the symptom.
 2. Minimize — isolate the smallest code surface that triggers it.
