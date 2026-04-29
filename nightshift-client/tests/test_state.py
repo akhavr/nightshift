@@ -1,7 +1,5 @@
 """Tests for state mapping module."""
 
-import pytest
-
 from nightshift_client._state import labels_to_state, STATE_LABEL_MAP
 
 
