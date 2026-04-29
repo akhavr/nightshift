@@ -172,6 +172,10 @@ def _setup_conflict_marker_repo(tmp_path):
     ns_dir.mkdir(parents=True)
     (ns_dir / "state.json").write_text(json.dumps({"status": "waiting:review"}))
 
+    # Create worktree directory for audit_worktree_symlinks
+    wt_dir = repo / ".worktrees" / "agent-test789"
+    run("git", "worktree", "add", str(wt_dir), "agent/test789")
+
     (repo / "WORKFLOW.md").write_text(
         "---\n"
         "agent:\n  kind: claude-code\n"
