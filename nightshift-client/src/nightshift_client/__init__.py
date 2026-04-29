@@ -100,6 +100,39 @@ class NightshiftClient:
             "updated_at": issue.get("edit_time"),
         }
 
+    def get_pending_question(self, issue_id: str) -> Optional[str]:
+        """Get pending question if the issue is waiting for human input.
+
+        Fetches latest data from remote first.
+
+        Args:
+            issue_id: Issue ID (full or prefix).
+
+        Returns:
+            The question text (last comment) if needs-human-input label is present,
+            None otherwise.
+        """
+        self._gitbug.pull()
+        issue = self._gitbug.show(issue_id)
+        labels = issue.get("labels", [])
+
+        if "needs-human-input" not in labels:
+            return None
+
+        comments = issue.get("comments", [])
+        if comments:
+            return comments[-1].get("message")
+        return None
+
+    def post_answer(self, issue_id: str, answer: str) -> None:
+        """Post an answer to a pending question.
+
+        Args:
+            issue_id: Issue ID (full or prefix).
+            answer: The answer text to post as a comment.
+        """
+        self._gitbug.comment(issue_id, answer)
+
 
 __all__ = [
     "AuthError",
