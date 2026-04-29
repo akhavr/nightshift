@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from core.state import _validate_state, state_lock
-from core.state_machine import SessionStateMachine
+from core.state_machine import SessionStateMachine, STATES
 from host.constants import ARCHIVE_DIR, MAX_ORPHAN_RESUMES
 from host.rebase import CONTAINER_GIT_PATH, _fix_container_gitdir
 
@@ -127,7 +127,6 @@ def force_update_status(session_dir: Path, status: str) -> None:
     Validates that status is a known state but does not check transitions.
     Raises ValueError if status is not a recognized state.
     """
-    from core.state_machine import STATES
     if status not in STATES:
         raise ValueError(f"unknown status: {status}")
     with state_lock(session_dir):
