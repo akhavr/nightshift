@@ -71,6 +71,70 @@ def test_codex_oauth_mount_added(tmp_path):
     assert "/codex-auth:ro" in " ".join(cmd)
 
 
+def test_skip_oauth_prevents_codex_auth_mount(tmp_path):
+    """skip_oauth=True prevents mounting ~/.codex into /codex-auth."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".codex").mkdir()
+
+    from core.config.models import OverflowConfig
+    from host.docker_cmd import build_docker_cmd
+
+    overflow = OverflowConfig(skip_oauth=True)
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount=str(tmp_path / "ws"),
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-123",
+            short_id="t123",
+            max_turns=10,
+            step="coder",
+            is_resume=False,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            image="nightshift:latest",
+            agent_kind="codex",
+            overflow=overflow,
+        )
+
+    assert "/codex-auth:ro" not in " ".join(cmd)
+
+
+def test_oauth_mount_present_when_skip_oauth_false(tmp_path):
+    """skip_oauth=False keeps the /codex-auth mount when ~/.codex exists."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".codex").mkdir()
+
+    from core.config.models import OverflowConfig
+    from host.docker_cmd import build_docker_cmd
+
+    overflow = OverflowConfig(skip_oauth=False)
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount=str(tmp_path / "ws"),
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-123",
+            short_id="t123",
+            max_turns=10,
+            step="coder",
+            is_resume=False,
+            workflow_path=str(tmp_path / "WORKFLOW.md"),
+            image="nightshift:latest",
+            agent_kind="codex",
+            overflow=overflow,
+        )
+
+    assert "/codex-auth:ro" in " ".join(cmd)
+
+
 def test_profiles_yaml_mounted_when_exists(tmp_path, monkeypatch):
     """repo/.nightshift/profiles.yaml is mounted into the container when present."""
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
@@ -324,6 +388,7 @@ def test_codex_oauth_keeps_api_keys_when_skip_oauth_enabled(tmp_path, monkeypatc
     cmd_str = " ".join(cmd)
     assert "CODEX_API_KEY=sk-codex-key" in cmd_str
     assert "OPENAI_API_KEY=sk-openai-key" in cmd_str
+    assert "/codex-auth:ro" not in cmd_str
 
 
 def test_codex_no_oauth_includes_api_keys(tmp_path, monkeypatch):
