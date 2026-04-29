@@ -62,12 +62,11 @@ client.push()
 
 ### 4. Result retrieval
 
-After completion, pull the repo and read output files.
+After completion, pull the repo and read specific output files.
 
 ```python
 client.pull()  # git pull to get merged output
-files = client.read_output()
-# {"findings.md": "## Summary\n...", "comparison-table.md": "| Exchange | ..."}
+content = client.read_file("findings.md")  # caller knows what to look for
 ```
 
 ### 5. Cancellation
@@ -183,28 +182,34 @@ and nightshift is required.
    
    **Benefits:** No prefix convention, natural UX, clear audit trail.
 
-### Design decisions needed
-
-3. **Batch monitoring auth**: `monitor_all()` across multiple repos — same SSH
-   key assumed for all gitolite remotes, or does each repo entry need its own
-   credentials?
-
-4. **Error handling pattern**: Push fails, git-bug malformed, network timeout —
-   should the client raise exceptions, return error objects, or use Result types?
-
-5. **Cancellation semantics**: Client adds `status:cancelled` label. Is this
-   fire-and-forget, or does the client wait for confirmation that nightshift
-   killed the session?
-
-6. **Output file discovery**: `client.read_output()` returns files. How does the
-   client know which files are "output"? Convention (specific directory),
-   manifest file, or label in issue?
-
-7. **Polling vs push**: The design uses polling via git fetch. Any consideration
-   for lower-latency notification (webhooks, server-sent events) for
-   latency-sensitive consumers?
-
 ### Resolved
+
+3. **Error handling pattern**: Use exceptions with a clear hierarchy.
+   
+   - Base class: `NightshiftError`
+   - Subclasses: `PushError`, `TrackerError`, `AuthError`, `NetworkError`
+   - Standard Python pattern — callers can catch-all or handle specifically
+
+5. **Cancellation semantics**: Fire-and-forget.
+   
+   `client.cancel()` adds `status:cancelled` label and returns immediately.
+   Client trusts nightshift will honor it. If confirmation needed, caller
+   polls `check_state()` themselves.
+
+6. **Output file discovery**: Caller specifies.
+   
+   No `read_output()` method. Different tasks produce different outputs.
+   Caller knows what they asked for and reads specific files:
+   ```python
+   client.pull()
+   content = client.read_file("findings.md")
+   ```
+
+7. **Polling vs push**: Polling only for v1.
+   
+   Git fetch polling is sufficient for async task work. Webhooks add
+   infrastructure complexity. Can add push notifications later if a
+   latency-sensitive use case emerges.
 
 8. **Telegram-to-identity mapping**: Use Telegram username as git-bug author
    name with namespace prefix: `tg:<username>` or `telegram:<username>`.
