@@ -38,6 +38,11 @@ def test_prompt_snippet_appended_when_overflow_active():
 class TestDockerEntrypointGuardrails:
     """Tests for docker-entrypoint.sh guardrails."""
 
+    def test_entrypoint_creates_nightshift_dir(self):
+        """docker-entrypoint.sh should create /workspace/.nightshift before startup."""
+        source = Path("docker-entrypoint.sh").read_text()
+        assert 'mkdir -p /workspace/.nightshift 2>/dev/null || true' in source
+
     def test_entrypoint_fails_on_empty_repo_git(self, tmp_path):
         """Entrypoint exits non-zero when /repo-git is empty."""
         # Create a minimal test script that checks the guardrail logic
