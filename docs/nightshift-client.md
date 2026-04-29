@@ -182,14 +182,6 @@ and nightshift is required.
    
    **Benefits:** No prefix convention, natural UX, clear audit trail.
 
-### Design decisions needed
-
-
-
-7. **Polling vs push**: The design uses polling via git fetch. Any consideration
-   for lower-latency notification (webhooks, server-sent events) for
-   latency-sensitive consumers?
-
 ### Resolved
 
 3. **Error handling pattern**: Use exceptions with a clear hierarchy.
@@ -212,6 +204,12 @@ and nightshift is required.
    client.pull()
    content = client.read_file("findings.md")
    ```
+
+7. **Polling vs push**: Polling only for v1.
+   
+   Git fetch polling is sufficient for async task work. Webhooks add
+   infrastructure complexity. Can add push notifications later if a
+   latency-sensitive use case emerges.
 
 8. **Telegram-to-identity mapping**: Use Telegram username as git-bug author
    name with namespace prefix: `tg:<username>` or `telegram:<username>`.
