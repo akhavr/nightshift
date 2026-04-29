@@ -551,8 +551,10 @@ class SessionMonitor:
         conv_log = review_dir / "conversation.jsonl"
         verdict = self._review_orchestrator.extract_reviewer_verdict(conv_log, issue_id)
         if not verdict:
-            log.info(f"[{coder_sid}] Review {review_sid} completed but no verdict found")
-            return False
+            log.info(f"[{coder_sid}] Review {review_sid} completed but no verdict found; "
+                     f"falling back to human review")
+            self._review_orchestrator.cleanup_review_session(review_sid, review_dir)
+            return True
 
         log.info(f"[{coder_sid}] Recovered review verdict '{verdict}' from {review_sid}")
         if verdict == "approve":
