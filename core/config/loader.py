@@ -172,6 +172,9 @@ def _parse_auto_start(raw: dict, config: WorkflowConfig):
     )
 
 
+_VALID_AUTH_MODES = {"auto", "oauth", "api_key"}
+
+
 def _parse_overflow_profile(raw_profile: dict[str, Any]) -> OverflowProfile:
     pricing = None
     if isinstance(raw_profile.get("pricing"), dict):
@@ -180,6 +183,9 @@ def _parse_overflow_profile(raw_profile: dict[str, Any]) -> OverflowProfile:
             input_per_1m=float(pricing_raw.get("input_per_1m", 0.0)),
             output_per_1m=float(pricing_raw.get("output_per_1m", 0.0)),
         )
+    auth_mode = raw_profile.get("auth_mode", "auto")
+    if auth_mode not in _VALID_AUTH_MODES:
+        raise ValueError(f"auth_mode must be one of {sorted(_VALID_AUTH_MODES)}, got '{auth_mode}'")
     return OverflowProfile(
         extra_args=raw_profile.get("extra_args", []),
         env=raw_profile.get("env", {}),
@@ -189,6 +195,7 @@ def _parse_overflow_profile(raw_profile: dict[str, Any]) -> OverflowProfile:
         litellm_config=raw_profile.get("litellm_config"),
         pricing=pricing,
         agent_kind=raw_profile.get("agent_kind"),
+        auth_mode=auth_mode,
     )
 
 
@@ -240,6 +247,7 @@ def resolve_overflow_config(config: WorkflowConfig,
         prompt_snippet=profile.prompt_snippet,
         signal_method=profile.signal_method,
         skip_oauth=profile.skip_oauth,
+        auth_mode=profile.auth_mode,
         litellm_config=profile.litellm_config,
         pricing=profile.pricing,
         agent_kind=profile.agent_kind,
@@ -273,6 +281,7 @@ def _parse_overflow(raw: dict, config: WorkflowConfig, repo_root: Path | None = 
         prompt_snippet=profile.prompt_snippet,
         signal_method=profile.signal_method,
         skip_oauth=profile.skip_oauth,
+        auth_mode=profile.auth_mode,
         litellm_config=profile.litellm_config,
         pricing=profile.pricing,
         agent_kind=profile.agent_kind,

@@ -78,7 +78,13 @@ class OverflowProfile:
     prompt_snippet: str | None = None
     signal_method: str | None = None
     # When true, keep API keys in the container even if Codex OAuth is present.
+    # Deprecated: use auth_mode instead.
     skip_oauth: bool = False
+    # Auth mode for Codex sessions: "auto" (default), "oauth", or "api_key".
+    # - "oauth": Force OAuth mode, exclude ALL Codex/OpenAI env vars.
+    # - "api_key": Force API key mode, pass all env vars.
+    # - "auto": Detect based on auth.json presence (current behavior).
+    auth_mode: str = "auto"
     # Path to litellm-config.yaml for proxy-based model remapping
     litellm_config: str | None = None
     # Optional provider pricing for agents that emit tokens without cost.
