@@ -455,6 +455,12 @@ class TestIsAuthFailure:
     def test_case_insensitive(self):
         assert CodexAgent._is_auth_failure("UNAUTHORIZED access denied")
 
+    def test_missing_env_var_is_auth_failure(self):
+        """Missing environment variable should be detected as auth failure."""
+        assert CodexAgent._is_auth_failure("Missing environment variable: CODEX_API_KEY")
+        assert CodexAgent._is_auth_failure("Missing environment variable")
+        assert CodexAgent._is_auth_failure("missing environment variable: OPENAI_API_KEY")
+
 
 # ── is_alive / terminate ─────────────────────────────────
 
