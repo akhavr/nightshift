@@ -17,16 +17,16 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.protocols import TrackerComment, TrackerIssue
-from core.tracker_ipc import (
+from nightshift_client._ipc import (
+    TrackerComment,
     TrackerRequest,
     TrackerResponse,
     execute_tracker_method,
     recv_json_line,
+    TrackerIssue,
 )
 
 from nightshift_client._gitbug import GitBug
@@ -90,9 +90,20 @@ def remove_socket(path: str | Path) -> None:
     Path(path).unlink(missing_ok=True)
 
 
-def pidfile_running(path: str | Path) -> bool:
-    pid = read_pidfile(path)
-    return bool(pid and _pid_alive(pid))
+def daemon_running(pidfile_path: str | Path, socket_path: str | Path) -> bool:
+    pid = read_pidfile(pidfile_path)
+    if not pid or not _pid_alive(pid):
+        return False
+    sock = Path(socket_path)
+    if not sock.exists():
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            probe.connect(str(sock))
+        return True
+    except OSError:
+        return False
 
 
 def _issue_from_dict(data: dict[str, Any]) -> TrackerIssue:
@@ -177,10 +188,10 @@ class _GitBugTrackerAdapter:
         return self._gitbug._run(*args)
 
 
-@dataclass
 class _PendingResult:
-    event: threading.Event
-    response: TrackerResponse | None = None
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.response: TrackerResponse | None = None
 
     def set(self, response: TrackerResponse) -> None:
         self.response = response
@@ -272,7 +283,7 @@ class TrackerWriterDaemon:
         log.info("nightshift-client daemon stopped")
 
     def submit(self, request: TrackerRequest, timeout: float | None = None) -> TrackerResponse:
-        pending = _PendingResult(event=threading.Event())
+        pending = _PendingResult()
         try:
             self._queue.put((request, pending), timeout=5)
         except queue.Full:

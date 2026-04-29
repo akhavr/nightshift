@@ -11,8 +11,8 @@ import time
 from pathlib import Path
 
 from nightshift_client._daemon import (
+    daemon_running,
     pidfile_path_for,
-    pidfile_running,
     remove_pidfile,
     remove_socket,
     run_foreground,
@@ -40,11 +40,11 @@ def _wait_for_daemon_ready(
 def _start_daemon(repo_path: Path) -> int:
     pidfile = pidfile_path_for(repo_path)
     socket_path = socket_path_for(repo_path)
-    if pidfile_running(pidfile):
+    if daemon_running(pidfile, socket_path):
         print(f"nightshift-client daemon already running ({read_pidfile(pidfile)})")
         return 0
 
-    if pidfile.exists():
+    if pidfile.exists() and not daemon_running(pidfile, socket_path):
         remove_pidfile(pidfile)
     if socket_path.exists():
         remove_socket(socket_path)
