@@ -16,6 +16,7 @@ from host.cli import (
     cmd_reject,
     cmd_status,
     cmd_answer,
+    cmd_force_status,
     cmd_review,
     cmd_resume,
     cmd_history,
@@ -1970,3 +1971,63 @@ def test_unblock_dependents_any_prefix_length():
         call("dependent1234", "blocked:abc1234"),
         call("dependent1234", "blocked:abc123456789"),
     ]
+
+
+# ── cmd_force_status ────────────────────────────────────────────────────────
+
+
+def test_force_status_updates_session(tmp_path, capsys):
+    """force-status updates state.json with the new status."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "force12345678"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(json.dumps({
+        "status": "reviewing", "step": 2, "issue_id": "force12345678",
+    }))
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="force12345678"):
+        cmd_force_status(_make_args(issue_id="force12345678", status="waiting:review"))
+
+    state = json.loads((sd / "state.json").read_text())
+    assert state["status"] == "waiting:review"
+    out = capsys.readouterr().out
+    assert "Force-updated" in out
+    assert "waiting:review" in out
+
+
+def test_force_status_invalid_status(tmp_path, capsys):
+    """force-status with invalid status raises error."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sd = repo / ".nightshift" / "sessions" / "badstat12345"
+    sd.mkdir(parents=True)
+    (sd / "state.json").write_text(json.dumps({
+        "status": "working", "step": 1, "issue_id": "badstat12345",
+    }))
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="badstat12345"), \
+         pytest.raises(SystemExit) as exc_info:
+        cmd_force_status(_make_args(issue_id="badstat12345", status="badstatus"))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "Invalid status" in err
+
+
+def test_force_status_missing_session(tmp_path, capsys):
+    """force-status with nonexistent session raises error."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".nightshift" / "sessions").mkdir(parents=True)
+
+    with patch("host.cli.repo_root", return_value=repo), \
+         patch("host.cli.resolve_session", return_value="nosess12345678"), \
+         pytest.raises(SystemExit) as exc_info:
+        cmd_force_status(_make_args(issue_id="nosess12345678", status="waiting:review"))
+
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "No session found" in err
