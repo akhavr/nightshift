@@ -68,6 +68,12 @@ if [ -d /repo-git ] && [ -n "$WORKTREE_NAME" ]; then
     export WORKTREE_PATH="/workspace"
 fi
 
+# Guardrail: fail fast if git mount is empty
+if [ -d /repo-git ] && [ -z "$(ls -A /repo-git 2>/dev/null)" ]; then
+    echo "ERROR: /repo-git mount is empty - git overlay setup failed" >&2
+    exit 1
+fi
+
 # Save the original .git pointer for the exit cleanup helper.
 if [ -f /workspace/.git ]; then
     ORIGINAL_GIT_CONTENT_FILE="/session/original-git-pointer"
