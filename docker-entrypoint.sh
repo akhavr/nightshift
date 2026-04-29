@@ -84,6 +84,9 @@ fi
 # WT-1.6: Sanitize core.worktree at startup (defense-in-depth with exit trap).
 sanitize_core_worktree startup
 
+# Ensure bind-mounted profile target exists before the agent starts.
+mkdir -p /workspace/.nightshift 2>/dev/null || true
+
 # Create OpenHands conversation persistence directory
 mkdir -p "$HOME/.openhands" 2>/dev/null || true
 
