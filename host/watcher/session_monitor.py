@@ -105,7 +105,11 @@ def cleanup_completed_review_session(review_dir: Path, coder_dir: Path | None = 
         log.warning(f"[{coder_sid}] Failed to read coder state for review cleanup: {e}")
         return False
 
-    if coder_state.get("status") == "waiting:review":
+    # Block cleanup when coder is waiting:review OR reviewing.
+    # "reviewing" means the review is in progress but verdict not yet processed.
+    # If we archive the review while coder is still "reviewing", the coder gets
+    # stuck forever because there's no review session to extract the verdict from.
+    if coder_state.get("status") in ("waiting:review", "reviewing"):
         return False
 
     if repo_dir is None:
@@ -156,7 +160,6 @@ class SessionMonitor:
         self._last_provider_outage_check = 0.0
         self._last_zombie_check = 0.0
         self._last_session_size_check = 0.0
-        self._last_review_cleanup_check = 0.0
         self._alerted_zombies: set[str] = set()  # Avoid duplicate alerts
         self._alerted_large_sessions: set[str] = set()  # Avoid duplicate alerts
         self._alerted_runaway_sessions: set[str] = set()  # Avoid duplicate alerts
@@ -209,32 +212,11 @@ class SessionMonitor:
                 if self._try_recover_review_verdict(coder_sid, coder_dir, sid):
                     continue  # Verdict processed and session cleaned up
 
-            # No verdict found or no coder session - just clean up the review session
-            if self._review_orchestrator:
-                self._review_orchestrator.cleanup_review_session(sid, session_dir)
-
-    def cleanup_completed_review_sessions(self):
-        """Clean up completed review sessions after the verdict has been processed."""
-        if not self.sessions_dir.exists():
-            return False
-
-        cleaned_any = False
-        for session_dir in self.sessions_dir.iterdir():
-            if not session_dir.is_dir():
-                continue
-            sid = session_dir.name
-            if not sid.startswith(REVIEW_SESSION_PREFIX):
-                continue
-            if not (session_dir / "state.json").exists():
-                continue
-            cleaned = cleanup_completed_review_session(
-                session_dir,
-                self.sessions_dir / sid[len(REVIEW_SESSION_PREFIX):],
-                repo_dir=self.repo_dir,
-                workflow_path=self.workflow_path,
-            )
-            cleaned_any = cleaned_any or cleaned
-        return cleaned_any
+            # No verdict found - do NOT cleanup. Leave the review session intact
+            # so check_reviewer_done() can retry verdict extraction later, or so
+            # human intervention can occur. Cleaning up without a verdict leaves
+            # the coder stuck in "reviewing" forever.
+            log.warning(f"[{sid}] Not archiving: no verdict recovered from stale review")
 
     def cleanup_stale_blocked_labels(self):
         """Remove blocked:<id> labels where the blocking issue is already closed.
@@ -288,10 +270,6 @@ class SessionMonitor:
             if not (session_dir / "state.json").exists():
                 continue
             self.maybe_resume_orphan(session_dir, sid, now)
-
-        if now - self._last_review_cleanup_check >= REVIEW_POLL_INTERVAL_S:
-            self._last_review_cleanup_check = now
-            self.cleanup_completed_review_sessions()
 
     def check_runaway_sessions(self):
         """Warn when active sessions are approaching the orphan-resume limit."""
