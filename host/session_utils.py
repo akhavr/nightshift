@@ -120,6 +120,22 @@ def update_status(session_dir: Path, status: str) -> None:
         write_state(session_dir, state)
 
 
+def force_update_status(session_dir: Path, status: str) -> None:
+    """Force-update status field, bypassing SSM validation (locked).
+
+    Used for manual recovery when sessions are stuck in invalid states.
+    Validates that status is a known state but does not check transitions.
+    Raises ValueError if status is not a recognized state.
+    """
+    from core.state_machine import STATES
+    if status not in STATES:
+        raise ValueError(f"unknown status: {status}")
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["status"] = status
+        write_state(session_dir, state)
+
+
 def increment_orphan_resumes(session_dir: Path) -> int:
     """Atomically increment orphan_resumes and return the new value (locked)."""
     with state_lock(session_dir):
