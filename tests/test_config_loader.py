@@ -124,3 +124,34 @@ def test_prompt_snippet_empty_by_default():
     profile = OverflowProfile()
 
     assert profile.prompt_snippet is None
+
+
+def test_auth_mode_validation(tmp_path):
+    """auth_mode only accepts oauth/api_key/auto."""
+    from core.config.loader import load_workflow
+    import pytest
+
+    # Valid values should work
+    for mode in ["auto", "oauth", "api_key"]:
+        workflow = tmp_path / f"WORKFLOW-{mode}.md"
+        workflow.write_text(f"""\
+---
+overflow:
+  auth_mode: {mode}
+---
+Prompt.
+""")
+        config = load_workflow(workflow)
+        assert config.overflow.auth_mode == mode
+
+    # Invalid value should raise
+    workflow = tmp_path / "WORKFLOW-invalid.md"
+    workflow.write_text("""\
+---
+overflow:
+  auth_mode: invalid_value
+---
+Prompt.
+""")
+    with pytest.raises(ValueError, match="auth_mode must be one of"):
+        load_workflow(workflow)

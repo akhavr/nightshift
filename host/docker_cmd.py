@@ -35,6 +35,9 @@ _PASSTHROUGH_ENV_VARS = (
 # Keys to exclude when Codex OAuth is present (would override OAuth auth)
 _CODEX_OAUTH_EXCLUDES = {"CODEX_API_KEY", "OPENAI_API_KEY"}
 
+# All Codex/OpenAI vars to exclude when auth_mode=oauth (immune to .env pollution)
+_CODEX_ALL_EXCLUDES = {"CODEX_API_KEY", "CODEX_BASE_URL", "CODEX_MODEL", "OPENAI_API_KEY"}
+
 
 def _codex_oauth_present() -> bool:
     """Check if Codex OAuth credentials are configured.
@@ -82,11 +85,20 @@ def build_docker_cmd(repo: Path, workspace_mount: str, session_dir: Path,
             Passed as AGENT_KIND env var so docker-entrypoint.sh can
             configure agent-specific settings.
     """
-    # Determine which vars to exclude (Codex OAuth takes precedence over API keys)
+    # Determine which vars to exclude based on auth_mode
     exclude_vars: set[str] = set()
-    if agent_kind == "codex" and _codex_oauth_present() and not (overflow and overflow.skip_oauth):
-        exclude_vars = _CODEX_OAUTH_EXCLUDES
-        logger.info("Codex OAuth detected; excluding API keys from env passthrough")
+    auth_mode = overflow.auth_mode if overflow else "auto"
+    if agent_kind == "codex":
+        if auth_mode == "oauth":
+            exclude_vars = _CODEX_ALL_EXCLUDES
+            logger.info("auth_mode=oauth; excluding all Codex/OpenAI env vars")
+        elif auth_mode == "api_key":
+            pass  # No exclusions, pass all vars
+        elif auth_mode == "auto":
+            # Legacy behavior: check OAuth presence and skip_oauth flag
+            if _codex_oauth_present() and not (overflow and overflow.skip_oauth):
+                exclude_vars = _CODEX_OAUTH_EXCLUDES
+                logger.info("Codex OAuth detected; excluding API keys from env passthrough")
 
     notify_env = []
     for var in _PASSTHROUGH_ENV_VARS:

@@ -381,3 +381,99 @@ def test_non_codex_agent_includes_api_keys_even_with_oauth(tmp_path, monkeypatch
     # API keys should be passed for non-codex agents
     assert "CODEX_API_KEY=sk-codex-key" in cmd_str
     assert "OPENAI_API_KEY=sk-openai-key" in cmd_str
+
+
+def test_auth_mode_oauth_excludes_all_codex_vars(tmp_path, monkeypatch):
+    """auth_mode=oauth excludes CODEX_API_KEY, CODEX_BASE_URL, CODEX_MODEL, OPENAI_API_KEY."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    # Set all Codex vars in environment
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-key")
+    monkeypatch.setenv("CODEX_BASE_URL", "https://example.com/v1")
+    monkeypatch.setenv("CODEX_MODEL", "gpt-5")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+
+    from core.config.models import OverflowConfig
+    from host.docker_cmd import build_docker_cmd
+
+    overflow = OverflowConfig(auth_mode="oauth")
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount="/workspace",
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-id",
+            short_id="test",
+            max_turns=50,
+            step="coder",
+            is_resume=False,
+            workflow_path="WORKFLOW.md",
+            image="nightshift:latest",
+            overflow=overflow,
+            agent_kind="codex",
+        )
+
+    cmd_str = " ".join(cmd)
+    # All Codex/OpenAI vars should be excluded
+    assert "CODEX_API_KEY=" not in cmd_str
+    assert "CODEX_BASE_URL=" not in cmd_str
+    assert "CODEX_MODEL=" not in cmd_str
+    assert "OPENAI_API_KEY=" not in cmd_str
+
+
+def test_auth_mode_api_key_passes_all(tmp_path, monkeypatch):
+    """auth_mode=api_key passes all CODEX_* vars even if OAuth is present."""
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    monkeypatch.setenv("CODEX_API_KEY", "sk-codex-key")
+    monkeypatch.setenv("CODEX_BASE_URL", "https://example.com/v1")
+    monkeypatch.setenv("CODEX_MODEL", "gpt-5")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".claude").mkdir()
+    # Create OAuth tokens (auth_mode=api_key should ignore this)
+    (fake_home / ".codex").mkdir()
+    (fake_home / ".codex" / "auth.json").write_text('{"tokens": {"access": "tok"}}')
+
+    from core.config.models import OverflowConfig
+    from host.docker_cmd import build_docker_cmd
+
+    overflow = OverflowConfig(auth_mode="api_key")
+
+    with patch("host.docker_cmd.Path.home", return_value=fake_home):
+        cmd = build_docker_cmd(
+            repo=tmp_path,
+            workspace_mount="/workspace",
+            session_dir=tmp_path / "session",
+            container_name="test",
+            worktree_name="test-worktree",
+            issue_id="test-id",
+            short_id="test",
+            max_turns=50,
+            step="coder",
+            is_resume=False,
+            workflow_path="WORKFLOW.md",
+            image="nightshift:latest",
+            overflow=overflow,
+            agent_kind="codex",
+        )
+
+    cmd_str = " ".join(cmd)
+    # All vars should be passed
+    assert "CODEX_API_KEY=sk-codex-key" in cmd_str
+    assert "CODEX_BASE_URL=https://example.com/v1" in cmd_str
+    assert "CODEX_MODEL=gpt-5" in cmd_str
+    assert "OPENAI_API_KEY=sk-openai-key" in cmd_str
