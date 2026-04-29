@@ -54,7 +54,7 @@ from host.session_utils import (
     archive_session,
     clear_completed_at,
     get_repo_root,
-    read_state, write_state, update_status,
+    read_state, write_state, update_status, force_update_status,
     force_remove_dir, remove_worktree,
 )
 
@@ -328,6 +328,22 @@ def cmd_answer(a):
         print(f"Answer written for {sid}")
     else:
         print(f"No session found for {sid}", file=sys.stderr)
+
+
+def cmd_force_status(a):
+    """Force-update session status, bypassing state machine validation."""
+    sid = resolve_session(a.issue_id)
+    sd = sessions_dir() / sid
+    if not sd.exists() or not (sd / "state.json").exists():
+        print(f"No session found for {sid}", file=sys.stderr)
+        sys.exit(1)
+    print(f"WARNING: Bypassing state machine validation", file=sys.stderr)
+    try:
+        force_update_status(sd, a.status)
+    except ValueError as e:
+        print(f"Invalid status: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Force-updated {sid[:12]} to status: {a.status}")
 
 
 def _build_review_launch_cmd(sid: str) -> list[str]:
@@ -1537,6 +1553,11 @@ def _register_session_commands(s):
     sp.add_argument("issue_id")
     sp.add_argument("--keep-session", action="store_true")
     sp.set_defaults(func=cmd_cleanup)
+
+    sp = s.add_parser("force-status", help="Force-update session status (bypasses SSM)")
+    sp.add_argument("issue_id")
+    sp.add_argument("status", help="Target status (e.g., waiting:review, working)")
+    sp.set_defaults(func=cmd_force_status)
 
 
 def _build_parser() -> argparse.ArgumentParser:

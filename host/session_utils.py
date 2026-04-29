@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from core.state import _validate_state, state_lock
-from core.state_machine import SessionStateMachine
+from core.state_machine import SessionStateMachine, STATES
 from host.constants import ARCHIVE_DIR, MAX_ORPHAN_RESUMES
 from host.rebase import CONTAINER_GIT_PATH, _fix_container_gitdir
 
@@ -117,6 +117,21 @@ def update_status(session_dir: Path, status: str) -> None:
         ssm = SessionStateMachine(initial_state=state.get("status", "starting"))
         ssm.transition(status)  # validates transition
         state["status"] = ssm.state
+        write_state(session_dir, state)
+
+
+def force_update_status(session_dir: Path, status: str) -> None:
+    """Force-update status field, bypassing SSM validation (locked).
+
+    Used for manual recovery when sessions are stuck in invalid states.
+    Validates that status is a known state but does not check transitions.
+    Raises ValueError if status is not a recognized state.
+    """
+    if status not in STATES:
+        raise ValueError(f"unknown status: {status}")
+    with state_lock(session_dir):
+        state = read_state(session_dir)
+        state["status"] = status
         write_state(session_dir, state)
 
 
