@@ -13,7 +13,7 @@ from core.protocols import (
     TrackerIssue, Workspace, WorkspaceManager,
 )
 from core.constants import TITLE_TRUNCATE_LEN
-from core.review import parse_nightshift_command
+from core.review import parse_verdict
 from core.state import StateManager
 
 log = logging.getLogger(__name__)
@@ -142,7 +142,7 @@ def _handle_review_max_turns(
 
 
 def scan_conversation_for_verdict(state_mgr: StateManager) -> str | None:
-    """Scan conversation.jsonl for a @nightshift approve/revise verdict."""
+    """Scan conversation.jsonl for a verdict using flexible pattern matching."""
     conv_log = state_mgr.conversation_log
     if not conv_log.exists():
         return None
@@ -150,9 +150,9 @@ def scan_conversation_for_verdict(state_mgr: StateManager) -> str | None:
         try:
             entry = json.loads(line)
             text = entry.get("content", "")
-            cmd = parse_nightshift_command(text)
-            if cmd in ("approve", "revise"):
-                return cmd
+            verdict = parse_verdict(text)
+            if verdict in ("approve", "revise", "reject"):
+                return verdict
         except (json.JSONDecodeError, KeyError) as e:
             log.debug(f"Failed to parse conversation log line: {e}")
             continue

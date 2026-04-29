@@ -373,6 +373,24 @@ class TestScanConversationForVerdict:
         sm.append_conversation("assistant", "Fixed. @nightshift approve")
         assert scan_conversation_for_verdict(sm) == "approve"
 
+    def test_finds_bold_verdict(self, tmp_path):
+        """Flexible verdict parsing: recognizes **APPROVE** format."""
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "The code looks good.\n\n**APPROVE**")
+        assert scan_conversation_for_verdict(sm) == "approve"
+
+    def test_finds_bold_reject(self, tmp_path):
+        """Flexible verdict parsing: recognizes **REJECT** format."""
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "Issues found:\n- Missing tests\n\n**REJECT**")
+        assert scan_conversation_for_verdict(sm) == "reject"
+
+    def test_finds_heading_verdict(self, tmp_path):
+        """Flexible verdict parsing: recognizes Verdict: APPROVE format."""
+        _, _, _, _, sm, _, _ = _setup(tmp_path)
+        sm.append_conversation("assistant", "All tests pass.\n\nVerdict: APPROVE")
+        assert scan_conversation_for_verdict(sm) == "approve"
+
 
 class TestEmptySessionDetection:
     def test_detects_empty_session(self, tmp_path):
