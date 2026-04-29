@@ -84,3 +84,91 @@ class TestPush:
             client.push()
 
         mock_push.assert_called_once()
+
+
+class TestCheckState:
+    """Tests for NightshiftClient.check_state()."""
+
+    def test_check_state_returns_status(self):
+        """check_state() returns the state derived from labels."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        mock_issue = {
+            "id": "abc123",
+            "labels": ["nightshift", "status:working"],
+            "comments": [],
+        }
+        with patch.object(client._gitbug, "pull") as mock_pull, \
+             patch.object(client._gitbug, "show", return_value=mock_issue):
+            state = client.check_state("abc123")
+
+        assert state == "working"
+
+    def test_check_state_fetches_first(self):
+        """check_state() calls pull() before reading state."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        call_order = []
+        mock_issue = {
+            "id": "abc123",
+            "labels": ["nightshift"],
+            "comments": [],
+        }
+
+        def track_pull():
+            call_order.append("pull")
+
+        def track_show(issue_id):
+            call_order.append("show")
+            return mock_issue
+
+        with patch.object(client._gitbug, "pull", side_effect=track_pull), \
+             patch.object(client._gitbug, "show", side_effect=track_show):
+            client.check_state("abc123")
+
+        assert call_order == ["pull", "show"]
+
+
+class TestGetIssueInfo:
+    """Tests for NightshiftClient.get_issue_info()."""
+
+    def test_get_issue_info_returns_dict(self):
+        """get_issue_info() returns dict with expected keys."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        mock_issue = {
+            "id": "abc123",
+            "labels": ["nightshift", "status:reviewing"],
+            "comments": [],
+            "create_time": "2026-04-29T10:00:00Z",
+            "edit_time": "2026-04-29T12:00:00Z",
+        }
+        with patch.object(client._gitbug, "pull"), \
+             patch.object(client._gitbug, "show", return_value=mock_issue):
+            info = client.get_issue_info("abc123")
+
+        assert isinstance(info, dict)
+        assert info["state"] == "reviewing"
+        assert info["labels"] == ["nightshift", "status:reviewing"]
+        assert "last_comment" in info
+        assert "updated_at" in info
+
+    def test_get_issue_info_includes_last_comment(self):
+        """get_issue_info() includes the last comment text."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        mock_issue = {
+            "id": "abc123",
+            "labels": ["nightshift"],
+            "comments": [
+                {"message": "First comment", "timestamp": "2026-04-29T10:00:00Z"},
+                {"message": "Latest comment", "timestamp": "2026-04-29T12:00:00Z"},
+            ],
+            "create_time": "2026-04-29T09:00:00Z",
+            "edit_time": "2026-04-29T12:00:00Z",
+        }
+        with patch.object(client._gitbug, "pull"), \
+             patch.object(client._gitbug, "show", return_value=mock_issue):
+            info = client.get_issue_info("abc123")
+
+        assert info["last_comment"] == "Latest comment"

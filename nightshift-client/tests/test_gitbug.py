@@ -311,3 +311,36 @@ class TestGitBugList:
         with patch("subprocess.run", return_value=mock_result):
             with pytest.raises(TrackerError, match="parse"):
                 gb.list()
+
+
+class TestGitBugShow:
+    """Tests for showing issue details."""
+
+    def test_gitbug_show_returns_issue(self):
+        """show() returns parsed issue dict from git-bug bug show."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = '{"id": "abc123", "title": "Test issue", "labels": ["nightshift"]}'
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            issue = gb.show("abc123")
+
+        assert issue["id"] == "abc123"
+        assert issue["title"] == "Test issue"
+        assert issue["labels"] == ["nightshift"]
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["git-bug", "bug", "show", "abc123", "-f", "json"]
+
+    def test_gitbug_show_handles_invalid_json(self):
+        """show() raises TrackerError on invalid JSON output."""
+        gb = GitBug(repo_path="/repo")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "not valid json"
+        mock_result.stderr = ""
+
+        with patch("subprocess.run", return_value=mock_result):
+            with pytest.raises(TrackerError, match="parse"):
+                gb.show("abc123")

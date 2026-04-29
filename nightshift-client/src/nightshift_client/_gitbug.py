@@ -182,3 +182,22 @@ class GitBug:
             return json.loads(output)
         except json.JSONDecodeError as e:
             raise TrackerError(f"Failed to parse git-bug output: {e}") from e
+
+    def show(self, issue_id: str) -> dict:
+        """Get detailed information about a single issue.
+
+        Args:
+            issue_id: Issue ID (full or prefix).
+
+        Returns:
+            Dict with issue details including id, title, labels, comments.
+
+        Raises:
+            TrackerError: If issue not found or output cannot be parsed.
+        """
+        output = self._run("bug", "show", issue_id, "-f", "json")
+
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError as e:
+            raise TrackerError(f"Failed to parse git-bug output: {e}") from e
