@@ -86,6 +86,19 @@ class TestPush:
         mock_push.assert_called_once()
 
 
+class TestPull:
+    """Tests for NightshiftClient.pull()."""
+
+    def test_pull_fetches_changes(self):
+        """pull() delegates to GitBug.pull()."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        with patch.object(client._gitbug, "pull") as mock_pull:
+            client.pull()
+
+        mock_pull.assert_called_once()
+
+
 class TestCheckState:
     """Tests for NightshiftClient.check_state()."""
 
@@ -234,3 +247,40 @@ class TestPostAnswer:
 
         mock_comment.assert_called_once()
         assert client.identity == "user@example.com"
+
+
+class TestReadFile:
+    """Tests for NightshiftClient.read_file()."""
+
+    def test_read_file_returns_content(self, tmp_path):
+        """read_file() returns the file contents relative to repo_path."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "notes.txt").write_text("hello world", encoding="utf-8")
+        client = NightshiftClient(repo_path=repo, identity="user@example.com")
+
+        content = client.read_file("notes.txt")
+
+        assert content == "hello world"
+
+    def test_read_file_raises_on_missing(self, tmp_path):
+        """read_file() raises FileNotFoundError for missing files."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        client = NightshiftClient(repo_path=repo, identity="user@example.com")
+
+        with pytest.raises(FileNotFoundError):
+            client.read_file("missing.txt")
+
+
+class TestCancel:
+    """Tests for NightshiftClient.cancel()."""
+
+    def test_cancel_adds_label(self):
+        """cancel() adds the status:cancelled label without waiting."""
+        client = NightshiftClient(repo_path="/repo", identity="user@example.com")
+
+        with patch.object(client._gitbug, "label") as mock_label:
+            client.cancel("abc123")
+
+        mock_label.assert_called_once_with("abc123", "status:cancelled")

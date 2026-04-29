@@ -58,6 +58,31 @@ class NightshiftClient:
         """Push git-bug data to remote."""
         self._gitbug.push()
 
+    def pull(self) -> None:
+        """Pull merged git-bug output from remote."""
+        self._gitbug.pull()
+
+    def read_file(self, path: str) -> str:
+        """Read a file relative to the repository root.
+
+        Args:
+            path: Relative path inside the repository.
+
+        Returns:
+            File contents as a string.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+        """
+        file_path = Path(self.repo_path) / path
+        if not file_path.is_file():
+            raise FileNotFoundError(path)
+        return file_path.read_text(encoding="utf-8")
+
+    def cancel(self, issue_id: str) -> None:
+        """Mark an issue as cancelled."""
+        self._gitbug.label(issue_id, "status:cancelled")
+
     def check_state(self, issue_id: str) -> str:
         """Check current state of an issue.
 
